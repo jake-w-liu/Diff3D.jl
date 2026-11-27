@@ -526,27 +526,22 @@ function _soft_background_image(::Type{T}, H::Int, W::Int, bg::Color3{T},
     return image
 end
 
+# `face_flip === nothing` derives the front-face flip from `world_mat` (a mesh);
+# an InstancedMesh passes the flip of its object matrix, because three.js
+# flips front faces for a mirrored matrixWorld only (WebGLRenderer.js
+# `frontFaceCW`), never for an instance matrix.
 @inline function _soft_shade_mesh_faces!(colors::Vector{Color3{Float64}},
                                          geo::BufferGeometry, world_mat::Mat4,
                                          material::AbstractMaterial,
                                          lights::Vector{<:AbstractLight},
                                          cam_pos::Vec3, camera_view::Mat4,
-                                         ortho_dir)
-    return shade_mesh_faces!(
+                                         ortho_dir, face_flip::Union{Nothing,Bool})
+    face_flip === nothing && return shade_mesh_faces!(
         colors, geo, world_mat, material, lights, cam_pos;
-        camera_view=camera_view,
-        ortho_dir=ortho_dir)
-end
-
-@inline function _soft_shade_mesh_faces!(colors::Vector{Color3{Float64}},
-                                         geo::BufferGeometry, world_mat::Mat4,
-                                         material::MeshDepthMaterial,
-                                         lights::Vector{<:AbstractLight},
-                                         cam_pos::Vec3, camera_view::Mat4,
-                                         ortho_dir)
-    return shade_mesh_faces!(colors, geo, world_mat, material, lights, cam_pos;
-                             camera_view=camera_view,
-                             ortho_dir=ortho_dir)
+        camera_view=camera_view, ortho_dir=ortho_dir)
+    return _shade_mesh_faces_flip!(
+        colors, geo, world_mat, material, lights, cam_pos, face_flip;
+        camera_view=camera_view, ortho_dir=ortho_dir)
 end
 
 @inline function _soft_shade_mesh_faces_from_material!(colors::Vector{Color3{Float64}},
@@ -555,27 +550,28 @@ end
                                           lights::Vector{<:AbstractLight},
                                           cam_pos::Vec3,
                                           camera_view::Mat4,
-                                          ortho_dir)
+                                          ortho_dir,
+                                          face_flip::Union{Nothing,Bool})
     if mat isa MeshBasicMaterial
-        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view, ortho_dir)
+        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view, ortho_dir, face_flip)
     elseif mat isa MeshLambertMaterial
-        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view, ortho_dir)
+        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view, ortho_dir, face_flip)
     elseif mat isa MeshPhongMaterial
-        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view, ortho_dir)
+        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view, ortho_dir, face_flip)
     elseif mat isa MeshStandardMaterial
-        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view, ortho_dir)
+        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view, ortho_dir, face_flip)
     elseif mat isa MeshPhysicalMaterial
-        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view, ortho_dir)
+        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view, ortho_dir, face_flip)
     elseif mat isa MeshToonMaterial
-        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view, ortho_dir)
+        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view, ortho_dir, face_flip)
     elseif mat isa MeshNormalMaterial
-        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view, ortho_dir)
+        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view, ortho_dir, face_flip)
     elseif mat isa MeshMatcapMaterial
-        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view, ortho_dir)
+        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view, ortho_dir, face_flip)
     elseif mat isa MeshDepthMaterial
-        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view, ortho_dir)
+        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view, ortho_dir, face_flip)
     elseif mat isa AbstractMaterial
-        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view, ortho_dir)
+        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view, ortho_dir, face_flip)
     else
         throw(ArgumentError("soft_render_scene mesh material must be an AbstractMaterial"))
     end
@@ -766,7 +762,11 @@ end
 end
 
 """
-Sigmoid approximation — smooth and AD-friendly.
+    sigmoid_approx(x)
+
+The logistic function `1 / (1 + exp(-x))`, evaluated in the form that cannot
+overflow for either sign of `x`. It is exact (not an approximation) and
+preserves the scalar type, so ForwardDiff and `ADVar` inputs differentiate it.
 """
 @inline function sigmoid_approx(x::T) where T
     if x >= zero(T)
@@ -777,10 +777,7 @@ Sigmoid approximation — smooth and AD-friendly.
     end
 end
 
-"""
-Signed distance from point (px,py) to triangle defined by (ax,ay), (bx,by), (cx,cy).
-Positive inside, negative outside.
-"""
+# Exact sign of the edge function, for coordinates whose Float64 product overflows.
 @noinline function _soft_edge_sign_bigfloat(ax::Float64, ay::Float64,
                                             bx::Float64, by::Float64,
                                             px::Float64, py::Float64)
@@ -864,14 +861,23 @@ function _signed_distance_to_triangle_area(px, py, ax, ay, bx, by, cx, cy, area)
     end
 end
 
+"""
+    signed_distance_to_triangle(px, py, ax, ay, bx, by, cx, cy)
+
+Signed screen-space distance from point `(px, py)` to the triangle with
+vertices `(ax, ay)`, `(bx, by)`, `(cx, cy)` in either winding: inside (or on
+the boundary) it is the distance to the nearest edge line
+([`point_line_distance`](@ref)); outside it is minus the distance to the nearest
+edge segment ([`point_segment_distance`](@ref)). A triangle whose doubled area
+is below `1e-20` returns `-1e10`. This is the coverage argument of
+[`soft_render`](@ref), which evaluates `sigmoid_approx(d / sigma)`.
+"""
 function signed_distance_to_triangle(px, py, ax, ay, bx, by, cx, cy)
     area = edge_function(ax, ay, bx, by, cx, cy)
     return _signed_distance_to_triangle_area(px, py, ax, ay, bx, by, cx, cy, area)
 end
 
-"""
-Distance from point to infinite line through (ax,ay)-(bx,by).
-"""
+# `a * b`, with an exact zero when either factor is zero (avoids 0 * Inf).
 @inline _soft_zero_product(a::Float64, b::Float64) =
     (iszero(a) || iszero(b)) ? 0.0 : a * b
 
@@ -901,6 +907,14 @@ end
     return sdx / scaled_len, sdy / scaled_len, Inf
 end
 
+"""
+    point_line_distance(px, py, ax, ay, bx, by)
+
+Unsigned distance from point `(px, py)` to the infinite line through
+`(ax, ay)` and `(bx, by)`. The line length is floored at `1e-20`, so coincident
+endpoints give distance zero instead of dividing by zero. `Float64` inputs
+use a rescaled evaluation that stays finite for coordinates near `floatmax`.
+"""
 @inline function point_line_distance(px::Float64, py::Float64,
                                      ax::Float64, ay::Float64,
                                      bx::Float64, by::Float64)
@@ -940,10 +954,8 @@ end
     abs((px - ax) * dy - (py - ay) * dx) / max(len, 1e-20)
 end
 
-"""
-Distance from point to line segment (ax,ay)-(bx,by).
-AD-friendly: uses smooth min/max via clamping.
-"""
+# Clamped projection parameter of (px, py) onto segment (ax, ay)-(bx, by) of
+# length `len`, rescaling when an intermediate is not representable.
 @inline function _soft_segment_parameter_float(px::Float64, py::Float64,
                                                ax::Float64, ay::Float64,
                                                bx::Float64, by::Float64,
@@ -977,6 +989,14 @@ AD-friendly: uses smooth min/max via clamping.
     return da <= db ? 0.0 : 1.0
 end
 
+"""
+    point_segment_distance(px, py, ax, ay, bx, by)
+
+Distance from point `(px, py)` to the closed segment `(ax, ay)`-`(bx, by)`,
+smoothed as `sqrt(d^2 + 1e-12)` so the derivative stays finite (zero) when the
+point lies on the segment. The projection parameter is clamped to `[0, 1]`; a
+segment shorter than `1e-10` is treated as its first endpoint.
+"""
 function point_segment_distance(px::Float64, py::Float64,
                                 ax::Float64, ay::Float64,
                                 bx::Float64, by::Float64)
@@ -1015,14 +1035,15 @@ end
 @inline function _soft_append_geometry!(vertices, faces, colors, face_colors,
                                  geo::BufferGeometry, world::Mat4, @nospecialize(material),
                                  lights, camera_position, view, ortho_dir,
-                                 vertex_offset::Int, face_offset::Int)
+                                 vertex_offset::Int, face_offset::Int,
+                                 face_flip::Union{Nothing,Bool}=nothing)
     selected = _draw_face_range(geo)
     isempty(selected) && return vertex_offset, face_offset
     for vertex in 1:geo.n_vertices
         vertices[vertex_offset+vertex] = mat4_transform_point(world,get_vertex(geo,vertex))
     end
     _soft_shade_mesh_faces_from_material!(face_colors,geo,world,material,
-                                         lights,camera_position,view,ortho_dir)
+                                         lights,camera_position,view,ortho_dir,face_flip)
     for face in selected
         i1,i2,i3 = get_face(geo,face)
         face_offset += 1
@@ -1038,10 +1059,12 @@ function _soft_append_instances!(vertices, faces, colors, face_colors,
                                   vertex_offset::Int, face_offset::Int) where {M<:AbstractMaterial}
     geo = _instanced_geometry(object)
     base = compute_world_matrix(object)
+    mirrored = _world_mirrors_faces(base)
     for index in eachindex(object.instance_matrices)
         world = base*object.instance_matrices[index]
         vertex_offset,face_offset = _soft_append_geometry!(vertices,faces,colors,face_colors,
-            geo,world,materials[index],lights,camera_position,view,ortho_dir,vertex_offset,face_offset)
+            geo,world,materials[index],lights,camera_position,view,ortho_dir,vertex_offset,face_offset,
+            mirrored)
     end
     return vertex_offset,face_offset
 end

@@ -162,3 +162,47 @@ end
     @test audit3b_reverse_derivative(x -> x^0, 0.0) == 0.0
     @test audit3b_reverse_derivative(x -> x^2.0, -2.0) == -4.0
 end
+
+# One instanced double-sided plane facing the camera, lit from the front.
+function audit3b_mirrored_instance_scene(; base_mirror::Bool, instance_mirror::Bool)
+    scene = Scene(background=Color3(0.1, 0.2, 0.3))
+    material = MeshLambertMaterial(color=Color3(0.8, 0.6, 0.4), side=:double)
+    instances = InstancedMesh(PlaneGeometry(width=2.0, height=2.0), material, 1)
+    set_instance_matrix!(instances, 1,
+                         instance_mirror ? mat4_scaling(-1.0, 1.0, 1.0) : Mat4())
+    base_mirror && (instances.scale = Vec3(1.0, -1.0, 1.0))
+    add!(scene, instances)
+    light = DirectionalLight(color=Color3(1.0, 1.0, 1.0), intensity=1.0)
+    light.position = Vec3(0.0, 0.0, 5.0)
+    add!(scene, light)
+    add!(scene, AmbientLight(color=Color3(1.0, 1.0, 1.0), intensity=0.2))
+    camera = PerspectiveCamera(fov=0.9, aspect=1.0, near=0.1, far=100.0)
+    camera.position = Vec3(0.0, 0.0, 4.0)
+    return scene, camera
+end
+
+@testset "soft_render_scene flips instanced front faces by the object matrix only" begin
+    # three.js flips the front face for a mirrored object matrixWorld only
+    # (WebGLRenderer.js `frontFaceCW`, WebGLState.js setFlipSided); a mirrored
+    # instance matrix reverses the triangle winding without flipping, so a
+    # double-sided face shows its back (normal negated, gl_FrontFacing false).
+    # render! follows that; at small sigma/gamma the soft image's interior
+    # pixel must carry the same face colour.
+    for (base_mirror, instance_mirror) in ((false, true), (true, true),
+                                           (true, false), (false, false))
+        scene, camera = audit3b_mirrored_instance_scene(
+            base_mirror=base_mirror, instance_mirror=instance_mirror)
+        target = RenderTarget(16, 16)
+        render!(target, scene, camera)
+        soft = soft_render_scene(scene, camera, 16, 16; sigma=1e-4, gamma=1e-4)
+        @test isapprox(soft[8, 8, :], target.color[8, 8, :]; atol=1e-6)
+    end
+    # The back face (base unmirrored, instance mirrored) receives only the
+    # ambient term, far darker than the directly lit front, so the comparison
+    # above discriminates the two shadings.
+    scene, camera = audit3b_mirrored_instance_scene(base_mirror=false, instance_mirror=true)
+    soft = soft_render_scene(scene, camera, 16, 16; sigma=1e-4, gamma=1e-4)
+    lit_scene, lit_camera = audit3b_mirrored_instance_scene(base_mirror=false, instance_mirror=false)
+    lit = soft_render_scene(lit_scene, lit_camera, 16, 16; sigma=1e-4, gamma=1e-4)
+    @test soft[8, 8, 1] < 0.5 * lit[8, 8, 1]
+end
