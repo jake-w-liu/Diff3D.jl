@@ -820,3 +820,32 @@ end
         end
     end
 end
+
+@testset "audit3b: Matrix3 additions match three.js" begin
+    # node: a = new Matrix3().set(2,-1,0.5, 0.25,3,-2, 1,0.75,4) (row-major
+    # arguments), b = set(-1,0.5,2, 3,1,-0.25, 0.5,2,1) (src/math/Matrix3.js).
+    a = Mat3((2.0, 0.25, 1.0, -1.0, 3.0, 0.75, 0.5, -2.0, 4.0))
+    b = Mat3((-1.0, 3.0, 0.5, 0.5, 1.0, 2.0, 2.0, -0.25, 1.0))
+    @test Diff3D.mat3_determinant(a) == 28.59375                      # determinant
+    @test _b3_close(Diff3D.mat3_inverse(a).e,                          # invert
+                    (0.4721311475409836, -0.10491803278688525, -0.09836065573770492,
+                     0.15300546448087432, 0.26229508196721313, -0.08743169398907104,
+                     0.017486338797814208, 0.14426229508196722, 0.2185792349726776); atol=1e-16)
+    @test (a * b).e == (-4.75, 7.75, 3.25, 1.0, -0.875, 9.25, 4.75, -2.25, 5.8125)  # multiplyMatrices
+    m = mat4_compose(Vec3(1.0, 2.0, 3.0), quat_from_euler(0.3, -0.4, 0.5), Vec3(2.0, 0.5, 1.5))
+    @test _b3_close(Diff3D.mat3_normal_matrix(m).e,                    # getNormalMatrix
+                    (0.40415353338717264, 0.178509820849315, 0.234081535604603,
+                     -0.8831603262743114, 1.7871188174541672, 0.16196965887557416,
+                     -0.2596122282057669, -0.18146142353028752, 0.5866154508541714); atol=2e-15)
+    @test _b3_close(Diff3D.mat3_set_uv_transform(0.1, -0.2, 2, 0.5, 0.7, 0.5, 0.25).e,  # setUvTransform
+                    (1.529684374568977, -0.3221088436188455, 0.0, 1.288435374475382,
+                     0.38242109364224425, 0.0, -0.48695103090333414, 0.11544914839886167, 1.0);
+                    atol=4e-16)
+    @test Diff3D.mat3_transform_vec3(a, Vec3(1.5, -2.0, 0.75)) == Vec3(5.375, -7.125, 3.0)  # applyMatrix3
+    singular = Mat3((1.0, 2.0, 0.0, 2.0, 4.0, 1.0, 3.0, 6.0, 1.0))
+    @test Diff3D.mat3_inverse(singular).e == ntuple(_ -> 0.0, 9)
+    @test Diff3D.mat3_transpose(Diff3D.mat3_transpose(a)) === a
+    @test Diff3D.mat3_from_mat4(mat4_translation(1.0, 2.0, 3.0)) === Mat3()
+    @test (@inferred Diff3D.mat3_inverse(Mat3{Float32}(Float32.(a.e)))) isa Mat3{Float32}
+    @test (@inferred Diff3D.mat3_set_uv_transform(0f0, 0f0, 1f0, 1f0, 0.5f0, 0f0, 0f0)) isa Mat3{Float32}
+end

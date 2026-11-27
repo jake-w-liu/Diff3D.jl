@@ -3264,3 +3264,109 @@ function smootherstep(x, lo, hi)
     t = (x - lo) / (hi - lo)
     return t * t * t * (t * (t * 6 - 15) + 10)
 end
+
+# ------------------------------ Matrix3 ------------------------------
+
+"""
+    mat3_from_mat4(m)
+
+Upper-left 3×3 block of `m` (three.js `Matrix3.setFromMatrix4`).
+"""
+mat3_from_mat4(m::Mat4) = Mat3((m.e[1], m.e[2], m.e[3], m.e[5], m.e[6], m.e[7],
+                                m.e[9], m.e[10], m.e[11]))
+
+"""
+    mat3_determinant(m)
+
+Determinant of the 3×3 matrix `m` (three.js `Matrix3.determinant`).
+"""
+function mat3_determinant(m::Mat3)
+    a, b, c, d, e, f, g, h, i = m.e
+    return a * e * i - a * f * h - b * d * i + b * f * g + c * d * h - c * e * g
+end
+
+"""
+    mat3_transpose(m)
+
+Transpose of `m` (three.js `Matrix3.transpose`).
+"""
+function mat3_transpose(m::Mat3)
+    e = m.e
+    return Mat3((e[1], e[4], e[7], e[2], e[5], e[8], e[3], e[6], e[9]))
+end
+
+"""
+    mat3_inverse(m)
+
+Inverse of `m`; the zero matrix when `m` is singular (three.js
+`Matrix3.invert`).
+"""
+function mat3_inverse(m::Mat3)
+    n11, n21, n31, n12, n22, n32, n13, n23, n33 = m.e
+    t11 = n33 * n22 - n32 * n23
+    t12 = n32 * n13 - n33 * n12
+    t13 = n23 * n12 - n22 * n13
+    det = n11 * t11 + n21 * t12 + n31 * t13
+    if iszero(_primal_value(det))
+        z = zero(det) / one(det)
+        return Mat3((z, z, z, z, z, z, z, z, z))
+    end
+    inv_det = 1 / det
+    return Mat3((t11 * inv_det, (n31 * n23 - n33 * n21) * inv_det,
+                 (n32 * n21 - n31 * n22) * inv_det,
+                 t12 * inv_det, (n33 * n11 - n31 * n13) * inv_det,
+                 (n31 * n12 - n32 * n11) * inv_det,
+                 t13 * inv_det, (n21 * n13 - n23 * n11) * inv_det,
+                 (n22 * n11 - n21 * n12) * inv_det))
+end
+
+"""
+    mat3_normal_matrix(m::Mat4)
+
+Inverse transpose of the upper-left 3×3 block of `m`, which transforms normals
+(three.js `Matrix3.getNormalMatrix`).
+"""
+mat3_normal_matrix(m::Mat4) = mat3_transpose(mat3_inverse(mat3_from_mat4(m)))
+
+"""
+    mat3_set_uv_transform(tx, ty, sx, sy, rotation, cx, cy)
+
+UV transform with offset `(tx, ty)`, repeat `(sx, sy)` and `rotation` about
+the center `(cx, cy)` (three.js `Matrix3.setUvTransform`).
+"""
+function mat3_set_uv_transform(tx, ty, sx, sy, rotation, cx, cy)
+    c, s = cos(rotation), sin(rotation)
+    m13 = -sx * (c * cx + s * cy) + cx + tx
+    m23 = -sy * (-s * cx + c * cy) + cy + ty
+    a, b, d, e = sx * c, sx * s, -sy * s, sy * c
+    z = zero(m13 * m23)
+    # three.js `set` takes row-major arguments; elements are column-major.
+    return Mat3((a + z, d + z, z, b + z, e + z, z, m13 + z, m23 + z, one(z)))
+end
+
+"""
+    mat3_transform_vec3(m, v)
+
+`m * v` (three.js `Vector3.applyMatrix3`).
+"""
+function mat3_transform_vec3(m::Mat3, v::Vec3)
+    e = m.e
+    return Vec3(e[1] * v.x + e[4] * v.y + e[7] * v.z,
+                e[2] * v.x + e[5] * v.y + e[8] * v.z,
+                e[3] * v.x + e[6] * v.y + e[9] * v.z)
+end
+
+"""
+    *(a::Mat3, b::Mat3)
+
+Matrix product `a * b` (three.js `Matrix3.multiplyMatrices`).
+"""
+function Base.:*(a::Mat3, b::Mat3)
+    ae, be = a.e, b.e
+    return Mat3(ntuple(Val(9)) do index
+        column = (index - 1) ÷ 3
+        row = (index - 1) % 3 + 1
+        ae[row] * be[3column + 1] + ae[row + 3] * be[3column + 2] +
+            ae[row + 6] * be[3column + 3]
+    end)
+end
