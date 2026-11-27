@@ -11,6 +11,19 @@
 
 # Parents and partials are stored inline (unset parent fields mark leaves and
 # unary nodes), so recording an operation allocates one fixed-size object.
+"""
+    ADVar
+
+Reverse-mode automatic-differentiation scalar used by [`reverse_gradient`](@ref)
+and [`reverse_value_gradient`](@ref). Its primal value and adjoint are
+`Float64`. Arithmetic, comparisons, and the elementary functions of Base
+(including the trigonometric, hyperbolic, exponential, logarithmic, power,
+rounding, `fma`, `hypot`, `min`/`max`, `mod`/`rem` and `rem2pi` families) are
+recorded on a task-local tape while a gradient pass is active; other `Real`
+types promote to `ADVar`. At nonsmooth points the recorded derivative is a
+selected branch derivative (for example, `min`/`max` ties select the first
+argument), which can differ from ForwardDiff's choice there.
+"""
 mutable struct ADVar <: Real
     val::Float64
     adj::Float64                 # accumulated adjoint (∂output/∂this)
@@ -646,7 +659,7 @@ function _reverse_value_gradient(f, x::AbstractVector{<:Real})
 end
 
 """
-    reverse_gradient(f, x::Vector{Float64}) -> Vector{Float64}
+    reverse_gradient(f, x::AbstractVector{<:Real}) -> Vector{Float64}
 
 Gradient of scalar `f(x)` via one reverse-mode pass. `f` must accept a vector of
 `ADVar` and return a single `ADVar`. Validated against ForwardDiff in tests.
@@ -655,7 +668,12 @@ function reverse_gradient(f, x::AbstractVector{<:Real})
     return _reverse_value_gradient(f, x)[2]
 end
 
-"""Value and gradient of `f` at `x` in one reverse pass."""
+"""
+    reverse_value_gradient(f, x::AbstractVector{<:Real}) -> (Float64, Vector{Float64})
+
+Value and gradient of scalar `f` at `x` in one reverse pass, with the
+requirements of [`reverse_gradient`](@ref).
+"""
 function reverse_value_gradient(f, x::AbstractVector{<:Real})
     return _reverse_value_gradient(f, x)
 end

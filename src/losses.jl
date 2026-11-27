@@ -3,10 +3,6 @@
 # All pure Julia, ForwardDiff compatible.
 # --------------------------------------------------------------------------
 
-"""
-L2 (MSE) loss between two images.
-Images are Array{T, 3} of size (H, W, C).
-"""
 function _checked_loss_image_size(image::AbstractArray, target::AbstractArray, label::String)
     size(image) == size(target) ||
         throw(ArgumentError("$label: image and target sizes must match; got $(size(image)) and $(size(target))"))
@@ -63,6 +59,14 @@ end
     end
 end
 
+"""
+    loss_mse(image, target)
+
+Mean squared error `sum((image - target)^2) / length(image)` between two
+`(H, W, C)` image arrays of equal size, accumulated with compensated summation.
+The result type is `promote_type(Float32, float(promote_type(T, S)))`;
+`Float16` and `Float32` data are accumulated in `Float64`.
+"""
 function loss_mse(image::Array{T, 3}, target::Array{S, 3}) where {T, S}
     H, W, C = _checked_loss_image_size(image, target, "loss_mse")
     R = _loss_accumulator_type(T, S)
@@ -94,7 +98,11 @@ function loss_mse(image::Array{T, 3}, target::Array{S, 3}) where {T, S}
 end
 
 """
-L1 loss between two images.
+    loss_l1(image, target)
+
+Mean absolute error `sum(abs(image - target)) / length(image)` between two
+`(H, W, C)` image arrays of equal size, with the accumulation and result type
+of [`loss_mse`](@ref).
 """
 function loss_l1(image::Array{T, 3}, target::Array{S, 3}) where {T, S}
     H, W, C = _checked_loss_image_size(image, target, "loss_l1")
@@ -126,9 +134,14 @@ function loss_l1(image::Array{T, 3}, target::Array{S, 3}) where {T, S}
 end
 
 """
-Structural Similarity Index (SSIM) loss.
-Returns 1 - SSIM (so that minimizing this maximizes SSIM).
-Simplified single-channel average SSIM.
+    loss_ssim(image, target; window_size=7, C1=0.01^2, C2=0.03^2)
+
+Structural-similarity loss `1 - mean(SSIM)`, so minimizing it maximizes SSIM.
+SSIM is evaluated per channel on every fully contained `window_size` x
+`window_size` uniform window (no padding), using window means, unbiased
+(`n - 1`) variances and covariance, and the stabilizing constants `C1`, `C2`;
+the mean runs over all windows of all channels. `window_size` must be an odd
+integer `>= 3` no larger than either image dimension.
 """
 function loss_ssim(image::Array{T, 3}, target::Array{S, 3};
                    window_size=7, C1=0.01^2, C2=0.03^2) where {T, S}
@@ -262,9 +275,13 @@ end
 end
 
 """
-Silhouette IoU loss (Intersection over Union).
-Compares binary silhouettes extracted from images.
-`threshold` separates foreground from background.
+    loss_silhouette_iou(image, target; threshold=0.05)
+
+Soft silhouette intersection-over-union loss `1 - IoU`. Each pixel's
+occupancy is a steep sigmoid (slope 200) of its brightest channel minus
+`threshold`, rescaled so a black pixel has occupancy 0; the intersection and
+union sum the per-pixel minimum and maximum occupancies. A `1e-8` smoothing term
+makes two empty silhouettes give loss 0. `threshold` must lie in `[0, 1]`.
 """
 function loss_silhouette_iou(image::Array{T, 3}, target::Array{S, 3};
                               threshold=0.05) where {T, S}
