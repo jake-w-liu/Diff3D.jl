@@ -576,3 +576,247 @@ end
     @test isempty(get_children(root)) && get_parent(a) === nothing &&
           get_parent(hidden) === nothing
 end
+
+# Oracle values below come from node running three.js r186 on the same inputs
+# (src/math/Vector3.js, Matrix4.js, Sphere.js, Box3.js, Plane.js, Ray.js,
+# Triangle.js, MathUtils.js); the three.js method is named by each check.
+_b3_v(v) = (v.x, v.y, v.z)
+
+@testset "audit3b: Vector3 and Matrix4 additions match three.js" begin
+    a = Vec3(1.5, -2.0, 0.75); b = Vec3(-0.5, 3.0, 2.25); n = Vec3(0.6, 0.0, 0.8)
+    @test Diff3D.vec3_distance_squared(a, b) == 31.25              # distanceToSquared
+    @test Diff3D.vec3_manhattan_distance(a, b) == 8.5              # manhattanDistanceTo
+    @test isapprox(Diff3D.vec3_angle_to(a, b), 2.1091101750488965; atol=4e-16)  # angleTo
+    @test Diff3D.vec3_angle_to(a, Vec3()) == 1.5707963267948966
+    @test _b3_close(_b3_v(Diff3D.vec3_project_on_vector(a, b)),     # projectOnVector
+                    (0.17685589519650655, -1.0611353711790392, -0.7958515283842794))
+    @test _b3_close(_b3_v(Diff3D.vec3_project_on_plane(a, n)),      # projectOnPlane
+                    (0.6000000000000001, -2.0, -0.4500000000000002))
+    @test _b3_close(_b3_v(Diff3D.vec3_reflect(a, n)),               # reflect
+                    (-0.2999999999999998, -2.0, -1.6500000000000004))
+    @test _b3_close(_b3_v(Diff3D.vec3_clamp_length(a, 0.5, 1.25)),  # clampLength
+                    (0.7183697139158635, -0.9578262852211514, 0.35918485695793173))
+    @test _b3_close(_b3_v(Diff3D.vec3_clamp_length(Vec3(0.1, 0.2, 0.1), 1, 2)),
+                    (0.40824829046386296, 0.8164965809277259, 0.40824829046386296))
+    @test Diff3D.vec3_clamp_length(Vec3(), 1.0, 2.0) == Vec3()
+    @test _b3_close(_b3_v(Diff3D.vec3_apply_axis_angle(a, n, 1.1)), # applyAxisAngle
+                    (2.598089448953643, -0.2387867228050778, -0.0735670867152321); atol=1e-15)
+    @test _b3_close(_b3_v(Diff3D.vec3_apply_euler(a, Euler(0.3, -0.7, 1.2, :ZXY))),  # applyEuler
+                    (2.445624195739401, -0.23828493859032893, 0.8801378194663654); atol=1e-15)
+    @test Diff3D.vec3_clamp(a, Vec3(-1.0, -1.0, -1.0), Vec3(1.0, 1.0, 0.5)) == Vec3(1.0, -1.0, 0.5)
+    @test Diff3D.vec3_min(a, b) == Vec3(-0.5, -2.0, 0.75)
+    @test Diff3D.vec3_max(a, b) == Vec3(1.5, 3.0, 2.25)
+    # m = compose((1,2,3), quaternion of Euler(0.3,-0.4,0.5), (2,0.5,1.5)).
+    m = mat4_compose(Vec3(1.0, 2.0, 3.0), quat_from_euler(0.3, -0.4, 0.5), Vec3(2.0, 0.5, 1.5))
+    @test isapprox(Diff3D.mat4_max_scale_on_axis(m), 1.9999999999999998; atol=4e-16)  # getMaxScaleOnAxis
+    @test _b3_close(_b3_v(Diff3D.mat4_get_scale(m)), (1.9999999999999998, 0.49999999999999994, 1.5))
+    @test Diff3D.mat4_get_position(m) == Vec3(1.0, 2.0, 3.0)
+    @test Diff3D.mat4_get_column(m, 4) == Vec4(1.0, 2.0, 3.0, 1.0)
+    @test_throws ArgumentError Diff3D.mat4_get_column(m, 5)
+    @test _b3_close(Diff3D.mat4_make_rotation_axis(n, 0.9).e,         # makeRotationAxis
+                    (0.7578303796932252, 0.6266615277019868, 0.18162721523008107, 0.0,
+                     -0.6266615277019868, 0.6216099682706644, 0.46999614577649, 0.0,
+                     0.18162721523008107, -0.46999614577649, 0.8637795885774392, 0.0,
+                     0.0, 0.0, 0.0, 1.0))
+    @test Diff3D.mat4_make_shear(0.1, 0.2, 0.3, 0.4, 0.5, 0.6).e ==  # makeShear
+          (1.0, 0.1, 0.2, 0.0, 0.3, 1.0, 0.4, 0.0, 0.5, 0.6, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0)
+    @test _b3_close(Diff3D.mat4_extract_rotation(m).e,                # extractRotation
+                    (0.8083070667743454, 0.35701964169862993, 0.4681630712092062, 0.0,
+                     -0.44158016313715576, 0.893559408727084, 0.08098482943778701, 0.0,
+                     -0.38941834230865036, -0.27219213529543135, 0.8799231762812572, 0.0,
+                     0.0, 0.0, 0.0, 1.0); atol=2e-16)
+    x, y, z = Diff3D.mat4_extract_basis(m)                           # extractBasis/makeBasis
+    @test Diff3D.mat4_make_basis(x, y, z).e == Diff3D.mat4_set_position(m, Vec3()).e
+    @test Diff3D.mat4_set_position(m, Vec3(4, 5, 6)).e[13:15] == (4.0, 5.0, 6.0)
+end
+
+@testset "audit3b: Sphere, Box3 and Plane additions match three.js" begin
+    s = BoundingSphere(Vec3(1.0, 2.0, 3.0), 2.5)
+    @test Diff3D.sphere_contains_point(s, Vec3(2.0, 3.0, 4.0))       # containsPoint
+    @test !Diff3D.sphere_contains_point(s, Vec3(4.0, 2.0, 3.0))
+    @test Diff3D.sphere_distance_to_point(s, Vec3(5.0, 2.0, 3.0)) == 1.5
+    @test _b3_close(_b3_v(Diff3D.sphere_clamp_point(s, Vec3(5.0, 6.0, 3.0))),  # clampPoint
+                    (2.767766952966369, 3.767766952966369, 3.0))
+    @test Diff3D.sphere_clamp_point(s, Vec3(1.5, 2.0, 3.0)) == Vec3(1.5, 2.0, 3.0)
+    m = mat4_compose(Vec3(1.0, 2.0, 3.0), quat_from_euler(0.3, -0.4, 0.5), Vec3(2.0, 0.5, 1.5))
+    t = Diff3D.sphere_apply_matrix4(s, m)                             # applyMatrix4
+    @test _b3_close((_b3_v(t.center)..., t.radius),
+                    (0.4226514300226081, 2.382734083294902, 7.976965265121857, 4.999999999999999); atol=2e-15)
+    t = Diff3D.sphere_expand_by_point(s, Vec3(6.0, 2.0, 3.0))       # expandByPoint
+    @test (_b3_v(t.center)..., t.radius) == (2.25, 2.0, 3.0, 3.75)
+    t = Diff3D.sphere_union(s, BoundingSphere(Vec3(-2.0, 0.0, 1.0), 1.5))  # union
+    @test _b3_close((_b3_v(t.center)..., t.radius),
+                    (-0.1361965624455006, 1.242535625036333, 2.242535625036333, 4.061552812808831); atol=2e-15)
+    empty = BoundingSphere(Vec3(), -1.0)
+    @test Diff3D.sphere_union(empty, s) === s && Diff3D.sphere_union(s, empty) === s
+    @test Diff3D.sphere_expand_by_point(empty, Vec3(1.0, 1.0, 1.0)) == BoundingSphere(Vec3(1.0, 1.0, 1.0), 0.0)
+    @test Diff3D.sphere_intersects_plane(s, Plane(Vec3(0.0, 1.0, 0.0), -4.0))    # intersectsPlane
+    @test !Diff3D.sphere_intersects_plane(s, Plane(Vec3(0.0, 1.0, 0.0), -5.0))
+    @test Diff3D.sphere_intersects_sphere(s, BoundingSphere(Vec3(4.0, 2.0, 3.0), 0.5))
+    @test !Diff3D.sphere_intersects_sphere(s, BoundingSphere(Vec3(4.0, 2.0, 3.0), 0.4))
+    bb = Diff3D.sphere_bounding_box(s)                                # getBoundingBox
+    @test bb.min == Vec3(-1.5, -0.5, 0.5) && bb.max == Vec3(3.5, 4.5, 5.5)
+    @test box3_is_empty(Diff3D.sphere_bounding_box(empty))
+
+    box = Box3(Vec3(-1.0, -2.0, -3.0), Vec3(2.0, 1.0, 0.5))
+    @test Diff3D.box3_clamp_point(box, Vec3(3.0, -5.0, 0.0)) == Vec3(2.0, -2.0, 0.0)  # clampPoint
+    @test Diff3D.box3_distance_to_point(box, Vec3(3.0, -5.0, 0.0)) == 3.1622776601683795
+    bs = Diff3D.box3_bounding_sphere(box)                             # getBoundingSphere
+    @test (_b3_v(bs.center)..., bs.radius) == (0.5, -0.5, -1.25, 2.75)
+    @test Diff3D.box3_bounding_sphere(Box3()).radius == -1.0
+    @test Diff3D.box3_intersects_sphere(box, BoundingSphere(Vec3(3.0, 2.0, 1.0), 1.5))
+    @test !Diff3D.box3_intersects_sphere(box, BoundingSphere(Vec3(3.0, 2.0, 1.0), 1.0))
+    @test Diff3D.sphere_intersects_box(BoundingSphere(Vec3(3.0, 2.0, 1.0), 1.5), box)
+    @test Diff3D.box3_intersects_plane(box, Plane(Vec3(0.6, 0.0, 0.8), -1.5))  # intersectsPlane
+    @test !Diff3D.box3_intersects_plane(box, Plane(Vec3(0.6, 0.0, 0.8), -2.5))
+    @test Diff3D.plane_intersects_box(Plane(Vec3(0.6, 0.0, 0.8), -1.5), box)
+
+    pl = Diff3D.plane_from_coplanar_points(Vec3(1.0, 0.0, 0.0), Vec3(0.0, 2.0, 0.0), Vec3(0.0, 0.0, 3.0))
+    @test _b3_close((_b3_v(pl.normal)..., pl.constant),                # setFromCoplanarPoints
+                    (0.8571428571428571, 0.42857142857142855, 0.2857142857142857, -0.8571428571428571))
+    @test _b3_close(_b3_v(Diff3D.plane_project_point(pl, Vec3(2.0, 2.0, 2.0))),  # projectPoint
+                    (0.040816326530612734, 1.0204081632653064, 1.3469387755102042); atol=1e-15)
+    @test _b3_close(_b3_v(Diff3D.plane_coplanar_point(pl)),           # coplanarPoint
+                    (0.7346938775510203, 0.36734693877551017, 0.24489795918367344))
+    segment = Line3(Vec3(0.0, 0.0, 0.0), Vec3(2.0, 2.0, 2.0))
+    @test _b3_close(_b3_v(Diff3D.plane_intersect_line(pl, segment)),  # intersectLine
+                    (0.5454545454545455, 0.5454545454545455, 0.5454545454545455))
+    @test Diff3D.plane_intersect_line(pl, Line3(Vec3(), Vec3(0.1, 0.1, 0.1))) === nothing
+    @test Diff3D.plane_intersect_line(pl, Line3(Vec3(), Vec3(0.1, 0.1, 0.1)); clamp_to_line=false) isa Vec3
+    @test Diff3D.plane_intersects_line(pl, segment)                   # intersectsLine
+    @test !Diff3D.plane_intersects_line(pl, Line3(Vec3(), Vec3(0.1, 0.1, 0.1)))
+    t = Diff3D.plane_apply_matrix4(pl, m)                             # applyMatrix4
+    @test _b3_close((_b3_v(t.normal)..., t.constant),
+                    (-0.10874947667359885, 0.8874268979816132, 0.44793643752428747,
+                     -3.8871799537539324); atol=2e-15)
+    t = Diff3D.plane_normalize(Plane(Vec3(0.0, 3.0, 4.0), 10.0))      # normalize
+    @test _b3_close((_b3_v(t.normal)..., t.constant), (0.0, 0.6000000000000001, 0.8, 2.0))
+    @test Diff3D.plane_intersects_sphere(Plane(Vec3(0.0, 1.0, 0.0), -4.0), s)
+    @test Diff3D.plane_from_normal_and_coplanar_point(Vec3(0.0, 1.0, 0.0), Vec3(3.0, 2.0, 1.0)) ==
+          Plane(Vec3(0.0, 1.0, 0.0), -2.0)
+end
+
+@testset "audit3b: Ray and Triangle additions match three.js" begin
+    direction = normalize(Vec3(1.0, 0.1, -0.05))
+    ray = Ray(Vec3(-4.0, 0.5, 0.25), direction)
+    @test _b3_close(_b3_v(Diff3D.ray_at(ray, 2.5)),                    # at
+                    (-1.5154800250002336, 0.7484519974999766, 0.12577400125001167))
+    @test _b3_close(_b3_v(Diff3D.ray_closest_point_to_point(ray, Vec3(1.0, 2.0, 3.0))),
+                    (0.950617283950618, 0.9950617283950618, 0.0024691358024690746); atol=1e-15)
+    @test Diff3D.ray_closest_point_to_point(ray, Vec3(-9.0, 0.0, 0.0)) == ray.origin
+    @test isapprox(Diff3D.ray_distance_sq_to_point(ray, Vec3(1.0, 2.0, 3.0)),
+                   9.997530864197532; atol=4e-15)                      # distanceSqToPoint
+    @test isapprox(Diff3D.ray_distance_to_point(ray, Vec3(1.0, 2.0, 3.0)),
+                   sqrt(9.997530864197532); atol=4e-15)
+    for (v0, v1, expected) in (
+            (Vec3(0.0, -1.0, 1.0), Vec3(1.0, 2.0, -1.0),            # distanceSqToSegment
+             (0.07388456815390754, 0.5988538681948432, 0.9598853868194843, 0.020057306590257812,
+              0.6027425296766271, 0.8082275890298813, -0.2054850593532542)),
+            (Vec3(-6.0, 3.0, 0.0), Vec3(-5.0, 4.0, 1.0),
+             (10.3125, -4.0, 0.5, 0.25, -6.0, 3.0, 0.0)))
+        d, on_ray, on_segment = Diff3D.ray_distance_sq_to_segment(ray, v0, v1)
+        @test _b3_close((d, _b3_v(on_ray)..., _b3_v(on_segment)...), expected; atol=2e-15)
+    end
+    @test _b3_close(_b3_v(Diff3D.ray_intersect_sphere(ray, BoundingSphere(Vec3(1.0, 1.0, 0.0), 1.2))),
+                    (-0.192569587999889, 0.8807430412000111, 0.05962847939999444); atol=2e-15)
+    @test Diff3D.ray_intersect_sphere(Ray(Vec3(1.0, 1.0, 0.0), Vec3(0.0, 1.0, 0.0)),
+                                      BoundingSphere(Vec3(1.0, 1.0, 0.0), 1.2)) == Vec3(1.0, 2.2, 0.0)
+    @test Diff3D.ray_intersect_sphere(ray, BoundingSphere(Vec3(1.0, 5.0, 0.0), 1.2)) === nothing
+    @test Diff3D.ray_intersect_sphere(ray, BoundingSphere(Vec3(), -1.0)) === nothing
+    @test Diff3D.ray_intersects_sphere(ray, BoundingSphere(Vec3(1.0, 1.0, 0.0), 1.2))
+    box = Box3(Vec3(-1.0, -2.0, -3.0), Vec3(2.0, 1.0, 0.5))
+    @test _b3_close(_b3_v(Diff3D.ray_intersect_box(ray, box)),         # intersectBox
+                    (-1.0, 0.8, 0.09999999999999998); atol=2e-16)
+    @test Diff3D.ray_intersect_box(Ray(Vec3(-4.0, 5.0, 0.0), Vec3(1.0, 0.0, 0.0)), box) === nothing
+    @test Diff3D.ray_intersects_box(ray, box)
+    pl = Diff3D.plane_from_coplanar_points(Vec3(1.0, 0.0, 0.0), Vec3(0.0, 2.0, 0.0), Vec3(0.0, 0.0, 3.0))
+    @test isapprox(Diff3D.ray_distance_to_plane(ray, pl), 4.544267180080217; atol=4e-15)
+    @test _b3_close(_b3_v(Diff3D.ray_intersect_plane(ray, pl)),        # intersectPlane
+                    (0.5161290322580641, 0.9516129032258065, 0.02419354838709678); atol=2e-15)
+    @test Diff3D.ray_intersects_plane(ray, pl)
+    @test Diff3D.ray_intersect_plane(Ray(Vec3(), Vec3(1.0, 0.0, 0.0)), Plane(Vec3(0.0, 1.0, 0.0), 1.0)) === nothing
+    @test Diff3D.ray_distance_to_plane(Ray(Vec3(), Vec3(1.0, 0.0, 0.0)), Plane(Vec3(0.0, 1.0, 0.0), 0.0)) == 0.0
+    m = mat4_compose(Vec3(1.0, 2.0, 3.0), quat_from_euler(0.3, -0.4, 0.5), Vec3(2.0, 0.5, 1.5))
+    t = Diff3D.ray_apply_matrix4(ray, m)                               # applyMatrix4
+    @test _b3_close((_b3_v(t.origin)..., _b3_v(t.direction)...),
+                    (-5.722883453344794, -0.7348393321430549, -0.3950871712087305,
+                     0.8110474483388243, 0.38917078092610624, 0.43674722645535674); atol=4e-15)
+
+    tri = Triangle(Vec3(0.0, 0.0, 0.0), Vec3(2.0, 0.0, 0.0), Vec3(0.0, 3.0, 1.0))
+    for (point, expected) in zip(                                       # closestPointToPoint
+            (Vec3(1.0, 1.0, 2.0), Vec3(-1.0, -1.0, 0.0), Vec3(3.0, -1.0, 0.0),
+             Vec3(2.0, 3.0, 0.0), Vec3(-1.0, 1.0, 0.5)),
+            ((1.0, 1.5, 0.5), (0.0, 0.0, 0.0), (2.0, 0.0, 0.0),
+             (0.7142857142857142, 1.9285714285714288, 0.6428571428571429),
+             (0.0, 1.0499999999999998, 0.35)))
+        @test _b3_close(_b3_v(Diff3D.triangle_closest_point_to_point(tri, point)), expected; atol=2e-16)
+    end
+    tp = Diff3D.triangle_plane(tri)                                     # getPlane
+    @test _b3_close((_b3_v(tp.normal)..., tp.constant),
+                    (0.0, -0.31622776601683794, 0.9486832980505138, 0.0))
+    @test !Diff3D.triangle_is_front_facing(tri, Vec3(0.0, 0.0, 1.0))    # isFrontFacing
+    @test Diff3D.triangle_is_front_facing(tri, Vec3(0.0, 0.0, -1.0))
+end
+
+@testset "audit3b: MathUtils and projection helpers match three.js" begin
+    @test isapprox(Diff3D.map_linear(0.3, -1, 2, 10, 20), 14.333333333333332; atol=2e-15)
+    @test Diff3D.inverse_lerp(2, 6, 3.5) == 0.375
+    @test Diff3D.inverse_lerp(2, 2, 3) == 0
+    @test isapprox(Diff3D.damp(1, 5, 2.5, 0.1), 1.8847968677143805; atol=4e-16)
+    @test isapprox(Diff3D.pingpong(2.7, 1), 0.7000000000000002; atol=4e-16)
+    @test isapprox(Diff3D.pingpong(-0.3, 2), 0.2999999999999998; atol=4e-16)
+    @test isapprox(Diff3D.smoothstep(0.3, 0, 2), 0.06075; atol=2e-17)
+    @test Diff3D.smoothstep(-1, 0, 2) == 0 && Diff3D.smoothstep(5, 0, 2) == 1
+    @test isapprox(Diff3D.smootherstep(0.3, 0, 2), 0.026611875; atol=2e-17)
+    @test (@inferred Diff3D.smoothstep(0.3, 0.0, 2.0)) isa Float64
+    @test (@inferred Diff3D.smoothstep(-1.0, 0.0, 2.0)) isa Float64
+    # node: camera = new PerspectiveCamera(50, 1.6, 0.25, 300) at (1,2,5)
+    # looking at the origin; (0.5,-0.3,0.7).project(camera) and
+    # (0.2,-0.4,0.3).unproject(camera).
+    camera = PerspectiveCamera(fov=50 * (π / 180), aspect=1.6, near=0.25, far=300.0)
+    camera.position = Vec3(1.0, 2.0, 5.0)
+    @test _b3_close(_b3_v(Diff3D.vec3_project(Vec3(0.5, -0.3, 0.7), camera)),
+                    (0.09742542102431778, -0.24981368656516142, 0.8986268210654555); atol=1e-14)
+    @test _b3_close(_b3_v(Diff3D.vec3_unproject(Vec3(0.2, -0.4, 0.3), camera)),
+                    (0.9836707980158728, 1.615743330362947, 4.3757167918529785); atol=1e-13)
+end
+
+@testset "audit3b: math additions are generic, type stable and allocation free" begin
+    a32 = Vec3(1.5f0, -2.0f0, 0.75f0); b32 = Vec3(-0.5f0, 3.0f0, 2.25f0)
+    @test (@inferred Diff3D.vec3_angle_to(a32, b32)) isa Float32
+    @test (@inferred Diff3D.vec3_angle_to(a32, Vec3(0f0, 0f0, 0f0))) isa Float32
+    @test (@inferred Diff3D.vec3_project_on_vector(a32, b32)) isa Vec3{Float32}
+    @test (@inferred Diff3D.vec3_project_on_vector(a32, Vec3(0f0, 0f0, 0f0))) isa Vec3{Float32}
+    @test (@inferred Diff3D.vec3_clamp_length(a32, 0.5f0, 1.0f0)) isa Vec3{Float32}
+    ray32 = Ray(Vec3(-4f0, 0.5f0, 0.25f0), normalize(Vec3(1f0, 0.1f0, -0.05f0)))
+    @test (@inferred Diff3D.ray_distance_sq_to_segment(ray32, a32, b32))[1] isa Float32
+    box32 = Box3(Vec3(-1f0, -2f0, -3f0), Vec3(2f0, 1f0, 0.5f0))
+    @test (@inferred Diff3D.box3_bounding_sphere(box32)) isa BoundingSphere{Float32}
+    tri32 = Triangle(Vec3(0f0, 0f0, 0f0), Vec3(2f0, 0f0, 0f0), Vec3(0f0, 3f0, 1f0))
+    @test (@inferred Diff3D.triangle_closest_point_to_point(tri32, a32)) isa Vec3{Float32}
+    # ForwardDiff: derivative of the ray-to-point distance along the point's x
+    # equals the x component of the unit offset (analytic).
+    ray = Ray(Vec3(-4.0, 0.5, 0.25), normalize(Vec3(1.0, 0.1, -0.05)))
+    g = ForwardDiff.derivative(x -> Diff3D.ray_distance_to_point(ray, Vec3(x, 2.0, 3.0)), 1.0)
+    closest = Diff3D.ray_closest_point_to_point(ray, Vec3(1.0, 2.0, 3.0))
+    @test isapprox(g, normalize(Vec3(1.0, 2.0, 3.0) - closest).x; atol=1e-14)
+    # A zero-valued Dual with nonzero partials still takes the zero-vector
+    # branch through its primal value.
+    zero_dual = ForwardDiff.Dual(0.0, 1.0)
+    @test Diff3D.vec3_angle_to(Vec3(zero_dual, zero_dual, zero_dual), Vec3(1.0, 0.0, 0.0)) ≈ π / 2
+    @test ForwardDiff.derivative(t -> Diff3D.smoothstep(t, 0.0, 2.0), 0.5) ≈ 6 * 0.25 * 0.75 / 2
+    if Base.JLOptions().opt_level > 0
+        s = BoundingSphere(Vec3(1.0, 2.0, 3.0), 2.5)
+        m = mat4_compose(Vec3(1.0, 2.0, 3.0), quat_from_euler(0.3, -0.4, 0.5), Vec3(2.0, 0.5, 1.5))
+        checks = (() -> Diff3D.ray_intersect_box(ray, Box3(Vec3(-1.0, -2.0, -3.0), Vec3(2.0, 1.0, 0.5))),
+                  () -> Diff3D.ray_distance_sq_to_segment(ray, Vec3(0.0, -1.0, 1.0), Vec3(1.0, 2.0, -1.0)),
+                  () -> Diff3D.sphere_union(s, BoundingSphere(Vec3(-2.0, 0.0, 1.0), 1.5)),
+                  () -> Diff3D.sphere_apply_matrix4(s, m),
+                  () -> Diff3D.plane_apply_matrix4(Plane(Vec3(0.0, 1.0, 0.0), -2.0), m),
+                  () -> Diff3D.mat4_set_position(m, Vec3()))
+        for check in checks
+            check()
+            @test (@allocated check()) == 0
+        end
+    end
+end

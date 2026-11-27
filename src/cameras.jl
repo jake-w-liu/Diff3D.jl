@@ -838,6 +838,27 @@ function attach!(parent::AbstractObject3D, camera::AbstractCamera)
     return parent
 end
 
+"""
+    vec3_project(point, camera) -> Vec3
+
+Normalized device coordinates of the world-space `point` seen by `camera`
+(three.js `Vector3.project`): the view matrix, then the projection matrix with
+the perspective divide.
+"""
+vec3_project(point::Vec3, camera::AbstractCamera) =
+    mat4_transform_point(projection_matrix(camera),
+                         mat4_transform_point(view_matrix(camera), point))
+
+"""
+    vec3_unproject(ndc, camera) -> Vec3
+
+World-space point for the normalized device coordinates `ndc` of `camera`,
+the inverse of [`vec3_project`](@ref) (three.js `Vector3.unproject`).
+"""
+vec3_unproject(ndc::Vec3, camera::AbstractCamera) =
+    mat4_transform_point(mat4_inverse(view_matrix(camera)),
+                         mat4_transform_point(mat4_inverse(projection_matrix(camera)), ndc))
+
 # ========================== StereoCamera ==========================
 # Produces a left/right eye camera pair for stereo rendering.
 
