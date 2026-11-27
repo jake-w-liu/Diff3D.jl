@@ -588,3 +588,34 @@ end
     probe()
     @test probe() < 90_000_000
 end
+
+@testset "CurvePath sampling computes its arc-length tables once per call" begin
+    # A tube along a 20-piece CurvePath evaluates get_point_at about 200 times.
+    # Rebuilding every piece's arc-length table inside each of the 201 samples
+    # of get_lengths took about 1 GB and seconds; three.js caches those tables
+    # (Curve.js getLengths), and computing them once per call gives the same
+    # values.
+    D = Diff3D
+    path = D.CurvePath{Vec3{Float64}}()
+    for k in 1:20
+        D.add!(path, D.CubicBezierCurve3(Vec3(k - 1.0, 0.0, 0.0), Vec3(k - 0.7, 1.0, 0.0),
+                                         Vec3(k - 0.3, 1.0, 1.0), Vec3(Float64(k), 0.0, 0.0)))
+    end
+    tube(p) = TubeGeometry(p; tubular_segments=64)
+    tube(path)
+    @test (@allocated tube(path)) < 100_000_000
+    # The table-based point equals the piece-by-piece definition
+    # (CurvePath.js:90-117, lengths accumulated in order as getCurveLengths does).
+    lengths = [D.get_length(c) for c in path.curves]
+    total = similar(lengths)
+    running = 0.0
+    for (k, len) in enumerate(lengths)
+        running += len
+        total[k] = running
+    end
+    for t in (0.0, 0.123, 0.5, 0.999, 1.0)
+        i = findfirst(>=(t * total[end]), total)
+        u = 1 - (total[i] - t * total[end]) / lengths[i]
+        @test D.get_point(path, t) == D.get_point_at(path.curves[i], u)
+    end
+end

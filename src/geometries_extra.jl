@@ -1159,22 +1159,56 @@ function _curve_lengths(c::_CompositeCurve)
     return lengths
 end
 
-function get_point(c::_CompositeCurve, t::Real)
-    t = _curve_t(t)
-    curve_lengths = _curve_lengths(c)
-    # CurvePath.js:90-117: the first piece whose cumulative length reaches
-    # t * length, at the matching arc-length fraction of that piece.
-    d = t * curve_lengths[end]
-    for (i, total) in enumerate(curve_lengths)
+# Arc-length tables of a composite curve, computed once per call that samples
+# it many times (three.js caches the same values on the curve objects, so this
+# changes no result): the cumulative piece lengths (CurvePath.getCurveLengths),
+# each piece's own length (Curve.getLength, or the sum of its pieces for a
+# nested CurvePath) and each piece's get_lengths table for getPointAt.
+struct _CompositeTables
+    cumulative::Vector{Float64}
+    piece_lengths::Vector{Float64}
+    piece_tables::Vector{Vector{Float64}}
+end
+
+function _composite_tables(c::_CompositeCurve)
+    isempty(c.curves) && throw(ArgumentError("$(nameof(typeof(c))) has no curves"))
+    n = length(c.curves)
+    cumulative = Vector{Float64}(undef, n)
+    piece_lengths = Vector{Float64}(undef, n)
+    piece_tables = Vector{Vector{Float64}}(undef, n)
+    sum = 0.0
+    for (i, curve) in enumerate(c.curves)
+        table = get_lengths(curve)
+        piece_tables[i] = table
+        piece_lengths[i] = curve isa _CompositeCurve ? get_length(curve) : table[end]
+        sum += piece_lengths[i]
+        cumulative[i] = sum
+    end
+    return _CompositeTables(cumulative, piece_lengths, piece_tables)
+end
+
+# Curve.getPointAt with the piece's get_lengths table already computed.
+_point_at_with_table(c::Curve, u::Float64, table::Vector{Float64}) =
+    get_point(c, _u_to_t_mapping(table, u, nothing))
+_point_at_with_table(c::Union{LineCurve,LineCurve3}, u::Float64, ::Vector{Float64}) =
+    get_point(c, u)
+
+# CurvePath.js:90-117: the first piece whose cumulative length reaches
+# t * length, at the matching arc-length fraction of that piece.
+function _composite_point(c::_CompositeCurve, t::Float64, tables::_CompositeTables)
+    cumulative = tables.cumulative
+    d = t * cumulative[end]
+    for (i, total) in enumerate(cumulative)
         if total >= d
-            curve = c.curves[i]
-            segment_length = get_length(curve)
+            segment_length = tables.piece_lengths[i]
             u = segment_length == 0 ? 0.0 : 1 - (total - d) / segment_length
-            return get_point_at(curve, u)
+            return _point_at_with_table(c.curves[i], u, tables.piece_tables[i])
         end
     end
     throw(ArgumentError("$(nameof(typeof(c))) parameter must lie in [0, 1]"))
 end
+
+get_point(c::_CompositeCurve, t::Real) = _composite_point(c, _curve_t(t), _composite_tables(c))
 
 # ---- arc length (Curve.js:144-266) ----
 
@@ -1186,12 +1220,22 @@ Cumulative chord lengths of `curve` sampled at `t = 0:1/divisions:1`
 """
 function get_lengths(c::Curve, divisions::Integer=_CURVE_ARC_LENGTH_DIVISIONS)
     n = _geometry_positive_int(divisions, "get_lengths divisions")
+    return _curve_chord_lengths(t -> get_point(c, t), n)
+end
+
+function get_lengths(c::_CompositeCurve, divisions::Integer=_CURVE_ARC_LENGTH_DIVISIONS)
+    n = _geometry_positive_int(divisions, "get_lengths divisions")
+    tables = _composite_tables(c)
+    return _curve_chord_lengths(t -> _composite_point(c, t, tables), n)
+end
+
+function _curve_chord_lengths(point::F, n::Int) where {F}
     lengths = Vector{Float64}(undef, n + 1)
     lengths[1] = 0.0
-    last = get_point(c, 0.0)
+    last = point(0.0)
     sum = 0.0
     for p in 1:n
-        current = get_point(c, p / n)
+        current = point(p / n)
         sum += _curve_distance(current, last)
         lengths[p + 1] = sum
         last = current
@@ -1223,9 +1267,10 @@ of `curve`, or `distance` when given and non-zero (three.js
 interpolation within the chord. `u` must lie in `[0, 1]` (three.js returns
 `NaN` outside), and a given distance in `[0, length]`.
 """
-function get_u_to_t_mapping(c::Curve, u::Real, distance::Union{Nothing,Real}=nothing)
-    u = _curve_t(u, "get_u_to_t_mapping u")
-    lengths = get_lengths(c)
+get_u_to_t_mapping(c::Curve, u::Real, distance::Union{Nothing,Real}=nothing) =
+    _u_to_t_mapping(get_lengths(c), _curve_t(u, "get_u_to_t_mapping u"), distance)
+
+function _u_to_t_mapping(lengths::Vector{Float64}, u::Float64, distance::Union{Nothing,Real})
     il = length(lengths)
     total = lengths[il]
     target = distance === nothing || iszero(distance) ? u * total :
@@ -1314,7 +1359,8 @@ end
 function get_spaced_points(c::_CompositeCurve, divisions::Integer=40)
     P = _curve_point_type(c)
     n = _geometry_positive_int(divisions, "get_spaced_points divisions")
-    points = P[get_point(c, i / n) for i in 0:n]
+    tables = _composite_tables(c)
+    points = P[_composite_point(c, i / n, tables) for i in 0:n]
     c.auto_close && push!(points, points[1])
     return points
 end
