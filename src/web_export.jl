@@ -519,19 +519,6 @@ function _js_repeated_array(value::Real, n::Integer)
     write(io, ']')
     return String(take!(io))
 end
-function _js_write_repeated_pattern_array(io::IO, pattern::NTuple{N,<:Real},
-                                          count::Integer, num_buf::Vector{UInt8}) where {N}
-    write(io, '[')
-    first = true
-    for _ in 1:count
-        for value in pattern
-            first ? (first = false) : write(io, ',')
-            _js_write_num(io, value, num_buf)
-        end
-    end
-    write(io, ']')
-    return nothing
-end
 function _js_repeated_pattern_array(pattern::NTuple{N,<:Real}, count::Integer) where {N}
     lits = ntuple(i -> _js_num(pattern[i]), Val(N))
     io = IOBuffer()
@@ -565,12 +552,6 @@ function _js_write_attribute_components_array(io::IO, data::AbstractVector, stri
                                               components::Int, n_items::Int)
     return _js_write_attribute_components_array(io, data, stride, components, n_items,
                                                 _web_num_buffer())
-end
-function _js_attribute_components_array(data::AbstractVector, stride::Int,
-                                        components::Int, n_items::Int)
-    io = IOBuffer(sizehint=_web_num_array_sizehint(components * n_items))
-    _js_write_attribute_components_array(io, data, stride, components, n_items)
-    return String(take!(io))
 end
 function _js_write_skin_indices_array(io::IO, indices::AbstractVector{<:NTuple{4,Int}},
                                       num_buf::Vector{UInt8})
@@ -674,21 +655,6 @@ function _js_write_plane(io::IO, p::Plane, num_buf::Vector{UInt8})
     write(io, ']')
     return nothing
 end
-function _js_vec(v::Vec2)
-    io = IOBuffer(sizehint=_web_nested_num_array_sizehint(1, 2))
-    _js_write_vec(io, v, _web_num_buffer())
-    return String(take!(io))
-end
-function _js_vec(v::Vec3)
-    io = IOBuffer(sizehint=_web_nested_num_array_sizehint(1, 3))
-    _js_write_vec(io, v, _web_num_buffer())
-    return String(take!(io))
-end
-function _js_quat(q::Quaternion)
-    io = IOBuffer(sizehint=_web_nested_num_array_sizehint(1, 4))
-    _js_write_quat(io, q, _web_num_buffer())
-    return String(take!(io))
-end
 function _js_color(c::Color3)
     io = IOBuffer(sizehint=_web_nested_num_array_sizehint(1, 3))
     _js_write_color(io, c, _web_num_buffer())
@@ -721,11 +687,6 @@ function _js_mat_array(ms::AbstractVector{<:Mat4})
         _js_write_mat(io, m, num_buf)
     end
     write(io, ']')
-    return String(take!(io))
-end
-function _js_plane(p::Plane)
-    io = IOBuffer(sizehint=_web_nested_num_array_sizehint(1, 4))
-    _js_write_plane(io, p, _web_num_buffer())
     return String(take!(io))
 end
 _html_escape(s::AbstractString) = replace(s, "&"=>"&amp;", "<"=>"&lt;", ">"=>"&gt;", "\""=>"&quot;")
@@ -1337,14 +1298,6 @@ function _web_write_cube_level_json(io::IO, data::Array{Float64,3})
     return _web_write_cube_level_json(io, data, _web_num_buffer())
 end
 
-function _web_cube_level_json(data::Array{Float64,3})
-    H, W, C = size(data)
-    (H > 0 && W > 0 && C > 0) || return "null"
-    io = IOBuffer(sizehint=_web_texture_json_sizehint(H, W))
-    _web_write_cube_level_json(io, data, _web_num_buffer())
-    return String(take!(io))
-end
-
 function _web_cube_face_json_sizehint(tex)
     tex isa Texture || return 4
     H, W, C = size(tex.data)
@@ -1636,22 +1589,6 @@ function _web_shadow_json(scene::Scene, light::Union{DirectionalLight,PointLight
     _web_write_shadow_depth_data(io, sm.depth)
     write(io, '}')
     return String(take!(io))
-end
-
-function _web_visibility_chain(obj::AbstractObject3D)
-    chain = AbstractObject3D[]
-    current = obj
-    while current !== nothing
-        push!(chain, current)
-        current = get_parent(current)
-    end
-    ids = Int[]
-    values = Bool[]
-    for item in reverse(chain)
-        push!(ids, item.id)
-        push!(values, is_visible(item))
-    end
-    return ids, values
 end
 
 function _web_visible_or_forced(obj::AbstractObject3D, force_ids::Set{Int})
@@ -2063,12 +2000,6 @@ function _web_write_tangent_json(io::IO, geo::BufferGeometry, num_buf::Vector{UI
     return false
 end
 
-function _web_tangent_json(geo::BufferGeometry)
-    io = IOBuffer(sizehint=_web_num_array_sizehint(4 * geo.n_vertices))
-    has_tangents = _web_write_tangent_json(io, geo, _web_num_buffer())
-    return has_tangents, String(take!(io))
-end
-
 function _web_morph_position_target_count(geo::BufferGeometry)
     i = 0
     while true
@@ -2385,13 +2316,6 @@ function _web_write_line_distance_json(io::IO, geo::BufferGeometry, num_buf::Vec
     end
     write(io, "null")
     return nothing
-end
-
-function _web_line_distance_json(geo::BufferGeometry)
-    has_distances = _geometry_attribute_for_components(geo, :lineDistance, 1) !== nothing
-    io = IOBuffer(sizehint=has_distances ? _web_num_array_sizehint(geo.n_vertices) : 8)
-    _web_write_line_distance_json(io, geo, _web_num_buffer())
-    return String(take!(io))
 end
 
 function _web_draw_range_values(geo::BufferGeometry)
@@ -3696,10 +3620,6 @@ function _web_track_json_sizehint(tr::AbstractKeyframeTrack, value_components::I
     return _web_sizehint_add(256, _web_num_array_sizehint(n_nums))
 end
 
-function _web_track_json_buffer(tr::AbstractKeyframeTrack, value_components::Integer...)
-    return IOBuffer(sizehint=_web_track_json_sizehint(tr, value_components...))
-end
-
 function _js_write_vec3_components_array(io::IO, values::AbstractVector{<:Vec3},
                                          num_buf::Vector{UInt8})
     write(io, '[')
@@ -3930,12 +3850,6 @@ function _web_write_track_json(io::IO, tr::AbstractKeyframeTrack)
     return _web_write_track_json(io, tr, _web_num_buffer())
 end
 
-function _web_track_json(tr::AbstractKeyframeTrack)
-    io = IOBuffer(sizehint=_web_track_json_sizehint(tr))
-    _web_write_track_json(io, tr)
-    return String(take!(io))
-end
-
 function _web_clip_json_sizehint(clip::AnimationClip)
     sizehint = 256
     for track in clip.tracks
@@ -3974,31 +3888,6 @@ function _web_clip_json(clip::AnimationClip)
     io = IOBuffer(sizehint=_web_clip_json_sizehint(clip))
     _web_write_clip_json(io, clip)
     return String(take!(io))
-end
-
-function _web_case_json_sizehint(lights_json::AbstractString,
-                                 nodes::AbstractVector{<:AbstractString},
-                                 objects::AbstractVector{<:AbstractString},
-                                 animations::AbstractVector{AnimationClip},
-                                 texture_registry::Union{Nothing,_WebTextureRegistry}=nothing,
-                                 env_texture_registry::Union{Nothing,_WebCubeTextureRegistry}=nothing)
-    sizehint = length(lights_json) + sum(length, nodes; init=0) +
-               sum(length, objects; init=0) + 1024
-    if texture_registry !== nothing
-        for tex in texture_registry.textures
-            H, W, _ = size(tex.data)
-            sizehint = _web_sizehint_add(sizehint, _web_texture_json_sizehint(H, W) + 32)
-        end
-    end
-    if env_texture_registry !== nothing
-        for env in env_texture_registry.textures
-            sizehint = _web_sizehint_add(sizehint, _web_env_json_sizehint(env) + 32)
-        end
-    end
-    for clip in animations
-        sizehint = _web_sizehint_add(sizehint, _web_clip_json_sizehint(clip))
-    end
-    return sizehint
 end
 
 function _web_position_float_count(obj, geo::BufferGeometry)
@@ -4114,30 +4003,6 @@ function _web_write_objects_json(io::IO, objects::_WebDrawableStream,
                                      env_texture_registry=objects.env_texture_registry)
 end
 
-function _web_collect_case_light_node_parts(case::WebGLExportCase)
-    animation_target_ids, lights_json = _web_collect_case_light_parts(case)
-    nodes = _web_collect_transform_nodes(case.scene, animation_target_ids, case.camera)
-    return animation_target_ids, lights_json, nodes
-end
-
-function _web_collect_case_light_parts(case::WebGLExportCase)
-    animation_target_ids = _web_case_animation_target_ids(case.animations)
-    no_animations = isempty(case.animations)
-    stale_shadow_ids = no_animations ? _WEB_EMPTY_ID_SET :
-                       _web_stale_shadow_light_ids(case.scene, case.animations)
-    dynamic_shadow_ids = no_animations ? _WEB_EMPTY_ID_SET :
-                         _web_dynamic_directional_shadow_light_ids(case.scene, case.animations)
-    dynamic_spot_shadow_ids = no_animations ? _WEB_EMPTY_ID_SET :
-                              _web_dynamic_spot_shadow_light_ids(case.scene, case.animations)
-    dynamic_point_shadow_ids = no_animations ? _WEB_EMPTY_ID_SET :
-                               _web_dynamic_point_shadow_light_ids(case.scene, case.animations)
-    lights_json = _web_lights_json(case.scene, animation_target_ids, stale_shadow_ids,
-                                   dynamic_shadow_ids, dynamic_spot_shadow_ids,
-                                   dynamic_point_shadow_ids;
-                                   clipping_planes=case.clipping_planes)
-    return animation_target_ids, lights_json
-end
-
 struct _WebLightsStream
     scene::Scene
     force_ids::Set{Int}
@@ -4163,16 +4028,6 @@ function _web_case_light_stream(case::WebGLExportCase,
         no_animations ? _WEB_EMPTY_ID_SET :
             _web_dynamic_point_shadow_light_ids(case.scene, case.animations),
         case.clipping_planes)
-end
-
-function _web_collect_case_json_parts(case::WebGLExportCase)
-    animation_target_ids, lights_json, nodes = _web_collect_case_light_node_parts(case)
-    texture_registry = _web_texture_registry()
-    env_texture_registry = _web_cube_texture_registry()
-    objects = _web_collect_drawables(case.scene, animation_target_ids, case.radius;
-                                    texture_registry=texture_registry,
-                                    env_texture_registry=env_texture_registry)
-    return lights_json, nodes, objects, texture_registry, env_texture_registry
 end
 
 function _web_write_lights_part(io::IO, lights_json::AbstractString,
