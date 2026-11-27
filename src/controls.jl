@@ -1734,16 +1734,23 @@ struct NumberKeyframeTrack <: AbstractKeyframeTrack
     times::Vector{Float64}
     values::Vector{Float64}
     interpolation::Symbol             # :linear | :step | :cubic
+    # Morph target name of a `morphTargetInfluences[name]` path ("" otherwise).
+    # Each node the track drives resolves it in its own `morph_target_names`,
+    # as three.js PropertyBinding.bind looks it up in each bound object's
+    # morphTargetDictionary; `component` is the index on the first node that
+    # names it.
+    morph_name::String
 
     function NumberKeyframeTrack(target::AbstractObject3D, property::Symbol,
                                  component::Int, times::Vector{Float64},
-                                 values::Vector{Float64}, interpolation::Symbol)
+                                 values::Vector{Float64}, interpolation::Symbol,
+                                 morph_name::String="")
         interpolation in (:linear, :step, :cubic) ||
             throw(ArgumentError("unsupported number keyframe interpolation: $interpolation"))
         component >= 0 || throw(ArgumentError("animation component index must be non-negative"))
         _validate_keyframe_values("NumberKeyframeTrack", times, values)
         _validate_finite_keyframe_values("NumberKeyframeTrack", values)
-        new(target, property, component, times, values, interpolation)
+        new(target, property, component, times, values, interpolation, morph_name)
     end
 end
 
@@ -1967,8 +1974,14 @@ function _morph_target_name_index(obj, name::AbstractString)
     return nothing
 end
 
-function _parse_animation_property_path(target::AbstractObject3D,
-                                        path::AbstractString)
+_parse_animation_property_path(target::AbstractObject3D, path::AbstractString) =
+    _parse_animation_property_path_named(target, path)[1:2]
+
+# (property, component, morph name): the name is the bracket text of a
+# morphTargetInfluences path that names a morph target of `target` or one of
+# its descendants, and "" otherwise.
+function _parse_animation_property_path_named(target::AbstractObject3D,
+                                              path::AbstractString)
     p = startswith(path, ".") ? path[2:end] : String(path)
     isempty(p) && throw(ArgumentError("animation property path must not be empty"))
     material_path = startswith(p, "material.")
@@ -1980,16 +1993,36 @@ function _parse_animation_property_path(target::AbstractObject3D,
         index = bracket.captures[2]
         if property === :morph_target_influences
             named = _morph_target_name_index(target, index)
-            named === nothing || return property, named
+            named === nothing || return property, named, String(index)
         end
-        return property, _animation_component_index(index)
+        return property, _animation_component_index(index), ""
     end
     dot = match(r"^(.+)\.([A-Za-z])$", p)
     if dot !== nothing
         return _resolved_animation_property(target, dot.captures[1], material_path),
-               _animation_component_index(dot.captures[2])
+               _animation_component_index(dot.captures[2]), ""
     end
-    return _resolved_animation_property(target, p, material_path), 0
+    return _resolved_animation_property(target, p, material_path), 0, ""
+end
+
+# 1-based influence index that the morph name `name` addresses on `node`:
+# its own morph_target_names entry (the last duplicate, as
+# Mesh.updateMorphTargets builds the dictionary), else the numeric reading of
+# the name (PropertyBinding keeps an unknown name as the array index), else 0
+# (the node has no such morph target and is left unchanged).
+function _node_morph_name_index(node, name::String)
+    if hasproperty(node, :morph_target_names)
+        names = getproperty(node, :morph_target_names)
+        if names isa Vector{String}
+            index = findlast(==(name), names)
+        else
+            index = findlast(==(name), names)
+        end
+        index === nothing || return index
+    end
+    (!isempty(name) && all(isdigit, name)) || return 0
+    value = tryparse(Int, name)
+    return value === nothing || value == typemax(Int) ? 0 : value + 1
 end
 
 function _parse_animation_whole_property_path(target::AbstractObject3D,
@@ -2031,9 +2064,12 @@ end
 function NumberKeyframeTrack(target::AbstractObject3D, property_path::AbstractString,
                              times::Vector{Float64}, values::Vector{Float64};
                              interpolation::Symbol=:linear)
-    property, component = _parse_animation_property_path(target, property_path)
-    NumberKeyframeTrack(target, property, times, values;
-                        interpolation=interpolation, component=component)
+    interpolation in (:linear, :step, :cubic) ||
+        throw(ArgumentError("unsupported number keyframe interpolation: $interpolation"))
+    property, component, morph_name =
+        _parse_animation_property_path_named(target, property_path)
+    NumberKeyframeTrack(target, property, component, times, values, interpolation,
+                        morph_name)
 end
 
 # Dedicated rotation track: quaternion keyframes interpolated with slerp between
@@ -3211,12 +3247,16 @@ function _write_morph_component_track_tree!(@nospecialize(node), tr::NumberKeyfr
                                             mixer::AnimationMixer)
     wrote = false
     if hasproperty(node, :morph_target_influences)
-        values = getproperty(node, :morph_target_influences)
-        value = Float64(_mixer_track_value(tr, mixer))
-        if values isa Vector{Float64}
-            _write_morph_component_value!(values, tr.component, value)
-        else
-            _write_morph_component_value!(values, tr.component, value)
+        component = isempty(tr.morph_name) ? tr.component :
+            _node_morph_name_index(node, tr.morph_name)
+        if component != 0
+            values = getproperty(node, :morph_target_influences)
+            value = Float64(_mixer_track_value(tr, mixer))
+            if values isa Vector{Float64}
+                _write_morph_component_value!(values, component, value)
+            else
+                _write_morph_component_value!(values, component, value)
+            end
         end
         wrote = true
     end

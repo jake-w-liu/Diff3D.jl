@@ -128,3 +128,34 @@ end
     @test Diff3D.timer_elapsed(u) ≈ 0.025 atol = 1e-15
     @test Diff3D.FrameTimer().time_scale == 1.0
 end
+
+@testset "Morph-name tracks on a parent resolve the name per target" begin
+    # three.js PropertyBinding.bind looks a morphTargetInfluences[name] index up
+    # in each bound object's own morphTargetDictionary. Oracle (r186, one
+    # NumberKeyframeTrack per mesh, [0,1] -> [0,1], update(0.5)):
+    # a=[0.5,0], b=[0,0,0.5], c=[0] (c has no "smile" and is not written).
+    geo = BoxGeometry()
+    a = Mesh(geo, MeshBasicMaterial(); morph_target_influences=[0.0, 0.0],
+             morph_target_names=["smile", "frown"])
+    b = Mesh(geo, MeshBasicMaterial(); morph_target_influences=[0.0, 0.0, 0.0],
+             morph_target_names=["blink", "frown", "smile"])
+    c = Mesh(geo, MeshBasicMaterial(); morph_target_influences=[0.0],
+             morph_target_names=["other"])
+    g = Group(); add!(g, a); add!(g, b); add!(g, c)
+    tr = NumberKeyframeTrack(g, "morphTargetInfluences[smile]", [0.0, 1.0], [0.0, 1.0])
+    @test tr.component == 1           # index on the first node naming it (1.0 field)
+    @test tr.morph_name == "smile"
+    mixer = AnimationMixer(AnimationClip("m", AbstractKeyframeTrack[tr]))
+    mixer_set_time!(mixer, 0.5)
+    @test a.morph_target_influences == [0.5, 0.0]
+    @test b.morph_target_influences == [0.0, 0.0, 0.5]
+    @test c.morph_target_influences == [0.0]
+    # Numeric and x/y/z component paths keep their fixed index.
+    n = NumberKeyframeTrack(g, "morphTargetInfluences[1]", [0.0, 1.0], [0.0, 1.0])
+    @test n.morph_name == "" && n.component == 2
+    # Browser export carries the same per-object index.
+    io = IOBuffer()
+    Diff3D._web_write_track_json(io, tr, UInt8[])
+    json = Diff3D._json_parse(String(take!(io)))
+    @test json["morphComponents"] == Dict(string(a.id) => 1, string(b.id) => 3)
+end

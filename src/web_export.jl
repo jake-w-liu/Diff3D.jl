@@ -3731,6 +3731,29 @@ function _web_write_track_json(io::IO, tr::KeyframeTrack, num_buf::Vector{UInt8}
     return nothing
 end
 
+# A named morph track resolves the name on each node it drives (see
+# Diff3D._node_morph_name_index); export that per-object 1-based index.
+function _web_write_morph_components_json(io::IO, target::AbstractObject3D, name::String)
+    write(io, ",\"morphComponents\":{")
+    first = true
+    visit(node) = begin
+        if hasproperty(node, :morph_target_influences)
+            k = _node_morph_name_index(node, name)
+            if k != 0
+                first ? (first = false) : write(io, ',')
+                write(io, '"')
+                _web_print_int(io, node.id)
+                write(io, "\":")
+                _web_print_int(io, k)
+            end
+        end
+        foreach(visit, get_children(node))
+    end
+    visit(target)
+    write(io, '}')
+    return nothing
+end
+
 function _web_write_track_json(io::IO, tr::NumberKeyframeTrack, num_buf::Vector{UInt8})
     write(io, "{\"target\":")
     _web_print_int(io, tr.target.id)
@@ -3738,6 +3761,7 @@ function _web_write_track_json(io::IO, tr::NumberKeyframeTrack, num_buf::Vector{
     _js_write_str(io, _web_track_property_name(tr))
     write(io, ",\"component\":")
     _web_print_int(io, tr.component)
+    isempty(tr.morph_name) || _web_write_morph_components_json(io, tr.target, tr.morph_name)
     write(io, ",\"kind\":\"number\",\"times\":")
     _js_write_array(io, tr.times, num_buf)
     write(io, ",\"values\":")
@@ -5229,7 +5253,7 @@ function _web_write_webgl_html(io::IO, data_json::String, title::String;
     }
   }
   function updateBoneGraph(c){ const graph=c.nodeMap||new Map(), bones=new Map(), state=new Map(); for(const o of c.objects) if(o.skin&&o.skin.bones) for(const b of o.skin.bones) bones.set(b.id,b); const resolve=b=>{ const st=state.get(b.id); if(st===2) return b.matrix; if(st===1) return b.baseMatrix; state.set(b.id,1); let parent=b.parentMatrix||M4.ident(); if(b.parentId){ if(bones.has(b.parentId)) parent=resolve(bones.get(b.parentId)); else if(graph.has(b.parentId)){ const p=graph.get(b.parentId); parent=p.transformMatrix||p.matrix; } } b.parentMatrix=parent; b.matrix=M4.mul(parent,M4.trs(b.animPos,b.animQuat,b.animScale)); state.set(b.id,2); return b.matrix; }; for(const b of bones.values()) resolve(b); }
-  function applyAnimations(c,t){ if(!c.materialAnimationMarked) markMaterialAnimation(c); if(c.camera) resetCameraAnim(c.camera); for(const l of c.lights||[]) resetLightAnim(l); for(const n of c.nodes||[]){ for(const state of n.visibilityStates||[]) state.visible=state.baseVisible; n.animPos=n.basePosition.slice(); n.animEuler=n.baseEuler.slice(); n.animScale=n.baseScale.slice(); n.animQuat=n.baseQuaternion.slice(); n.matrix=n.baseMatrix; } for(const o of c.objects){ o.animPos=o.basePosition.slice(); o.animEuler=o.baseEuler.slice(); o.animScale=o.baseScale.slice(); o.animQuat=o.baseQuaternion.slice(); o.matrix=o.baseMatrix; if(o.materialAnimated){ o.materialStamp=(o.materialStamp||0)+1; resetRenderableAnim(o); } else for(const s of o.visibilityStates) s.visible=s.baseVisible; if(o.hasMorphTargets){ o.morphWeights=o.baseMorphWeights.slice(); o.morphDirty=true; } if(o.skin){ o.skinDirty=true; for(const b of o.skin.bones){ b.animPos=b.basePosition.slice(); b.animEuler=b.baseEuler.slice(); b.animScale=b.baseScale.slice(); b.animQuat=b.baseQuaternion.slice(); b.matrix=b.baseMatrix; } } } for(const clip of c.animations){ const ct=clipTime(clip,t); for(const tr of clip.tracks){ const v=sampleTrack(tr,ct); if(v==null) continue; if(tr.property==="morph_target_influences"){ for(const o of (morphById.get(tr.target)||[])){ if((tr.component||0)>0) o.morphWeights[tr.component-1]=v[0]; else o.morphWeights=v.slice(); o.morphDirty=true; } continue; } const lights=lightById.get(tr.target)||[]; if(tr.property==="visible"){ for(const s of (visibilityById.get(tr.target)||[])) s.visible=v[0]>=.5; for(const l of lights) setLightAnim(l,tr.property,v,tr.component||0); continue; } for(const l of lights) setLightAnim(l,tr.property,v,tr.component||0); for(const cam of (cameraById.get(tr.target)||[])) setCameraAnim(cam,tr.property,v,tr.component||0); const objs=objectById.get(tr.target)||[]; for(const o of objs) if(!setRenderableAnim(o,tr.property,v,tr.component||0)) setNodeAnim(o,tr.property,v,tr.component||0); for(const n of (nodeById.get(tr.target)||[])) setNodeAnim(n,tr.property,v,tr.component||0); } } updateTransformGraph(c); updateBoneGraph(c); updateViewAndLightPoses(c); for(const o of c.objects){ updateMorph(o); updateSkin(o); } }
+  function applyAnimations(c,t){ if(!c.materialAnimationMarked) markMaterialAnimation(c); if(c.camera) resetCameraAnim(c.camera); for(const l of c.lights||[]) resetLightAnim(l); for(const n of c.nodes||[]){ for(const state of n.visibilityStates||[]) state.visible=state.baseVisible; n.animPos=n.basePosition.slice(); n.animEuler=n.baseEuler.slice(); n.animScale=n.baseScale.slice(); n.animQuat=n.baseQuaternion.slice(); n.matrix=n.baseMatrix; } for(const o of c.objects){ o.animPos=o.basePosition.slice(); o.animEuler=o.baseEuler.slice(); o.animScale=o.baseScale.slice(); o.animQuat=o.baseQuaternion.slice(); o.matrix=o.baseMatrix; if(o.materialAnimated){ o.materialStamp=(o.materialStamp||0)+1; resetRenderableAnim(o); } else for(const s of o.visibilityStates) s.visible=s.baseVisible; if(o.hasMorphTargets){ o.morphWeights=o.baseMorphWeights.slice(); o.morphDirty=true; } if(o.skin){ o.skinDirty=true; for(const b of o.skin.bones){ b.animPos=b.basePosition.slice(); b.animEuler=b.baseEuler.slice(); b.animScale=b.baseScale.slice(); b.animQuat=b.baseQuaternion.slice(); b.matrix=b.baseMatrix; } } } for(const clip of c.animations){ const ct=clipTime(clip,t); for(const tr of clip.tracks){ const v=sampleTrack(tr,ct); if(v==null) continue; if(tr.property==="morph_target_influences"){ for(const o of (morphById.get(tr.target)||[])){ const k=tr.morphComponents?(tr.morphComponents[o.id]||0):(tr.component||0); if(k>0) o.morphWeights[k-1]=v[0]; else if(tr.morphComponents) continue; else o.morphWeights=v.slice(); o.morphDirty=true; } continue; } const lights=lightById.get(tr.target)||[]; if(tr.property==="visible"){ for(const s of (visibilityById.get(tr.target)||[])) s.visible=v[0]>=.5; for(const l of lights) setLightAnim(l,tr.property,v,tr.component||0); continue; } for(const l of lights) setLightAnim(l,tr.property,v,tr.component||0); for(const cam of (cameraById.get(tr.target)||[])) setCameraAnim(cam,tr.property,v,tr.component||0); const objs=objectById.get(tr.target)||[]; for(const o of objs) if(!setRenderableAnim(o,tr.property,v,tr.component||0)) setNodeAnim(o,tr.property,v,tr.component||0); for(const n of (nodeById.get(tr.target)||[])) setNodeAnim(n,tr.property,v,tr.component||0); } } updateTransformGraph(c); updateBoneGraph(c); updateViewAndLightPoses(c); for(const o of c.objects){ updateMorph(o); updateSkin(o); } }
   const MAX_DIR=4, MAX_POINT=4, MAX_SPOT=4, MAX_HEMI=4, MAX_RECT=4;
   function padded3(items, limit, fn){ const out=new Array(limit*3).fill(0); for(let i=0;i<Math.min(limit,items.length);i++){ const v=fn(items[i]); out[i*3]=v[0]; out[i*3+1]=v[1]; out[i*3+2]=v[2]; } return out; }
   function padded2(items, limit, fn){ const out=new Array(limit*2).fill(0); for(let i=0;i<Math.min(limit,items.length);i++){ const v=fn(items[i]); out[i*2]=v[0]; out[i*2+1]=v[1]; } return out; }
