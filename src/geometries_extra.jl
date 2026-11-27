@@ -2855,49 +2855,6 @@ end
 @inline _edge_key_first(key::UInt128) = Int(key >> 64)
 @inline _edge_key_second(key::UInt128) = Int(key & UInt128(typemax(UInt64)))
 
-@inline function _record_edge_face!(
-    edge_keys::Vector{K},
-    edge_record_ids::Vector{Int},
-    ordered_edges::Vector{K},
-    edge_normals::Vector{Vec3{Float64}},
-    edge_counts::Vector{UInt8},
-    edge_features::Vector{Bool},
-    a::Int, b::Int, n::Vec3{Float64}, cosT::Float64,
-) where {K<:Union{UInt64,UInt128}}
-    key = _edge_key(K, a, b)
-    mask = length(edge_keys) - 1
-    idx = Int(hash(key) & UInt(mask)) + 1
-    while true
-        existing = edge_keys[idx]
-        if existing == zero(K)
-            edge_keys[idx] = key
-            record_id = length(ordered_edges) + 1
-            edge_record_ids[idx] = record_id
-            push!(ordered_edges, key)
-            push!(edge_normals, n)
-            push!(edge_counts, UInt8(1))
-            push!(edge_features, false)
-            return nothing
-        elseif existing == key
-            record_id = edge_record_ids[idx]
-            count = edge_counts[record_id]
-            if count == UInt8(1)
-                # three.js EdgesGeometry.js keeps an edge when dot <= thresholdDot.
-                edge_features[record_id] = dot(edge_normals[record_id], n) <= cosT
-                edge_counts[record_id] = UInt8(2)
-            else
-                # More than two incident faces make this a non-manifold edge.
-                # Expose it regardless of face order or normal similarity.
-                edge_features[record_id] = true
-                edge_counts[record_id] = count == typemax(UInt8) ? count :
-                                         count + UInt8(1)
-            end
-            return nothing
-        end
-        idx = idx == length(edge_keys) ? 1 : idx + 1
-    end
-end
-
 @inline function _edge_table_capacity(max_edges::Int)
     return max(16, nextpow(2, max_edges + max(16, max_edges >>> 2)))
 end
@@ -2925,30 +2882,22 @@ end
     end
 end
 
-@inline function _write_wireframe_key!(
-    positions::Vector{Float64}, geo::BufferGeometry, key::K,
-    vi::Int, pout::Int,
-) where {K<:Union{UInt64,UInt128}}
-    va = get_vertex(geo, _edge_key_first(key))
-    vb = get_vertex(geo, _edge_key_second(key))
-    positions[pout] = va.x
-    positions[pout + 1] = va.y
-    positions[pout + 2] = va.z
-    positions[pout + 3] = vb.x
-    positions[pout + 4] = vb.y
-    positions[pout + 5] = vb.z
-    return vi + 2, pout + 6
-end
+@inline _directed_edge_key(::Type{UInt64}, a::Int, b::Int)::UInt64 =
+    (UInt64(a) << 32) | UInt64(b)
+@inline _directed_edge_key(::Type{UInt128}, a::Int, b::Int)::UInt128 =
+    (UInt128(a) << 64) | UInt128(b)
 
-"""All unique triangle edges as line segments (three.js `WireframeGeometry`).
-Like three.js, an edge is emitted once however many triangles share its two
-end positions, even when those triangles use separate vertices.
-Returned as a line BufferGeometry (`n_faces = 0`; vertices are segment pairs)."""
-function wireframe_geometry(geo::BufferGeometry)
-    _validate_triangle_geometry_indices(geo, "wireframe_geometry")
-    geo.n_vertices <= _EDGE_KEY32_MAX ?
-        _wireframe_geometry_keyed(geo, UInt64) :
-        _wireframe_geometry_keyed(geo, UInt128)
+# Slot of `key` in an open-addressed power-of-two table whose empty slots hold
+# zero, or the empty slot where `key` belongs. Keys are never zero because
+# vertex ids start at one.
+@inline function _edge_table_slot(keys::Vector{K}, key::K) where {K<:Union{UInt64,UInt128}}
+    last_slot = length(keys)
+    slot = Int(hash(key) & UInt(last_slot - 1)) + 1
+    @inbounds while true
+        existing = keys[slot]
+        (existing == zero(K) || existing == key) && return slot
+        slot = slot == last_slot ? 1 : slot + 1
+    end
 end
 
 function _wireframe_edge_keys(geo::BufferGeometry, faces,
@@ -3008,86 +2957,135 @@ function _wireframe_position_ids(geo::BufferGeometry)
     return ids
 end
 
+# Face ranges visited by `wireframe_geometry`: the draw groups when present
+# (WireframeGeometry.js:51-57), otherwise every face.
+function _wireframe_face_ranges(geo::BufferGeometry)
+    isempty(geo.groups) && return UnitRange{Int}[1:geo.n_faces]
+    return _group_face_ranges(geo, "wireframe_geometry")
+end
+
+@inline function _push_segment!(positions::Vector{Float64}, geo::BufferGeometry,
+                                a::Int, b::Int)
+    base_a = 3a - 3
+    base_b = 3b - 3
+    @inbounds push!(positions, geo.positions[base_a + 1], geo.positions[base_a + 2],
+                    geo.positions[base_a + 3], geo.positions[base_b + 1],
+                    geo.positions[base_b + 2], geo.positions[base_b + 3])
+    return positions
+end
+
+"""
+    wireframe_geometry(geo)
+
+All unique triangle edges as line segments (three.js `WireframeGeometry`).
+Faces are visited in index order, or group by group when `geo` has draw groups
+(faces outside every group are skipped). Each triangle `(a, b, c)` contributes
+its edges `a→b`, `b→c`, `c→a` in that direction, and an edge is emitted only the
+first time its two end positions occur in either direction, so triangles that
+share an edge through separate but coincident vertices contribute it once.
+
+Returns an unindexed line geometry (`n_faces = 0`) whose consecutive vertex
+pairs are the segments. Throws an `ArgumentError` when a draw group lies outside
+the geometry's faces.
+"""
+function wireframe_geometry(geo::BufferGeometry)
+    _validate_triangle_geometry_indices(geo, "wireframe_geometry")
+    geo.n_vertices <= _EDGE_KEY32_MAX ?
+        _wireframe_geometry_keyed(geo, UInt64) :
+        _wireframe_geometry_keyed(geo, UInt128)
+end
+
 function _wireframe_geometry_keyed(geo::BufferGeometry, ::Type{K}) where {K<:Union{UInt64,UInt128}}
-    ordered_edges = _wireframe_edge_keys(geo, 1:geo.n_faces, K,
-                                         _wireframe_position_ids(geo))
-    positions = Vector{Float64}(undef, 6 * length(ordered_edges))
-    vi = 0
-    pout = 1
-    @inbounds for key in ordered_edges
-        vi, pout = _write_wireframe_key!(positions, geo, key, vi, pout)
+    position_ids = _wireframe_position_ids(geo)
+    ranges = _wireframe_face_ranges(geo)
+    max_edges = 0
+    for faces in ranges
+        max_edges = _geometry_checked_add(
+            max_edges, _geometry_checked_mul(3, length(faces), "wireframe_geometry edge count"),
+            "wireframe_geometry edge count")
     end
-    BufferGeometry(positions, Float64[], Float64[], Int[], vi, 0)
-end
-
-# Quantize relative positions by a characteristic mesh edge length so welding
-# is invariant under uniform translation and scale.
-@inline function _edge_relative_key_component(value::Float64,
-                                              anchor::Float64,
-                                              scale::Float64; nd::Int=6)
-    relative = value - anchor
-    normalized = isfinite(relative) ? relative / scale :
-                 value / scale - anchor / scale
-    if !isfinite(normalized)
-        normalized = isfinite(relative) ? relative : value
-    end
-    rounded = round(normalized, digits=nd)
-    return iszero(rounded) ? 0.0 : rounded
-end
-
-@inline _pkey(v::Vec3, anchor::Vec3, scale::Float64; nd=6) = (
-    _edge_relative_key_component(v.x, anchor.x, scale; nd=nd),
-    _edge_relative_key_component(v.y, anchor.y, scale; nd=nd),
-    _edge_relative_key_component(v.z, anchor.z, scale; nd=nd),
-)
-
-function _edge_weld_scale(geo::BufferGeometry)
-    scale = Inf
-    @inbounds for fi in 1:geo.n_faces
-        i1, i2, i3 = get_face(geo, fi)
-        v1 = get_vertex(geo, i1)
-        v2 = get_vertex(geo, i2)
-        v3 = get_vertex(geo, i3)
-        for (a, b) in ((v1, v2), (v2, v3), (v3, v1))
-            edge_length = hypot(
-                b.x - a.x, b.y - a.y, b.z - a.z)
-            isfinite(edge_length) && edge_length > 0.0 &&
-                (scale = min(scale, edge_length))
+    seen = zeros(K, _edge_table_capacity(max_edges))
+    positions = Float64[]
+    sizehint!(positions, 6 * _edge_record_hint(geo, max_edges))
+    @inbounds for faces in ranges, fi in faces
+        corners = get_face(geo, fi)
+        for j in 1:3
+            a = corners[j]
+            b = corners[j == 3 ? 1 : j + 1]
+            # WireframeGeometry.js:186-202 isUniqueEdge hashes both directions.
+            key = _edge_key(K, position_ids[a], position_ids[b])
+            slot = _edge_table_slot(seen, key)
+            seen[slot] == key && continue
+            seen[slot] = key
+            _push_segment!(positions, geo, a, b)
         end
     end
-    return isfinite(scale) ? scale : 1.0
+    BufferGeometry(positions, Float64[], Float64[], Int[], length(positions) ÷ 3, 0)
 end
 
-@inline function _canonical_edge_vertex!(
-    canonical_ids::Vector{Int},
-    canon::Dict{Tuple{Float64,Float64,Float64},Int},
-    csrc::Vector{Int},
-    cpos_len::Int,
-    geo::BufferGeometry,
-    anchor::Vec3,
-    scale::Float64,
-    vi::Int,
-)
-    cached = canonical_ids[vi]
-    cached != 0 && return cached, cpos_len
-    v = get_vertex(geo, vi)
-    key = _pkey(v, anchor, scale)
-    c = get(canon, key, 0)
-    if c == 0
-        cpos_len += 1
-        csrc[cpos_len] = vi
-        canon[key] = cpos_len
-        c = cpos_len
+# EdgesGeometry.js:33-34 and :79-81 hash each corner as
+# `Math.round(x * 10 ** 4)`. JavaScript rounds halves towards +Inf, and the
+# template string prints -0 as "0", so -0.0 folds into 0.0. Non-finite products
+# keep their value ("NaN", "Infinity" and "-Infinity" are hash strings too).
+@inline function _edges_hash_component(x::Float64)
+    y = x * 10_000.0
+    isfinite(y) || return y
+    r = floor(y)
+    # y - floor(y) is exact, so this matches Math.round without double rounding.
+    return (y - r >= 0.5 ? r + 1.0 : r) + 0.0
+end
+
+# Triangle.js:66-81 getNormal, `cross(c - b, a - b) * (1 / length)`, evaluated
+# with the same operations so normals at the threshold compare as in three.js.
+# Products that overflow or leave the normal range use the scaled
+# `triangle_normal`, where three.js would produce NaN or lose the direction.
+@inline function _edges_face_normal(a::Vec3{Float64}, b::Vec3{Float64}, c::Vec3{Float64})
+    ux, uy, uz = c.x - b.x, c.y - b.y, c.z - b.z
+    vx, vy, vz = a.x - b.x, a.y - b.y, a.z - b.z
+    nx = uy * vz - uz * vy
+    ny = uz * vx - ux * vz
+    nz = ux * vy - uy * vx
+    length_sq = nx * nx + ny * ny + nz * nz
+    if isfinite(length_sq) && length_sq >= floatmin(Float64)
+        inverse = 1 / sqrt(length_sq)
+        return Vec3(nx * inverse, ny * inverse, nz * inverse)
     end
-    canonical_ids[vi] = c
-    return c, cpos_len
+    return triangle_normal(Triangle(a, b, c))
 end
 
-"""Feature edges whose adjacent faces differ in orientation by at least
-`threshold_angle`, plus boundary edges (three.js `EdgesGeometry`). Returned as a
-line BufferGeometry. Coincident vertices are merged by position first, and
-triangles with merged corners are skipped."""
-function edges_geometry(geo::BufferGeometry; threshold_angle=0.349)   # ≈20°
+@inline function _edges_vertex_id!(vertex_ids::Vector{Int},
+                                   canon::Dict{NTuple{3,Float64},Int},
+                                   geo::BufferGeometry, vi::Int)
+    @inbounds cached = vertex_ids[vi]
+    cached != 0 && return cached
+    base = 3vi - 3
+    @inbounds key = (_edges_hash_component(geo.positions[base + 1]),
+                     _edges_hash_component(geo.positions[base + 2]),
+                     _edges_hash_component(geo.positions[base + 3]))
+    id = get!(canon, key, length(canon) + 1)
+    @inbounds vertex_ids[vi] = id
+    return id
+end
+
+"""
+    edges_geometry(geo; threshold_angle=deg2rad(1))
+
+Boundary edges and the edges between faces whose normals differ by at least
+`threshold_angle` radians, as an unindexed line geometry (three.js
+`EdgesGeometry`, whose default threshold is 1 degree). This follows
+EdgesGeometry.js exactly:
+
+- corners are welded by position rounded to four decimal places
+  (`Math.round(coordinate * 1e4)`), and triangles with two welded corners are
+  skipped;
+- each directed edge `a→b` is recorded once; when a later triangle supplies the
+  reverse edge `b→a`, the pair is consumed and emitted, in that later
+  triangle's direction, if the normals' dot product is at most
+  `cos(threshold_angle)`;
+- the edges left unpaired (boundaries, and the extra sides of non-manifold
+  edges) follow, in the order they were first recorded.
+"""
+function edges_geometry(geo::BufferGeometry; threshold_angle=deg2rad(1.0))
     _validate_triangle_geometry_indices(geo, "edges_geometry")
     threshold_angle = _geometry_finite_float(
         threshold_angle, "edges_geometry threshold_angle")
@@ -3099,71 +3097,55 @@ end
 
 function _edges_geometry_keyed(geo::BufferGeometry, cosT::Float64,
                                ::Type{K}) where {K<:Union{UInt64,UInt128}}
-    # Canonicalize vertices by position.
-    canon = Dict{Tuple{Float64,Float64,Float64}, Int}()
+    canon = Dict{NTuple{3,Float64},Int}()
     sizehint!(canon, geo.n_vertices)
-    canonical_ids = zeros(Int, geo.n_vertices)
-    csrc = Vector{Int}(undef, geo.n_vertices)
-    cpos_len = 0
-    # edge (lo,hi) -> first normal, adjacent face count, sharp-on-second-face
+    vertex_ids = zeros(Int, geo.n_vertices)
     max_edges = 3 * geo.n_faces
-    edge_keys = zeros(K, _edge_table_capacity(max_edges))
-    edge_record_ids = zeros(Int, length(edge_keys))
-    ordered_edges = Vector{K}()
-    edge_normals = Vector{Vec3{Float64}}()
-    edge_counts = Vector{UInt8}()
-    edge_features = Bool[]
+    slots = zeros(K, _edge_table_capacity(max_edges))
+    slot_records = zeros(Int, length(slots))
     edge_hint = _edge_record_hint(geo, max_edges)
-    sizehint!(ordered_edges, edge_hint)
-    sizehint!(edge_normals, edge_hint)
-    sizehint!(edge_counts, edge_hint)
-    sizehint!(edge_features, edge_hint)
-    anchor = geo.n_vertices == 0 ? Vec3() : get_vertex(geo, 1)
-    weld_scale = _edge_weld_scale(geo)
+    record_index0 = Int[]
+    record_index1 = Int[]
+    record_normals = Vec3{Float64}[]
+    record_active = Bool[]
+    sizehint!(record_index0, edge_hint)
+    sizehint!(record_index1, edge_hint)
+    sizehint!(record_normals, edge_hint)
+    sizehint!(record_active, edge_hint)
+    positions = Float64[]
     @inbounds for fi in 1:geo.n_faces
         i1, i2, i3 = get_face(geo, fi)
-        v1 = get_vertex(geo, i1); v2 = get_vertex(geo, i2); v3 = get_vertex(geo, i3)
-        n = triangle_normal(Triangle(v1, v2, v3))
-        c1, cpos_len = _canonical_edge_vertex!(canonical_ids, canon, csrc,
-                                               cpos_len, geo, anchor,
-                                               weld_scale, i1)
-        c2, cpos_len = _canonical_edge_vertex!(canonical_ids, canon, csrc,
-                                               cpos_len, geo, anchor,
-                                               weld_scale, i2)
-        c3, cpos_len = _canonical_edge_vertex!(canonical_ids, canon, csrc,
-                                               cpos_len, geo, anchor,
-                                               weld_scale, i3)
-        # three.js EdgesGeometry skips triangles with two welded corners: they
-        # have no area and would add a zero-length segment and a spurious
-        # extra face on their remaining edge.
+        c1 = _edges_vertex_id!(vertex_ids, canon, geo, i1)
+        c2 = _edges_vertex_id!(vertex_ids, canon, geo, i2)
+        c3 = _edges_vertex_id!(vertex_ids, canon, geo, i3)
+        # EdgesGeometry.js:84-88 skips triangles with coincident corner hashes.
         (c1 == c2 || c2 == c3 || c3 == c1) && continue
-        _record_edge_face!(edge_keys, edge_record_ids, ordered_edges, edge_normals,
-                           edge_counts, edge_features, c1, c2, n, cosT)
-        _record_edge_face!(edge_keys, edge_record_ids, ordered_edges, edge_normals,
-                           edge_counts, edge_features, c2, c3, n, cosT)
-        _record_edge_face!(edge_keys, edge_record_ids, ordered_edges, edge_normals,
-                           edge_counts, edge_features, c3, c1, n, cosT)
+        n = _edges_face_normal(get_vertex(geo, i1), get_vertex(geo, i2),
+                               get_vertex(geo, i3))
+        for (ia, ib, ca, cb) in ((i1, i2, c1, c2), (i2, i3, c2, c3), (i3, i1, c3, c1))
+            # EdgesGeometry.js:103-117: a live reverse edge pairs with this one.
+            reverse = slot_records[_edge_table_slot(slots, _directed_edge_key(K, cb, ca))]
+            if reverse != 0 && record_active[reverse]
+                dot(n, record_normals[reverse]) <= cosT &&
+                    _push_segment!(positions, geo, ia, ib)
+                record_active[reverse] = false
+            else
+                # EdgesGeometry.js:119-130: record the directed edge once.
+                key = _directed_edge_key(K, ca, cb)
+                slot = _edge_table_slot(slots, key)
+                slots[slot] == key && continue
+                slots[slot] = key
+                push!(record_index0, ia)
+                push!(record_index1, ib)
+                push!(record_normals, n)
+                push!(record_active, true)
+                slot_records[slot] = length(record_active)
+            end
+        end
     end
-    feature_edges = 0
-    @inbounds for i in eachindex(ordered_edges)
-        (edge_counts[i] == UInt8(1) || edge_features[i]) && (feature_edges += 1)
+    # EdgesGeometry.js:138-152: unmatched edges in insertion order.
+    @inbounds for r in eachindex(record_active)
+        record_active[r] && _push_segment!(positions, geo, record_index0[r], record_index1[r])
     end
-    positions = Vector{Float64}(undef, 6 * feature_edges)
-    vi = 0
-    pout = 1
-    @inbounds for i in eachindex(ordered_edges)
-        (edge_counts[i] == UInt8(1) || edge_features[i]) || continue
-        key = ordered_edges[i]
-        a = get_vertex(geo, csrc[_edge_key_first(key)])
-        b = get_vertex(geo, csrc[_edge_key_second(key)])
-        positions[pout] = a.x
-        positions[pout + 1] = a.y
-        positions[pout + 2] = a.z
-        positions[pout + 3] = b.x
-        positions[pout + 4] = b.y
-        positions[pout + 5] = b.z
-        vi += 2
-        pout += 6
-    end
-    BufferGeometry(positions, Float64[], Float64[], Int[], vi, 0)
+    BufferGeometry(positions, Float64[], Float64[], Int[], length(positions) ÷ 3, 0)
 end

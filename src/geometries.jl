@@ -1052,20 +1052,25 @@ function compute_face_normal(g::BufferGeometry, face_idx::Int)
     triangle_normal(Triangle(v1, v2, v3))
 end
 
+# Face ranges of the draw groups, each checked to lie within the faces.
+function _group_face_ranges(g::BufferGeometry, context::String)
+    ranges = Vector{UnitRange{Int}}(undef, length(g.groups))
+    for (k, (start, count, _)) in enumerate(g.groups)
+        last_face = _geometry_checked_add(start, count - 1,
+                                          "$context group range")
+        (count == 0 || (start >= 1 && last_face <= g.n_faces)) ||
+            throw(ArgumentError(
+                "$context group $k must lie within the geometry's faces"))
+        ranges[k] = start:last_face
+    end
+    return ranges
+end
+
 # Faces visited by `compute_tangents!`: the draw groups when present
 # (BufferGeometry.js:923-944), otherwise every face.
 function _tangent_face_ranges(g::BufferGeometry)
     isempty(g.groups) && return [1:g.n_faces]
-    ranges = Vector{UnitRange{Int}}(undef, length(g.groups))
-    for (k, (start, count, _)) in enumerate(g.groups)
-        last_face = _geometry_checked_add(start, count - 1,
-                                          "compute_tangents! group range")
-        (count == 0 || (start >= 1 && last_face <= g.n_faces)) ||
-            throw(ArgumentError(
-                "compute_tangents! group $k must lie within the geometry's faces"))
-        ranges[k] = start:last_face
-    end
-    return ranges
+    return _group_face_ranges(g, "compute_tangents!")
 end
 
 @inline _tangent_vec3(data::Vector{Float64}, vi::Int) =
@@ -1363,17 +1368,16 @@ function SphereGeometry(; radius=1.0, width_segments=32, height_segments=16,
         v = j / height_segments
         θ = theta_start + v * theta_length
         # SphereGeometry.js:81-82 places each ring at y = radius * cos(theta)
-        # with ringRadius = sqrt(radius^2 - y^2) = |radius| * |sin(theta)|,
-        # which is never negative: sweeps outside [0, pi] fold back onto the
-        # sphere and a negative radius mirrors only y.
-        abs_sinθ = abs(sin(θ))
+        # with ringRadius = sqrt(radius^2 - y^2), which is never negative:
+        # sweeps outside [0, pi] fold back onto the sphere and a negative
+        # radius mirrors only y. The same operations make a pole ring exactly
+        # zero, so pole vertices coincide as in three.js. A radius whose square
+        # overflows uses the equivalent |radius| * |sin(theta)|.
         cosθ = cos(θ)
-        ring_radius = abs(radius) * abs_sinθ
         y = radius * cosθ
-        # SphereGeometry.js:113 normalizes the vertex, i.e. its direction
-        # from the center; a zero radius leaves zero normals.
-        ny_dir = radius > 0 ? cosθ : radius < 0 ? -cosθ : 0.0
-        ring_dir = iszero(radius) ? 0.0 : abs_sinθ
+        ring_radius_sq = radius * radius - y * y
+        ring_radius = isfinite(ring_radius_sq) ? sqrt(ring_radius_sq) :
+                      abs(radius) * abs(sin(θ))
         # three.js centers each pole vertex's u between its ring neighbours.
         u_offset = j == 0 && theta_start == 0 ? 0.5 / width_segments :
                    j == height_segments && bottom_pole ? -0.5 / width_segments : 0.0
@@ -1386,10 +1390,15 @@ function SphereGeometry(; radius=1.0, width_segments=32, height_segments=16,
             x = -ring_radius * cosϕ
             z = ring_radius * sinϕ
 
-            nx, ny, nz = -ring_dir * cosϕ, ny_dir, ring_dir * sinϕ
-            nl = hypot(nx, ny, nz)
+            # SphereGeometry.js:113 normalizes the vertex (Vector3.normalize
+            # multiplies by 1 / length); a zero radius leaves zero normals.
+            length_sq = x * x + y * y + z * z
+            nl = isfinite(length_sq) && length_sq >= floatmin(Float64) ?
+                 sqrt(length_sq) : hypot(x, y, z)
+            nx, ny, nz = x, y, z
             if nl > 0
-                nx /= nl; ny /= nl; nz /= nl
+                inverse = 1 / nl
+                nx *= inverse; ny *= inverse; nz *= inverse
             end
 
             vi = j * (width_segments + 1) + i + 1
@@ -2358,4 +2367,347 @@ function merge_vertices(geo::BufferGeometry; tolerance::Real=1e-4)
                           use_uvs ? gather(geo.uvs, 2) : Float64[],
                           new_indices, m, geo.n_faces, attributes,
                           copy(geo.groups), geo.draw_range)
+end
+
+# ===================== BufferGeometry utilities (three.js) =====================
+
+function _vertex_attribute_cover(data::AbstractVector, item_size::Int, n_vertices::Int,
+                                 context::String, label)
+    length(data) >= _geometry_checked_mul(n_vertices, item_size, "$context $label length") ||
+        throw(ArgumentError("$context $label must cover n_vertices"))
+    return data
+end
+
+function _gather_vertex_data(data::AbstractVector, item_size::Int, entries::AbstractVector{Int})
+    out = similar(data, length(entries) * item_size)
+    @inbounds for (dst, src) in enumerate(entries)
+        copyto!(out, (dst - 1) * item_size + 1, data, (src - 1) * item_size + 1, item_size)
+    end
+    return out
+end
+
+"""
+    to_non_indexed(geometry) -> BufferGeometry
+
+Return a copy of `geometry` in which every index entry has its own vertex
+(three.js `BufferGeometry.toNonIndexed`). Positions, normals, UVs and every
+named attribute (morph targets included) are gathered through the index, and
+draw groups are copied; as in three.js the draw range is not. Triangle
+geometry keeps one face per three consecutive vertices, with indices
+`1:3n_faces`; for unindexed geometry (empty `indices`) the geometry itself is
+returned, as three.js returns `this`. Line geometry with an index becomes
+unindexed line geometry.
+
+Normals, UVs and named attributes that do not cover `n_vertices` raise an
+`ArgumentError`.
+"""
+function to_non_indexed(geo::BufferGeometry)
+    _validate_triangle_geometry_indices(geo, "to_non_indexed")
+    isempty(geo.indices) && return geo
+    n = geo.n_vertices
+    entries = geo.n_faces > 0 ? view(geo.indices, 1:3geo.n_faces) : geo.indices
+    isempty(geo.normals) || _vertex_attribute_cover(geo.normals, 3, n, "to_non_indexed", "normals")
+    isempty(geo.uvs) || _vertex_attribute_cover(geo.uvs, 2, n, "to_non_indexed", "uvs")
+    for (name, attr) in geo.attributes
+        _vertex_attribute_cover(attr.data, attr.item_size, n, "to_non_indexed", "attribute $name")
+    end
+    m = length(entries)
+    attributes = Dict{Symbol,BufferAttribute}()
+    for (name, attr) in geo.attributes
+        attributes[name] = BufferAttribute(_gather_vertex_data(attr.data, attr.item_size, entries),
+                                           attr.item_size)
+    end
+    return BufferGeometry(_gather_vertex_data(geo.positions, 3, entries),
+                          isempty(geo.normals) ? Float64[] : _gather_vertex_data(geo.normals, 3, entries),
+                          isempty(geo.uvs) ? Float64[] : _gather_vertex_data(geo.uvs, 2, entries),
+                          geo.n_faces > 0 ? collect(1:m) : Int[], m, geo.n_faces,
+                          attributes, copy(geo.groups))
+end
+
+# Vector3.normalize divides by `length() || 1`; the scaled length keeps the
+# direction of normals whose squared length overflows or underflows.
+@inline function _normalize_components(x::Float64, y::Float64, z::Float64)
+    length_sq = x * x + y * y + z * z
+    len = isfinite(length_sq) && length_sq >= floatmin(Float64) ? sqrt(length_sq) :
+          hypot(x, y, z)
+    iszero(len) && return x, y, z
+    inverse = 1 / len
+    return x * inverse, y * inverse, z * inverse
+end
+
+"""
+    normalize_normals!(geometry) -> geometry
+
+Scale every vertex normal to unit length (three.js
+`BufferGeometry.normalizeNormals`); zero normals stay zero. Throws an
+`ArgumentError` when the geometry has vertices but no normal for each of them.
+"""
+function normalize_normals!(geo::BufferGeometry)
+    _validate_geometry_vertices(geo, "normalize_normals!")
+    normals = geo.normals
+    length(normals) >= 3geo.n_vertices ||
+        throw(ArgumentError("normalize_normals! requires a normal for every vertex"))
+    @inbounds for vi in 1:geo.n_vertices
+        base = 3vi - 2
+        normals[base], normals[base + 1], normals[base + 2] =
+            _normalize_components(normals[base], normals[base + 1], normals[base + 2])
+    end
+    return geo
+end
+
+_point_z(p::Vec3) = p.z
+_point_z(p::Vec2) = zero(p.x)
+
+"""
+    set_from_points!(geometry, points) -> geometry
+
+Set vertex positions from a vector of `Vec3` or `Vec2` points (`z = 0`), as
+three.js `BufferGeometry.setFromPoints` does. A geometry without vertices gets
+one vertex per point (typically for a line, as faces and other attributes are
+not created). Otherwise the first `length(points)` positions are overwritten;
+more points than vertices raise an `ArgumentError` (three.js warns and drops
+them).
+"""
+function set_from_points!(geo::BufferGeometry, points::AbstractVector{<:Union{Vec2,Vec3}})
+    _validate_geometry_vertices(geo, "set_from_points!")
+    n_points = length(points)
+    if geo.n_vertices == 0
+        positions = Vector{Float64}(undef, _geometry_checked_mul(
+            3, n_points, "set_from_points! position length"))
+        geo.positions = positions
+        geo.n_vertices = n_points
+    else
+        n_points <= geo.n_vertices ||
+            throw(ArgumentError("set_from_points! has $n_points points for " *
+                                "$(geo.n_vertices) vertices"))
+        positions = geo.positions
+    end
+    for (i, p) in enumerate(points)
+        base = 3i - 2
+        positions[base] = _geometry_finite_float(p.x, "set_from_points! point $i")
+        positions[base + 1] = _geometry_finite_float(p.y, "set_from_points! point $i")
+        positions[base + 2] = _geometry_finite_float(_point_z(p), "set_from_points! point $i")
+    end
+    return geo
+end
+
+"""
+    delete_attribute!(geometry, name::Symbol) -> geometry
+
+Remove a vertex attribute (three.js `BufferGeometry.deleteAttribute`):
+`:normal` empties the normals and `:uv` the UVs, and any other name removes
+that named attribute. Removing an attribute that does not exist does nothing.
+Positions define the vertices and cannot be deleted (`ArgumentError`).
+"""
+function delete_attribute!(geo::BufferGeometry, name::Symbol)
+    name === :position &&
+        throw(ArgumentError("delete_attribute! cannot remove the positions"))
+    name === :normal && (geo.normals = Float64[])
+    name === :uv && (geo.uvs = Float64[])
+    delete!(geo.attributes, name)
+    return geo
+end
+
+"""
+    estimate_bytes_used(geometry) -> Int
+
+Bytes held by the geometry's vertex and index arrays: positions, normals, UVs,
+every named attribute and the indices (three.js
+`BufferGeometryUtils.estimateBytesUsed`, which counts its typed arrays the same
+way). Diff3D stores `Float64` coordinates and `Int` indices, so the figure is
+larger than three.js's `Float32` estimate for the same mesh.
+"""
+function estimate_bytes_used(geo::BufferGeometry)
+    bytes = sizeof(geo.positions) + sizeof(geo.normals) + sizeof(geo.uvs) + sizeof(geo.indices)
+    for attr in values(geo.attributes)
+        bytes += sizeof(attr.data)
+    end
+    return bytes
+end
+
+"""
+    merge_groups!(geometry) -> geometry
+
+Reorder the faces so that draw groups with the same material index are
+contiguous, then merge them (three.js `BufferGeometryUtils.mergeGroups`).
+Groups are sorted by material index and then start, the faces of each group
+are concatenated in that order (faces outside every group are dropped, faces in
+overlapping groups repeat), and adjacent groups with the same material become
+one. A geometry without groups is returned unchanged. Groups outside the faces
+raise an `ArgumentError`.
+"""
+function merge_groups!(geo::BufferGeometry)
+    _validate_triangle_geometry_indices(geo, "merge_groups!")
+    isempty(geo.groups) && return geo
+    ranges = _group_face_ranges(geo, "merge_groups!")
+    # Array.prototype.sort is stable; sort a permutation the same way.
+    order = sortperm(eachindex(geo.groups);
+                     by=k -> (geo.groups[k][3], geo.groups[k][1]), alg=MergeSort)
+    total = sum(k -> length(ranges[k]), order; init=0)
+    indices = Vector{Int}(undef, _geometry_checked_mul(3, total, "merge_groups! index length"))
+    out = 0
+    for k in order, face in ranges[k]
+        base = 3face - 3
+        @inbounds for c in 1:3
+            indices[out + c] = geo.indices[base + c]
+        end
+        out += 3
+    end
+    groups = NTuple{3,Int}[]
+    start = 1
+    for k in order
+        _, count, material = geo.groups[k]
+        if !isempty(groups) && groups[end][3] == material
+            first_face, merged, _ = groups[end]
+            groups[end] = (first_face, merged + count, material)
+        else
+            push!(groups, (start, count, material))
+        end
+        start += count
+    end
+    geo.indices = indices
+    geo.n_faces = total
+    geo.groups = groups
+    return geo
+end
+
+"""
+    to_triangles_draw_mode!(geometry, mode::Symbol) -> geometry
+
+Convert triangle-strip or triangle-fan topology to a triangle list (three.js
+`BufferGeometryUtils.toTrianglesDrawMode`). The strip or fan order is
+`geometry.indices`, or the vertex order `1:n_vertices` when there are no
+indices; `mode` is `:triangle_strip` or `:triangle_fan`, and `:triangles`
+returns the geometry unchanged. A strip alternates the winding of odd
+triangles as WebGL does, and a fan pivots on its first entry. The result has
+`count - 2` faces and no draw groups. Fewer than three entries or an unknown
+mode raise an `ArgumentError`.
+"""
+function to_triangles_draw_mode!(geo::BufferGeometry, mode::Symbol)
+    mode === :triangles && return geo
+    mode in (:triangle_strip, :triangle_fan) ||
+        throw(ArgumentError("to_triangles_draw_mode! mode must be :triangles, " *
+                            ":triangle_strip or :triangle_fan"))
+    _validate_indexed_geometry(geo, "to_triangles_draw_mode!")
+    source = isempty(geo.indices) ? collect(1:geo.n_vertices) : geo.indices
+    count = length(source)
+    count >= 3 ||
+        throw(ArgumentError("to_triangles_draw_mode! needs at least three entries"))
+    n_triangles = count - 2
+    indices = Vector{Int}(undef, _geometry_checked_mul(3, n_triangles, "to_triangles_draw_mode! index length"))
+    @inbounds for i in 1:n_triangles
+        base = 3i - 2
+        if mode === :triangle_fan
+            indices[base], indices[base + 1], indices[base + 2] = source[1], source[i + 1], source[i + 2]
+        elseif isodd(i)
+            indices[base], indices[base + 1], indices[base + 2] = source[i], source[i + 1], source[i + 2]
+        else
+            indices[base], indices[base + 1], indices[base + 2] = source[i + 2], source[i + 1], source[i]
+        end
+    end
+    geo.indices = indices
+    geo.n_faces = n_triangles
+    empty!(geo.groups)
+    return geo
+end
+
+# BufferGeometryUtils.js toCreasedNormals hashes positions as
+# Math.trunc(x * (1 + 1e-10) * 1e2); Math.trunc(-0.3) is -0, which compares
+# equal to 0, so -0.0 folds into 0.0.
+@inline _creased_hash(x::Float64) = trunc(x * ((1 + 1e-10) * 1e2)) + 0.0
+
+"""
+    to_creased_normals(geometry; crease_angle=π/3) -> BufferGeometry
+
+Return an unindexed copy of `geometry` (see [`to_non_indexed`](@ref)) with
+normals that are smooth across edges whose faces meet at less than
+`crease_angle` radians and creased elsewhere (three.js
+`BufferGeometryUtils.toCreasedNormals`). Corners at the same position (to two
+decimal places, truncated as three.js does) share an averaging set; each
+corner's normal is the normalized sum of the unit normals of the faces around
+its position whose dot product with its own face normal exceeds
+`cos(crease_angle)`.
+"""
+function to_creased_normals(geo::BufferGeometry; crease_angle::Real=π / 3)
+    crease_dot = cos(_geometry_finite_float(crease_angle, "to_creased_normals crease_angle"))
+    _validate_triangle_geometry_indices(geo, "to_creased_normals")
+    geo.n_faces == 0 && geo.n_vertices == 0 && return BufferGeometry()
+    geo.n_faces > 0 ||
+        throw(ArgumentError("to_creased_normals requires triangle geometry"))
+    result = to_non_indexed(geo)
+    p = result.positions
+    vertex_count = result.n_vertices
+    face_count = vertex_count ÷ 3
+    face_normals = Vector{Float64}(undef, 3face_count)
+    @inbounds for f in 1:face_count
+        f9 = 9f - 9
+        ax, ay, az = p[f9 + 1], p[f9 + 2], p[f9 + 3]
+        bx, by, bz = p[f9 + 4], p[f9 + 5], p[f9 + 6]
+        cx, cy, cz = p[f9 + 7], p[f9 + 8], p[f9 + 9]
+        v1x, v1y, v1z = cx - bx, cy - by, cz - bz
+        v2x, v2y, v2z = ax - bx, ay - by, az - bz
+        nx = v1y * v2z - v1z * v2y
+        ny = v1z * v2x - v1x * v2z
+        nz = v1x * v2y - v1y * v2x
+        len = sqrt(nx * nx + ny * ny + nz * nz)
+        inverse = 1 / (iszero(len) || isnan(len) ? 1.0 : len)
+        face_normals[3f - 2] = nx * inverse
+        face_normals[3f - 1] = ny * inverse
+        face_normals[3f] = nz * inverse
+    end
+    ids = Vector{Int}(undef, vertex_count)
+    lookup = Dict{NTuple{3,Float64},Int}()
+    sizehint!(lookup, vertex_count)
+    unique_count = 0
+    @inbounds for i in 1:vertex_count
+        key = (_creased_hash(p[3i - 2]), _creased_hash(p[3i - 1]), _creased_hash(p[3i]))
+        # NaN !== NaN, so three.js never matches such a vertex.
+        id = any(isnan, key) ? 0 : get(lookup, key, 0)
+        if id == 0
+            unique_count += 1
+            id = unique_count
+            any(isnan, key) || (lookup[key] = id)
+        end
+        ids[i] = id
+    end
+    offsets = zeros(Int, unique_count + 1)
+    @inbounds for i in 1:vertex_count
+        offsets[ids[i] + 1] += 1
+    end
+    offsets[1] = 1
+    @inbounds for i in 1:unique_count
+        offsets[i + 1] += offsets[i]
+    end
+    cursors = offsets[1:unique_count]
+    bucket_faces = Vector{Int}(undef, vertex_count)
+    @inbounds for f in 1:face_count, c in 0:2
+        id = ids[3f - 2 + c]
+        bucket_faces[cursors[id]] = f
+        cursors[id] += 1
+    end
+    normals = Vector{Float64}(undef, 3vertex_count)
+    @inbounds for f in 1:face_count
+        nx, ny, nz = face_normals[3f - 2], face_normals[3f - 1], face_normals[3f]
+        for c in 0:2
+            i = 3f - 2 + c
+            id = ids[i]
+            sx = sy = sz = 0.0
+            for k in offsets[id]:(offsets[id + 1] - 1)
+                o = bucket_faces[k]
+                ox, oy, oz = face_normals[3o - 2], face_normals[3o - 1], face_normals[3o]
+                if nx * ox + ny * oy + nz * oz > crease_dot
+                    sx += ox
+                    sy += oy
+                    sz += oz
+                end
+            end
+            len = sqrt(sx * sx + sy * sy + sz * sz)
+            inverse = 1 / (iszero(len) || isnan(len) ? 1.0 : len)
+            normals[3i - 2] = sx * inverse
+            normals[3i - 1] = sy * inverse
+            normals[3i] = sz * inverse
+        end
+    end
+    result.normals = normals
+    return result
 end

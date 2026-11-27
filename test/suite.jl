@@ -29364,17 +29364,22 @@ end
          1.0, 1.0, 0.0],
         Float64[], Float64[], [1, 2, 3, 2, 4, 3], 4, 2)
     @test edges_geometry(coplanar).n_vertices ÷ 2 == 4
-    @test_opt_alloc 0 Diff3D._pkey(
-        Vec3(1.0, 2.0, 3.0), Vec3(0.5, 1.5, 2.5), 1.0)
-    @test Diff3D._edge_relative_key_component(
-        1.0, 0.0, nextfloat(0.0)) == 1.0
+    # three.js EdgesGeometry.js:33-34 and :79-81 weld corners by
+    # Math.round(coordinate * 1e4); an overflowing product stays Infinity.
+    @test_opt_alloc 0 Diff3D._edges_hash_component(1.23456)
+    @test Diff3D._edges_hash_component(largest) == Inf
 
-    for scale in (1.0e-300, 1.0e-100, 1.0e-7, 1.0,
-                  1.0e100, 1.0e300)
+    # Absolute four-decimal welding as in three.js: node prints 0, 0, 0, 12
+    # edges for BoxGeometry scaled by 1e-300, 1e-100, 1e-7 and 1 (every corner
+    # of the small boxes rounds to the same hash) and 0 at 1e300 (every
+    # product overflows to Infinity). At 1e100 three.js's face normals
+    # overflow to zero and it prints 18; Diff3D keeps the 12 true edges.
+    for (scale, expected) in ((1.0e-300, 0), (1.0e-100, 0), (1.0e-7, 0),
+                              (1.0, 12), (1.0e100, 12), (1.0e300, 0))
         scaled_box = transform_geometry(
             BoxGeometry(), mat4_scaling(scale, scale, scale))
         scaled_edges = edges_geometry(scaled_box)
-        @test scaled_edges.n_vertices ÷ 2 == 12
+        @test scaled_edges.n_vertices ÷ 2 == expected
         @test all(isfinite, scaled_edges.positions)
     end
 end
