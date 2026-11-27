@@ -971,7 +971,9 @@ end
 
 Axis-aligned bounding box of the geometry (three.js `computeBoundingBox`). Like
 three.js with relative morph targets, each `morphPosition<k>` attribute grows
-the box by the extent of its deltas so every morphed pose stays inside it.
+the box by the extent of its deltas, in target order, so every pose whose
+influences lie in `[0, 1]` stays inside it. A malformed target raises an
+`ArgumentError`.
 """
 function compute_bounding_box(g::BufferGeometry)
     _validate_geometry_vertices(g, "compute_bounding_box")
