@@ -2436,27 +2436,29 @@ three.js `BufferGeometry.setFromPoints` does. A geometry without vertices gets
 one vertex per point (typically for a line, as faces and other attributes are
 not created). Otherwise the first `length(points)` positions are overwritten;
 more points than vertices raise an `ArgumentError` (three.js warns and drops
-them).
+them). Points with non-finite coordinates raise an `ArgumentError`; the
+geometry is checked before anything changes, so an error leaves it unmodified.
 """
 function set_from_points!(geo::BufferGeometry, points::AbstractVector{<:Union{Vec2,Vec3}})
     _validate_geometry_vertices(geo, "set_from_points!")
     n_points = length(points)
-    if geo.n_vertices == 0
-        positions = Vector{Float64}(undef, _geometry_checked_mul(
-            3, n_points, "set_from_points! position length"))
-        geo.positions = positions
-        geo.n_vertices = n_points
-    else
-        n_points <= geo.n_vertices ||
-            throw(ArgumentError("set_from_points! has $n_points points for " *
-                                "$(geo.n_vertices) vertices"))
-        positions = geo.positions
-    end
+    creates_vertices = geo.n_vertices == 0
+    creates_vertices || n_points <= geo.n_vertices ||
+        throw(ArgumentError("set_from_points! has $n_points points for " *
+                            "$(geo.n_vertices) vertices"))
+    values = Vector{Float64}(undef, _geometry_checked_mul(
+        3, n_points, "set_from_points! position length"))
     for (i, p) in enumerate(points)
         base = 3i - 2
-        positions[base] = _geometry_finite_float(p.x, "set_from_points! point $i")
-        positions[base + 1] = _geometry_finite_float(p.y, "set_from_points! point $i")
-        positions[base + 2] = _geometry_finite_float(_point_z(p), "set_from_points! point $i")
+        values[base] = _geometry_finite_float(p.x, "set_from_points! point")
+        values[base + 1] = _geometry_finite_float(p.y, "set_from_points! point")
+        values[base + 2] = _geometry_finite_float(_point_z(p), "set_from_points! point")
+    end
+    if creates_vertices
+        geo.positions = values
+        geo.n_vertices = n_points
+    else
+        copyto!(geo.positions, 1, values, 1, length(values))
     end
     return geo
 end

@@ -218,6 +218,12 @@ end
     Diff3D.set_from_points!(pts, [Vec3(5.0, 6.0, 7.0)])
     @test pts.positions == [5.0, 6.0, 7.0, 3.0, 4.0, 0.0]
     @test_throws ArgumentError Diff3D.set_from_points!(pts, fill(Vec3(0.0, 0.0, 0.0), 3))
+    # A non-finite point is rejected before anything is written.
+    @test_throws ArgumentError Diff3D.set_from_points!(pts, [Vec3(9.0, 9.0, 9.0), Vec3(NaN, 0.0, 0.0)])
+    @test pts.positions == [5.0, 6.0, 7.0, 3.0, 4.0, 0.0]
+    empty_geometry = BufferGeometry()
+    @test_throws ArgumentError Diff3D.set_from_points!(empty_geometry, [Vec2(1.0, Inf)])
+    @test empty_geometry.n_vertices == 0 && isempty(empty_geometry.positions)
 
     g = PlaneGeometry()
     set_attribute!(g, :color, ones(12), 3)
