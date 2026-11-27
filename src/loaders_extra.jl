@@ -9691,6 +9691,9 @@ function _gltf_material(gltf, buffers, dir::String, mi; texture_cache=nothing)
     # OPAQUE ignores the alpha value entirely (spec); only BLEND alpha-blends.
     opacity = (alpha_mode == "BLEND" || alpha_mode == "MASK") ? bc[4] : 1.0
     transparent = alpha_mode == "BLEND"
+    # three.js GLTFLoader.js:3672-3677 disables depth writes for BLEND
+    # materials (three.js issue #17706).
+    depth_write = !transparent
     side = _gltf_checked_bool(get(m, "doubleSided", false), "doubleSided") ? :double : :front
     base_color_texture = _gltf_texture(gltf, buffers, dir, get(pbr, "baseColorTexture", nothing);
                                        colorspace=:srgb, texture_cache=texture_cache)
@@ -9698,6 +9701,7 @@ function _gltf_material(gltf, buffers, dir::String, mi; texture_cache=nothing)
         return MeshBasicMaterial(color=Color3(bc[1], bc[2], bc[3]),
                                   opacity=opacity,
                                   transparent=transparent,
+                                  depth_write=depth_write,
                                   side=side,
                                   map=base_color_texture,
                                   alpha_test=alpha_test)
@@ -9738,6 +9742,7 @@ function _gltf_material(gltf, buffers, dir::String, mi; texture_cache=nothing)
                                  glossiness=glossiness,
                                  opacity=specgloss_opacity,
                                  transparent=transparent,
+                                 depth_write=depth_write,
                                  alpha_test=alpha_test,
                                  side=side,
                                  map=diffuse_texture,
@@ -9806,6 +9811,7 @@ function _gltf_material(gltf, buffers, dir::String, mi; texture_cache=nothing)
                                         get(pbr, "roughnessFactor", 1.0), "roughnessFactor"),
                                      opacity=opacity,
                                      transparent=transparent,
+                                     depth_write=depth_write,
                                      alpha_test=alpha_test,
                                      side=side,
                                      map=base_color_texture,
@@ -9900,6 +9906,7 @@ function _gltf_material(gltf, buffers, dir::String, mi; texture_cache=nothing)
                              get(pbr, "roughnessFactor", 1.0), "roughnessFactor"),
                           opacity=opacity,
                           transparent=transparent,
+                          depth_write=depth_write,
                           alpha_test=alpha_test,
                           side=side,
                           map=base_color_texture,
