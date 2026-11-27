@@ -4184,19 +4184,22 @@ function _wireframe_position_ids(geo::BufferGeometry)
 end
 
 # Face ranges visited by `wireframe_geometry`: the draw groups when present
-# (WireframeGeometry.js:51-57), otherwise every face.
+# (WireframeGeometry.js:51-57), otherwise every face (as a tuple, so the
+# common case allocates no range list).
 function _wireframe_face_ranges(geo::BufferGeometry)
-    isempty(geo.groups) && return UnitRange{Int}[1:geo.n_faces]
+    isempty(geo.groups) && return (1:geo.n_faces,)
     return _group_face_ranges(geo, "wireframe_geometry")
 end
 
-@inline function _push_segment!(positions::Vector{Float64}, geo::BufferGeometry,
-                                a::Int, b::Int)
+# Writes the segment from vertex `a` to vertex `b` at positions[out+1:out+6].
+@inline function _write_segment!(positions::Vector{Float64}, out::Int, geo::BufferGeometry,
+                                 a::Int, b::Int)
     base_a = 3a - 3
     base_b = 3b - 3
-    @inbounds push!(positions, geo.positions[base_a + 1], geo.positions[base_a + 2],
-                    geo.positions[base_a + 3], geo.positions[base_b + 1],
-                    geo.positions[base_b + 2], geo.positions[base_b + 3])
+    @inbounds for c in 1:3
+        positions[out + c] = geo.positions[base_a + c]
+        positions[out + 3 + c] = geo.positions[base_b + c]
+    end
     return positions
 end
 
@@ -4222,8 +4225,17 @@ function wireframe_geometry(geo::BufferGeometry)
 end
 
 function _wireframe_geometry_keyed(geo::BufferGeometry, ::Type{K}) where {K<:Union{UInt64,UInt128}}
-    position_ids = _wireframe_position_ids(geo)
-    ranges = _wireframe_face_ranges(geo)
+    return _wireframe_geometry_ranges(geo, K, _wireframe_position_ids(geo),
+                                      _wireframe_face_ranges(geo))
+end
+
+# Visits each triangle (a, b, c)'s edges a→b, b→c, c→a in face order and keeps
+# the first occurrence of each pair of end positions in either direction
+# (WireframeGeometry.js:186-202 isUniqueEdge hashes both directions). The kept
+# directed edges are recorded first so that the positions buffer is allocated
+# once at its exact size.
+function _wireframe_geometry_ranges(geo::BufferGeometry, ::Type{K}, position_ids::Vector{Int},
+                                    ranges) where {K<:Union{UInt64,UInt128}}
     max_edges = 0
     for faces in ranges
         max_edges = _geometry_checked_add(
@@ -4231,22 +4243,25 @@ function _wireframe_geometry_keyed(geo::BufferGeometry, ::Type{K}) where {K<:Uni
             "wireframe_geometry edge count")
     end
     seen = zeros(K, _edge_table_capacity(max_edges))
-    positions = Float64[]
-    sizehint!(positions, 6 * _edge_record_hint(geo, max_edges))
+    kept = K[]
+    sizehint!(kept, _edge_record_hint(geo, max_edges))
     @inbounds for faces in ranges, fi in faces
         corners = get_face(geo, fi)
         for j in 1:3
             a = corners[j]
             b = corners[j == 3 ? 1 : j + 1]
-            # WireframeGeometry.js:186-202 isUniqueEdge hashes both directions.
             key = _edge_key(K, position_ids[a], position_ids[b])
             slot = _edge_table_slot(seen, key)
             seen[slot] == key && continue
             seen[slot] = key
-            _push_segment!(positions, geo, a, b)
+            push!(kept, _directed_edge_key(K, a, b))
         end
     end
-    BufferGeometry(positions, Float64[], Float64[], Int[], length(positions) ÷ 3, 0)
+    positions = Vector{Float64}(undef, 6 * length(kept))
+    @inbounds for (k, key) in enumerate(kept)
+        _write_segment!(positions, 6k - 6, geo, _edge_key_first(key), _edge_key_second(key))
+    end
+    BufferGeometry(positions, Float64[], Float64[], Int[], 2 * length(kept), 0)
 end
 
 # EdgesGeometry.js:33-34 and :79-81 hash each corner as
@@ -4338,7 +4353,9 @@ function _edges_geometry_keyed(geo::BufferGeometry, cosT::Float64,
     sizehint!(record_index1, edge_hint)
     sizehint!(record_normals, edge_hint)
     sizehint!(record_active, edge_hint)
-    positions = Float64[]
+    # Matched sharp edges, in emission order, as ids of the consumed records
+    # whose index fields then hold the later triangle's corners.
+    matched = Int[]
     @inbounds for fi in 1:geo.n_faces
         i1, i2, i3 = get_face(geo, fi)
         c1 = _edges_vertex_id!(vertex_ids, canon, geo, i1)
@@ -4352,8 +4369,11 @@ function _edges_geometry_keyed(geo::BufferGeometry, cosT::Float64,
             # EdgesGeometry.js:103-117: a live reverse edge pairs with this one.
             reverse = slot_records[_edge_table_slot(slots, _directed_edge_key(K, cb, ca))]
             if reverse != 0 && record_active[reverse]
-                dot(n, record_normals[reverse]) <= cosT &&
-                    _push_segment!(positions, geo, ia, ib)
+                if dot(n, record_normals[reverse]) <= cosT
+                    record_index0[reverse] = ia
+                    record_index1[reverse] = ib
+                    push!(matched, reverse)
+                end
                 record_active[reverse] = false
             else
                 # EdgesGeometry.js:119-130: record the directed edge once.
@@ -4369,11 +4389,21 @@ function _edges_geometry_keyed(geo::BufferGeometry, cosT::Float64,
             end
         end
     end
-    # EdgesGeometry.js:138-152: unmatched edges in insertion order.
-    @inbounds for r in eachindex(record_active)
-        record_active[r] && _push_segment!(positions, geo, record_index0[r], record_index1[r])
+    # The matched sharp edges, then (EdgesGeometry.js:138-152) the unmatched
+    # edges in insertion order, written into an exactly sized buffer.
+    n_segments = length(matched) + count(record_active)
+    positions = Vector{Float64}(undef, 6 * n_segments)
+    out = 0
+    @inbounds for r in matched
+        _write_segment!(positions, out, geo, record_index0[r], record_index1[r])
+        out += 6
     end
-    BufferGeometry(positions, Float64[], Float64[], Int[], length(positions) ÷ 3, 0)
+    @inbounds for r in eachindex(record_active)
+        record_active[r] || continue
+        _write_segment!(positions, out, geo, record_index0[r], record_index1[r])
+        out += 6
+    end
+    BufferGeometry(positions, Float64[], Float64[], Int[], 2 * n_segments, 0)
 end
 
 # ========================== Geometry addons ==========================
