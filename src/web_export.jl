@@ -925,7 +925,9 @@ function _web_texture_average_color(tex::Texture)
         s / n
     end
     r = channel_average(1)
-    g = C >= 2 ? channel_average(2) : r
+    # One- and two-channel data is luminance (+ alpha), as in `_texel` and the
+    # uploaded RGBA bytes; channel 2 of a two-channel texture is alpha.
+    g = C >= 3 ? channel_average(2) : r
     b = C >= 3 ? channel_average(3) : r
     return Color3(clamp(r, 0.0, 1.0), clamp(g, 0.0, 1.0), clamp(b, 0.0, 1.0))
 end
