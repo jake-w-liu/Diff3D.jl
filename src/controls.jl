@@ -25,8 +25,13 @@ end
     return result
 end
 
+const _OrbitCamera = Union{PerspectiveCamera, OrthographicCamera}
+
+_orbit_camera_kind(::PerspectiveCamera) = :PerspectiveCamera
+_orbit_camera_kind(::OrthographicCamera) = :OrthographicCamera
+
 mutable struct OrbitControls
-    camera::PerspectiveCamera
+    camera::_OrbitCamera
     target::Vec3{Float64}
     enabled::Bool
     enable_rotate::Bool
@@ -54,6 +59,43 @@ mutable struct OrbitControls
     # three.js OrbitControls.screenSpacePanning: vertical pan follows the
     # camera up (true) or moves across the plane orthogonal to `camera.up`.
     screen_space_panning::Bool
+    # three.js minZoom / maxZoom: an orthographic camera dollies by changing
+    # `camera.zoom` within this range instead of moving.
+    min_zoom::Float64
+    max_zoom::Float64
+    # Camera zoom saved by `orbit_save_state!` (three.js `zoom0`).
+    zoom0::Float64
+    # three.js autoRotate / autoRotateSpeed: `orbit_update!` turns the camera
+    # about camera.up; speed 2.0 is one orbit per 30 s at 60 frames/s.
+    auto_rotate::Bool
+    auto_rotate_speed::Float64
+    # three.js cursor / minTargetRadius / maxTargetRadius: every update keeps
+    # the target within this distance range of `cursor`.
+    cursor::Vec3{Float64}
+    min_target_radius::Float64
+    max_target_radius::Float64
+end
+
+function _checked_orbit_target_radii(min_radius, max_radius)
+    min_radius isa Real && !(min_radius isa Bool) &&
+        max_radius isa Real && !(max_radius isa Bool) ||
+        throw(ArgumentError("OrbitControls target radii must satisfy 0 <= min_target_radius <= max_target_radius"))
+    minimum = Float64(min_radius)
+    maximum = Float64(max_radius)
+    isfinite(minimum) && 0.0 <= minimum <= maximum && !isnan(maximum) ||
+        throw(ArgumentError("OrbitControls target radii must satisfy 0 <= min_target_radius <= max_target_radius"))
+    return minimum, maximum
+end
+
+function _checked_orbit_zoom_limits(min_zoom, max_zoom)
+    min_zoom isa Real && !(min_zoom isa Bool) &&
+        max_zoom isa Real && !(max_zoom isa Bool) ||
+        throw(ArgumentError("OrbitControls zoom limits must satisfy 0 <= min_zoom <= max_zoom"))
+    minimum = Float64(min_zoom)
+    maximum = Float64(max_zoom)
+    isfinite(minimum) && 0.0 <= minimum <= maximum && !isnan(maximum) ||
+        throw(ArgumentError("OrbitControls zoom limits must satisfy 0 <= min_zoom <= max_zoom"))
+    return minimum, maximum
 end
 
 # Damping is a decay factor. Non-finite or >1 values either poison camera state
@@ -115,7 +157,12 @@ function _checked_azimuth_limits(min_azimuth_angle, max_azimuth_angle)
 end
 
 function _validate_orbit_runtime(oc::OrbitControls)
-    _validated_camera_view_vectors(oc.camera, :PerspectiveCamera)
+    _validated_camera_view_vectors(oc.camera, _orbit_camera_kind(oc.camera))
+    _checked_orbit_zoom_limits(oc.min_zoom, oc.max_zoom)
+    _checked_control_scalar(oc.auto_rotate_speed,
+                            "OrbitControls auto_rotate_speed")
+    _checked_control_vec3(oc.cursor, "OrbitControls cursor")
+    _checked_orbit_target_radii(oc.min_target_radius, oc.max_target_radius)
     _checked_control_vec3(oc.target, "OrbitControls target")
     _checked_orbit_distances(oc.min_distance, oc.max_distance)
     _checked_polar_limits(oc.min_polar_angle, oc.max_polar_angle,
@@ -129,18 +176,49 @@ function _validate_orbit_runtime(oc::OrbitControls)
     return nothing
 end
 
-# Positional/keyword constructors. The two original positional forms still work;
-# damping and constraint fields are keyword-only with three.js-matching defaults.
-function OrbitControls(cam::PerspectiveCamera, target::Vec3{Float64};
+"""
+    OrbitControls(camera[, target]; enabled=true, enable_rotate=true,
+                  enable_zoom=true, enable_pan=true, enable_damping=false,
+                  damping_factor=0.05, min_distance=0.0, max_distance=Inf,
+                  min_polar_angle=0.0, max_polar_angle=π,
+                  min_azimuth_angle=-Inf, max_azimuth_angle=Inf,
+                  screen_space_panning=true, min_zoom=0.0, max_zoom=Inf,
+                  auto_rotate=false, auto_rotate_speed=2.0,
+                  cursor=Vec3(0.0, 0.0, 0.0), min_target_radius=0.0,
+                  max_target_radius=Inf)
+
+Orbit/pan/zoom camera control state matching three.js `OrbitControls` for a
+`PerspectiveCamera` or an `OrthographicCamera`. The camera orbits the target
+about `camera.up`. Dollying a perspective camera scales its distance to the
+target; dollying an orthographic camera divides `camera.zoom` by the factor,
+clamped to `[min_zoom, max_zoom]`, and leaves the camera in place (three.js
+`minZoom`/`maxZoom`). With `auto_rotate=true`, `orbit_update!` also turns
+the camera about `camera.up` at `auto_rotate_speed` (three.js `autoRotate`).
+Every interaction and update keeps the target between `min_target_radius` and
+`max_target_radius` from `cursor` (three.js `minTargetRadius`,
+`maxTargetRadius`, `cursor`).
+"""
+function OrbitControls(cam::_OrbitCamera, target::Vec3{Float64};
                        enabled::Bool=true, enable_rotate::Bool=true,
                        enable_zoom::Bool=true, enable_pan::Bool=true,
                        enable_damping::Bool=false, damping_factor::Real=0.05,
                        min_distance::Real=0.0, max_distance::Real=Inf,
                        min_polar_angle::Real=0.0, max_polar_angle::Real=π,
                        min_azimuth_angle::Real=-Inf, max_azimuth_angle::Real=Inf,
-                       screen_space_panning::Bool=true)
+                       screen_space_panning::Bool=true,
+                       min_zoom::Real=0.0, max_zoom::Real=Inf,
+                       auto_rotate::Bool=false, auto_rotate_speed::Real=2.0,
+                       cursor::Vec3=Vec3(0.0, 0.0, 0.0),
+                       min_target_radius::Real=0.0,
+                       max_target_radius::Real=Inf)
     _prepare_camera_control_up!(cam)
-    _validated_camera_view_vectors(cam, :PerspectiveCamera)
+    _validated_camera_view_vectors(cam, _orbit_camera_kind(cam))
+    minimum_zoom, maximum_zoom = _checked_orbit_zoom_limits(min_zoom, max_zoom)
+    rotate_speed = _checked_control_scalar(
+        auto_rotate_speed, "OrbitControls auto_rotate_speed")
+    checked_cursor = _checked_control_vec3(cursor, "OrbitControls cursor")
+    minimum_target_radius, maximum_target_radius =
+        _checked_orbit_target_radii(min_target_radius, max_target_radius)
     checked_target = _checked_control_vec3(target, "OrbitControls target")
     minimum_distance, maximum_distance =
         _checked_orbit_distances(min_distance, max_distance)
@@ -156,7 +234,10 @@ function OrbitControls(cam::PerspectiveCamera, target::Vec3{Float64};
                   minimum_polar, maximum_polar,
                   minimum_azimuth, maximum_azimuth,
                   0.0, 0.0, 0.0, Vec3(0.0, 0.0, 0.0), cam.position,
-                  checked_target, screen_space_panning)
+                  checked_target, screen_space_panning,
+                  minimum_zoom, maximum_zoom, cam.zoom,
+                  auto_rotate, rotate_speed, checked_cursor,
+                  minimum_target_radius, maximum_target_radius)
 end
 
 function OrbitControls(camera::PerspectiveCamera, target::Vec3{Float64},
@@ -192,10 +273,11 @@ function OrbitControls(camera::PerspectiveCamera, target::Vec3{Float64},
                                         "OrbitControls saved position"),
                   _checked_control_vec3(target0,
                                         "OrbitControls saved target"),
-                  true)
+                  true, 0.0, Inf, camera.zoom, false, 2.0,
+                  Vec3(0.0, 0.0, 0.0), 0.0, Inf)
 end
 
-OrbitControls(cam::PerspectiveCamera; kwargs...) =
+OrbitControls(cam::_OrbitCamera; kwargs...) =
     OrbitControls(cam, _camera_control_target(cam); kwargs...)
 
 """
@@ -206,14 +288,41 @@ move the target across the plane orthogonal to `camera.up` (the ground for a
 y-up scene) instead of along the screen's up axis. All other keywords are the
 `OrbitControls` ones.
 """
-MapControls(cam::PerspectiveCamera, target::Vec3{Float64};
+MapControls(cam::_OrbitCamera, target::Vec3{Float64};
             screen_space_panning::Bool=false, kwargs...) =
     OrbitControls(cam, target; screen_space_panning=screen_space_panning, kwargs...)
-MapControls(cam::PerspectiveCamera; kwargs...) =
+MapControls(cam::_OrbitCamera; kwargs...) =
     MapControls(cam, _camera_control_target(cam); kwargs...)
 
-# Current spherical (radius, polar from +y, azimuth) of the camera about target.
-_orbit_spherical(oc::OrbitControls) = cartesian_to_spherical(oc.camera.position - oc.target)
+# three.js OrbitControls orbits about `camera.up`: it rotates the camera offset
+# by `_quat = setFromUnitVectors(camera.up, +y)` into a y-up frame, works in
+# spherical coordinates there, and rotates back with the inverse
+# (OrbitControls.js:406-407, 703-704, 794-795). Diff3D reads `camera.up` live.
+@inline function _orbit_up_quaternion(oc::OrbitControls)
+    up = oc.camera.up
+    # A +y up (any positive length) is the identity frame.
+    iszero(up.x) && iszero(up.z) && up.y > 0.0 &&
+        return Quaternion(0.0, 0.0, 0.0, 1.0)
+    return quat_from_unit_vectors(up, Vec3(0.0, 1.0, 0.0))
+end
+
+# three.js Vector3.applyQuaternion. The identity (a y-up camera) returns `v`
+# unchanged, so the default frame stays exact even for overflowing offsets.
+@inline function _orbit_rotate_vector(q::Quaternion, v::Vec3)
+    iszero(q.x) && iszero(q.y) && iszero(q.z) && return v
+    tx = 2 * (q.y * v.z - q.z * v.y)
+    ty = 2 * (q.z * v.x - q.x * v.z)
+    tz = 2 * (q.x * v.y - q.y * v.x)
+    return Vec3(v.x + q.w * tx + q.y * tz - q.z * ty,
+                v.y + q.w * ty + q.z * tx - q.x * tz,
+                v.z + q.w * tz + q.x * ty - q.y * tx)
+end
+
+# Current spherical (radius, polar from camera.up, azimuth) of the camera
+# about the target.
+_orbit_spherical(oc::OrbitControls) = cartesian_to_spherical(
+    _orbit_rotate_vector(_orbit_up_quaternion(oc),
+                         oc.camera.position - oc.target))
 
 # Clamp an azimuth (read back from cartesian_to_spherical, hence in (-π, π]) to
 # the configured window, matching three.js OrbitControls. The bounds are first
@@ -242,15 +351,71 @@ function _orbit_constrained(oc::OrbitControls, s::Spherical)
     return Spherical(radius, phi, theta)
 end
 
-function _orbit_apply!(oc::OrbitControls, s::Spherical)
-    position = oc.target + spherical_to_cartesian(_orbit_constrained(oc, s))
+# three.js update(): target.sub(cursor).clampLength(minTargetRadius,
+# maxTargetRadius).add(cursor) (OrbitControls.js:768-771). A target already in
+# range is returned unchanged; a target on the cursor has no direction and stays.
+function _orbit_limited_target(oc::OrbitControls, target::Vec3{Float64})
+    # The default [0, Inf) range keeps every target.
+    iszero(oc.min_target_radius) && oc.max_target_radius == Inf && return target
+    offset = target - oc.cursor
+    distance = norm(offset)
+    limited = clamp(distance, oc.min_target_radius, oc.max_target_radius)
+    (limited == distance || iszero(distance)) && return target
+    return _checked_control_vec3(
+        oc.cursor + offset * (limited / distance), "OrbitControls target")
+end
+
+# Place the camera at the constrained spherical offset `s` from `target`
+# (default: the current target), which becomes the orbit target after the
+# target-radius limit.
+function _orbit_apply!(oc::OrbitControls, s::Spherical,
+                       target::Vec3{Float64}=oc.target)
+    zoom = _orbit_limited_zoom(oc)
+    target = _orbit_limited_target(oc, target)
+    q = _orbit_up_quaternion(oc)
+    offset = spherical_to_cartesian(_orbit_constrained(oc, s))
+    position = target + _orbit_rotate_vector(
+        Quaternion(-q.x, -q.y, -q.z, q.w), offset)
     position = _checked_control_vec3(
         position, "OrbitControls camera position")
+    oc.target = target
     oc.camera.position = position
-    oc.camera.target = oc.target
+    oc.camera.target = target
     _sync_camera_rotation_from_view!(oc.camera)
+    oc.camera isa OrthographicCamera && (oc.camera.zoom = zoom)
     return oc
 end
+
+# three.js re-applies every limit on each update(), so a pan, or an update
+# after the camera started (or a limit was changed) outside the configured
+# window, moves the camera back inside it (OrbitControls.js:729-786). A camera
+# already inside every configured limit is left untouched, keeping such updates
+# exact; this includes a camera placed exactly on the pole, which only the
+# Spherical.makeSafe epsilon (1e-6 rad) would move. An orthographic zoom
+# outside [min_zoom, max_zoom] is clamped as well.
+function _orbit_enforce_limits!(oc::OrbitControls)
+    zoom = _orbit_limited_zoom(oc)
+    if _orbit_has_placement_limits(oc)
+        s = _orbit_spherical(oc)
+        clamp(s.radius, oc.min_distance, oc.max_distance) == s.radius &&
+            clamp(s.phi, oc.min_polar_angle, oc.max_polar_angle) == s.phi &&
+            _clamp_azimuth(s.theta, oc.min_azimuth_angle,
+                           oc.max_azimuth_angle) == s.theta &&
+            _orbit_limited_target(oc, oc.target) === oc.target ||
+            _orbit_apply!(oc, s)
+    end
+    oc.camera isa OrthographicCamera && (oc.camera.zoom = zoom)
+    return oc
+end
+
+# With the three.js default limits (distance [0, Inf), polar [0, pi], an
+# unbounded azimuth and target radius) no camera is outside them: the
+# spherical radius is non-negative and its polar angle lies in [0, pi].
+@inline _orbit_has_placement_limits(oc::OrbitControls) =
+    !iszero(oc.min_distance) || oc.max_distance != Inf ||
+    !iszero(oc.min_polar_angle) || oc.max_polar_angle != Float64(π) ||
+    (isfinite(oc.min_azimuth_angle) && isfinite(oc.max_azimuth_angle)) ||
+    !iszero(oc.min_target_radius) || oc.max_target_radius != Inf
 
 """Place the camera at an absolute orbit (azimuth, polar, radius) about the target."""
 function orbit_set!(oc::OrbitControls; azimuth, polar, radius)
@@ -263,20 +428,27 @@ function orbit_set!(oc::OrbitControls; azimuth, polar, radius)
     _orbit_apply!(oc, Spherical(checked_radius, checked_polar, checked_azimuth))
 end
 
-"""Save the current camera position and target as the reset state."""
+"""Save the current camera position, zoom, and target as the reset state."""
 function orbit_save_state!(oc::OrbitControls)
-    _validated_camera_view_vectors(oc.camera, :PerspectiveCamera)
+    _validated_camera_view_vectors(oc.camera, _orbit_camera_kind(oc.camera))
     _checked_control_vec3(oc.target, "OrbitControls target")
     oc.position0 = oc.camera.position
     oc.target0 = oc.target
+    oc.zoom0 = oc.camera.zoom
     return oc
 end
 
-"""Restore the saved orbit state and clear any damped residual motion."""
+"""
+Restore the saved orbit state (camera position, zoom, and target) and clear
+any damped residual motion. Like three.js `reset()`, it then runs one update:
+the limits are re-applied and, with `auto_rotate`, the camera turns by one
+frame (see `orbit_update!`).
+"""
 function orbit_reset!(oc::OrbitControls)
     position = _checked_control_vec3(
         oc.position0, "OrbitControls saved position")
     target = _checked_control_vec3(oc.target0, "OrbitControls saved target")
+    oc.camera.zoom = _validated_camera_zoom(oc.zoom0)
     oc.camera.position = position
     oc.target = target
     oc.camera.target = target
@@ -285,7 +457,10 @@ function orbit_reset!(oc::OrbitControls)
     oc.v_polar = 0.0
     oc.v_zoom = 0.0
     oc.v_pan = Vec3(0.0, 0.0, 0.0)
-    return oc
+    # three.js reset() ends with update() (OrbitControls.js:621-633), which
+    # applies the limits and, with auto-rotation, turns the camera one frame.
+    oc.enabled && oc.auto_rotate && return orbit_update!(oc)
+    return _orbit_enforce_limits!(oc)
 end
 
 # Immediate (non-damped) primitives that always apply their deltas at once.
@@ -293,11 +468,31 @@ function _orbit_rotate_now!(oc::OrbitControls, d_azimuth, d_polar)
     s = _orbit_spherical(oc)
     _orbit_apply!(oc, Spherical(s.radius, s.phi + d_polar, s.theta + d_azimuth))
 end
+# three.js update() for an orthographic camera: `zoom / scale` clamped to
+# [minZoom, maxZoom] (OrbitControls.js:892-895).
+function _orbit_ortho_zoom(oc::OrbitControls, scale)
+    zoom = clamp(oc.camera.zoom / scale, oc.min_zoom, oc.max_zoom)
+    (isfinite(zoom) && zoom > 0.0) || throw(ArgumentError(
+        "OrbitControls orthographic zoom must stay positive and finite"))
+    return zoom
+end
+# Every three.js update() re-clamps an orthographic zoom (scale 1 when not
+# dollying), so a zoom that starts outside [min_zoom, max_zoom], or is left
+# outside by a changed limit, moves back inside it.
+@inline _orbit_limited_zoom(oc::OrbitControls) =
+    oc.camera isa OrthographicCamera ? _orbit_ortho_zoom(oc, 1.0) : oc.camera.zoom
 function _orbit_zoom_now!(oc::OrbitControls, factor)
+    camera = oc.camera
+    if camera isa OrthographicCamera
+        zoom = _orbit_ortho_zoom(oc, factor)
+        _orbit_enforce_limits!(oc)
+        camera.zoom = zoom
+        return oc
+    end
     s = _orbit_spherical(oc)
     _orbit_apply!(oc, Spherical(s.radius * factor, s.phi, s.theta))
 end
-function _camera_pan_basis(camera::PerspectiveCamera, target::Vec3{Float64})
+function _camera_pan_basis(camera::AbstractCamera, target::Vec3{Float64})
     fwd = _direction_between(camera.position, target)
     raw_right = cross(fwd, camera.up)
     if norm(raw_right) <= 1e-12
@@ -313,9 +508,9 @@ function _orbit_pan_basis(oc::OrbitControls)
     oc.screen_space_panning && return right, up
     return right, normalize(cross(oc.camera.up, right))
 end
-function _orbit_pan_now!(oc::OrbitControls, dx, dy)
-    right, up = _orbit_pan_basis(oc)
-    shift = right * dx + up * dy
+# Move the target and camera together by a world-space offset, then apply the
+# limits as three.js update() does after `target.add(panOffset)`.
+function _orbit_shift!(oc::OrbitControls, shift::Vec3)
     target = _checked_control_vec3(
         oc.target + shift, "OrbitControls target")
     position = _checked_control_vec3(
@@ -324,7 +519,11 @@ function _orbit_pan_now!(oc::OrbitControls, dx, dy)
     oc.camera.position = position
     oc.camera.target = target
     _sync_camera_rotation_from_view!(oc.camera)
-    return oc
+    return _orbit_enforce_limits!(oc)
+end
+function _orbit_pan_now!(oc::OrbitControls, dx, dy)
+    right, up = _orbit_pan_basis(oc)
+    return _orbit_shift!(oc, right * dx + up * dy)
 end
 
 """
@@ -403,41 +602,68 @@ function orbit_pan!(oc::OrbitControls, dx, dy)
 end
 
 """
-    orbit_update!(oc)
+    orbit_update!(oc[, delta_time])
 
-Advance the orbit by one frame. With damping disabled this is a no-op (state is
-already current). With damping enabled it applies `damping_factor` of the
-residual rotation, dolly, and pan velocities, then decays them by
-`(1 - damping_factor)` so motion eases to a stop after the last interaction and
-the total converges to the queued deltas (three.js `OrbitControls.update`).
-Velocity components below a small threshold are zeroed to avoid endless drift.
+Advance the orbit by one frame. Like three.js `OrbitControls.update`, every
+call re-applies the distance, polar, azimuth, and target-radius limits (and
+`min_zoom`/`max_zoom` for an orthographic camera), so a camera that starts (or
+is left by a changed limit) outside them moves back inside; a camera already
+inside them is not moved. With damping disabled nothing else happens
+(interactions apply immediately). With damping enabled it applies
+`damping_factor` of the residual rotation, dolly, and pan velocities, then
+decays them by `(1 - damping_factor)` so motion eases to a stop after the last
+interaction and the total converges to the queued deltas. Velocity components
+below a small threshold are zeroed to avoid endless drift.
+
+With `oc.auto_rotate` set, each call first turns the camera about `camera.up`
+by `2π/60 * auto_rotate_speed * delta_time` radians, or by
+`2π/3600 * auto_rotate_speed` when `delta_time` (seconds) is omitted, as
+three.js does per frame (`_getAutoRotationAngle`); with damping enabled that
+turn is added to the residual azimuth velocity instead.
 """
-function orbit_update!(oc::OrbitControls)
+function orbit_update!(oc::OrbitControls, delta_time=nothing)
     oc.enabled || return oc
-    oc.enable_damping || return oc
     _validate_orbit_runtime(oc)
-    decay = 1.0 - oc.damping_factor
-    # Apply `damping_factor` of the residual velocities for this frame, so the
-    # total motion converges to exactly the queued deltas (three.js applies
-    # `sphericalDelta * dampingFactor` per frame before decaying).
-    if oc.v_azimuth != 0.0 || oc.v_polar != 0.0
-        _orbit_rotate_now!(oc, oc.v_azimuth * oc.damping_factor,
-                           oc.v_polar * oc.damping_factor)
+    # A frame delta must be a finite real even when auto-rotation is off.
+    delta_time === nothing ||
+        _checked_control_scalar(delta_time, "OrbitControls delta_time")
+    if oc.auto_rotate
+        # three.js _rotateLeft(angle): sphericalDelta.theta -= angle.
+        angle = _orbit_auto_rotation_angle(oc, delta_time)
+        if !oc.enable_damping
+            s = _orbit_spherical(oc)
+            return _orbit_apply!(oc, Spherical(s.radius, s.phi, s.theta - angle))
+        end
+        oc.v_azimuth = _checked_control_scalar(
+            oc.v_azimuth - angle, "OrbitControls azimuth velocity")
     end
-    if oc.v_zoom != 0.0
-        _orbit_zoom_now!(oc, exp(oc.v_zoom * oc.damping_factor))
-    end
-    if oc.v_pan.x != 0.0 || oc.v_pan.y != 0.0 || oc.v_pan.z != 0.0
-        # Pan velocity is already a world-space offset; apply its damped share.
-        step = oc.v_pan * oc.damping_factor
+    oc.enable_damping || return _orbit_enforce_limits!(oc)
+    f = oc.damping_factor
+    decay = 1.0 - f
+    if oc.v_azimuth != 0.0 || oc.v_polar != 0.0 || oc.v_zoom != 0.0
+        # Apply `damping_factor` of the residual velocities in one pass, like
+        # three.js update() (OrbitControls.js:706-797): the spherical offset
+        # about the current target plus the damped deltas is limited once, the
+        # target moves by the damped share of the world-space pan, and the
+        # camera is placed at the limited offset from the moved target.
+        s = _orbit_spherical(oc)
+        scale = exp(oc.v_zoom * f)
+        camera = oc.camera
+        ortho = camera isa OrthographicCamera
+        zoom = ortho ? _orbit_ortho_zoom(oc, scale) : camera.zoom
+        stepped = Spherical(ortho ? s.radius : s.radius * scale,
+                            s.phi + oc.v_polar * f,
+                            s.theta + oc.v_azimuth * f)
         target = _checked_control_vec3(
-            oc.target + step, "OrbitControls target")
-        position = _checked_control_vec3(
-            oc.camera.position + step, "OrbitControls camera position")
-        oc.target = target
-        oc.camera.position = position
-        oc.camera.target = target
-        _sync_camera_rotation_from_view!(oc.camera)
+            oc.target + oc.v_pan * f, "OrbitControls target")
+        _orbit_apply!(oc, stepped, target)
+        ortho && (camera.zoom = zoom)
+    elseif oc.v_pan.x != 0.0 || oc.v_pan.y != 0.0 || oc.v_pan.z != 0.0
+        # A pure pan keeps the offset, so limiting before or after the move is
+        # the same; this path leaves an in-limit offset bit-for-bit unchanged.
+        _orbit_shift!(oc, oc.v_pan * f)
+    else
+        _orbit_enforce_limits!(oc)
     end
     # Decay residual velocities; snap tiny remnants to zero.
     thresh = 1e-9
@@ -450,6 +676,15 @@ function orbit_update!(oc::OrbitControls)
     return oc
 end
 
+# OrbitControls.js _getAutoRotationAngle.
+function _orbit_auto_rotation_angle(oc::OrbitControls, delta_time)
+    speed = oc.auto_rotate_speed
+    delta_time === nothing && return 2π / 60 / 60 * speed
+    dt = _checked_control_scalar(delta_time, "OrbitControls delta_time")
+    return _checked_control_scalar((2π / 60 * speed) * dt,
+                                   "OrbitControls auto-rotation angle")
+end
+
 # TrackballControls: free rotation about the target via screen-space deltas.
 mutable struct TrackballControls
     camera::PerspectiveCamera
@@ -458,16 +693,39 @@ mutable struct TrackballControls
     position0::Vec3{Float64}
     target0::Vec3{Float64}
     up0::Vec3{Float64}
+    # three.js TrackballControls.minDistance / maxDistance: every rotate, zoom
+    # and pan keeps the camera-to-target distance inside this range.
+    min_distance::Float64
+    max_distance::Float64
 end
 
+TrackballControls(camera::PerspectiveCamera, target::Vec3{Float64},
+                  enabled::Bool, position0::Vec3{Float64},
+                  target0::Vec3{Float64}, up0::Vec3{Float64}) =
+    TrackballControls(camera, target, enabled, position0, target0, up0,
+                      0.0, Inf)
+
+"""
+    TrackballControls(camera[, target]; enabled=true, min_distance=0.0,
+                      max_distance=Inf)
+
+Trackball camera manipulator (three.js `TrackballControls`). `min_distance`
+and `max_distance` bound the camera-to-target distance after every
+`trackball_rotate!`, `trackball_zoom!`, and `trackball_pan!`, like three.js
+`minDistance`/`maxDistance`.
+"""
 function TrackballControls(cam::PerspectiveCamera, target::Vec3{Float64}=_camera_control_target(cam);
-                           enabled::Bool=true)
+                           enabled::Bool=true, min_distance::Real=0.0,
+                           max_distance::Real=Inf)
     _prepare_camera_control_up!(cam)
     _validated_camera_view_vectors(cam, :PerspectiveCamera)
     checked_target = _checked_control_vec3(
         target, "TrackballControls target")
+    minimum_distance, maximum_distance =
+        _checked_orbit_distances(min_distance, max_distance)
     TrackballControls(cam, checked_target, enabled, cam.position,
-                      checked_target, cam.up)
+                      checked_target, cam.up, minimum_distance,
+                      maximum_distance)
 end
 
 """Save the current camera position, up vector, and target as the reset state."""
@@ -495,6 +753,21 @@ function trackball_reset!(tc::TrackballControls)
     tc.camera.target = target
     _sync_camera_rotation_from_view!(tc.camera)
     return tc
+end
+
+# three.js TrackballControls._checkDistances (TrackballControls.js:738-756):
+# an eye longer than maxDistance, or shorter than minDistance, is rescaled to
+# that length along its direction. A zero eye has no direction and stays zero.
+function _trackball_limited_eye(tc::TrackballControls, eye::Vec3)
+    min_distance, max_distance =
+        _checked_orbit_distances(tc.min_distance, tc.max_distance)
+    distance = norm(eye)
+    if distance > max_distance
+        return normalize(eye) * max_distance
+    elseif distance < min_distance && distance > 0.0
+        return normalize(eye) * min_distance
+    end
+    return eye
 end
 
 function _trackball_set_eye!(tc::TrackballControls, eye::Vec3)
@@ -537,13 +810,17 @@ function trackball_rotate!(tc::TrackballControls, dx, dy)
     c, s = cos(angle), sin(angle)
     new_up = _checked_control_vec3(
         _rotate_about_unit_axis(up, axis, c, s), "TrackballControls camera up")
-    new_eye = _rotate_about_unit_axis(eye, axis, c, s)
+    new_eye = _trackball_limited_eye(tc, _rotate_about_unit_axis(eye, axis, c, s))
     _checked_control_vec3(target + new_eye, "TrackballControls camera position")
     cam.up = new_up
     return _trackball_set_eye!(tc, new_eye)
 end
 
-"""Scale the camera distance from the trackball target. `factor < 1` zooms in."""
+"""
+Scale the camera distance from the trackball target. `factor < 1` zooms in.
+A factor that is not positive leaves the distance unchanged, as three.js
+`TrackballControls` ignores such zoom steps.
+"""
 function trackball_zoom!(tc::TrackballControls, factor)
     tc.enabled || return tc
     _validated_camera_view_vectors(tc.camera, :PerspectiveCamera)
@@ -551,7 +828,9 @@ function trackball_zoom!(tc::TrackballControls, factor)
     checked_factor = _checked_control_scalar(
         factor, "TrackballControls zoom factor")
     eye = tc.camera.position - tc.target
-    return _trackball_set_eye!(tc, eye * max(checked_factor, 0.0))
+    # TrackballControls.js:632 only scales the eye when `factor > 0`.
+    scaled = checked_factor > 0.0 ? eye * checked_factor : eye
+    return _trackball_set_eye!(tc, _trackball_limited_eye(tc, scaled))
 end
 
 """Pan the trackball target and camera in the view plane."""
@@ -565,8 +844,11 @@ function trackball_pan!(tc::TrackballControls, dx, dy)
     shift = right * checked_dx + up * checked_dy
     target = _checked_control_vec3(
         tc.target + shift, "TrackballControls target")
+    eye = tc.camera.position - tc.target
+    limited = _trackball_limited_eye(tc, eye)
     position = _checked_control_vec3(
-        tc.camera.position + shift, "TrackballControls camera position")
+        limited === eye ? tc.camera.position + shift : target + limited,
+        "TrackballControls camera position")
     tc.target = target
     tc.camera.position = position
     tc.camera.target = target
@@ -688,17 +970,18 @@ function pointerlock_move!(pc::PointerLockControls, movement_x, movement_y)
     return pc
 end
 
-# DragControls: programmatic object selection and world-space drag movement.
+# DragControls: programmatic object selection and world-space drag movement,
+# with a perspective or orthographic camera like three.js.
 mutable struct DragControls
     objects::Vector{AbstractObject3D}
-    camera::PerspectiveCamera
+    camera::_OrbitCamera
     selected::Union{Nothing, AbstractObject3D}
     recursive::Bool
     transform_group::Bool
     raycaster::Raycaster
 end
 
-function DragControls(objects::AbstractVector{<:AbstractObject3D}, camera::PerspectiveCamera;
+function DragControls(objects::AbstractVector{<:AbstractObject3D}, camera::_OrbitCamera;
                       recursive::Bool=true, transform_group::Bool=false,
                       raycaster::Union{Nothing,Raycaster}=nothing)
     rc = raycaster === nothing ?
@@ -763,9 +1046,10 @@ end
 
 drag_end!(dc::DragControls) = (dc.selected = nothing; dc)
 
-# TransformControls: attach one object and apply translate/rotate/scale deltas.
+# TransformControls: attach one object and apply translate/rotate/scale deltas;
+# like three.js it accepts a perspective or orthographic camera.
 mutable struct TransformControls
-    camera::PerspectiveCamera
+    camera::_OrbitCamera
     object::Union{Nothing, AbstractObject3D}
     mode::Symbol
     space::Symbol
@@ -815,7 +1099,7 @@ function _validate_transform_runtime(tc::TransformControls)
     return nothing
 end
 
-function TransformControls(camera::PerspectiveCamera;
+function TransformControls(camera::_OrbitCamera;
                            mode::Symbol=:translate,
                            space::Symbol=:world,
                            enabled::Bool=true,
@@ -833,7 +1117,7 @@ function TransformControls(camera::PerspectiveCamera;
                              _transform_validate_snap(scale_snap, "scale"))
 end
 
-TransformControls(camera::PerspectiveCamera,
+TransformControls(camera::_OrbitCamera,
                   object::Union{Nothing, AbstractObject3D},
                   mode::Symbol,
                   space::Symbol) =
@@ -2630,16 +2914,25 @@ end
     return nothing
 end
 
-"""Diff3D line segments along +x (red), +y (green), +z (blue)."""
+"""
+Diff3D line segments along +x (red), +y (green), +z (blue). As in three.js
+`AxesHelper`, each axis fades from its pure colour at the origin to a lighter
+tint at its tip (`:color` attribute).
+"""
 function AxesHelper(size=1.0)
     size = _geometry_finite_float(size, "AxesHelper size")
     pos = Float64[0,0,0, size,0,0,  0,0,0, 0,size,0,  0,0,0, 0,0,size]
     geo = _line_geo(pos)
-    set_attribute!(geo, :color, Float64[1,0,0, 1,0,0,  0,1,0, 0,1,0,  0,0,1, 0,0,1], 3)
+    # three.js AxesHelper.js colors array.
+    set_attribute!(geo, :color, Float64[1,0,0, 1,0.6,0,  0,1,0, 0.6,1,0,  0,0,1, 0,0.6,1], 3)
     LineSegments(geo, LineBasicMaterial(color=Color3(1.0,1.0,1.0)); name="AxesHelper")
 end
 
-"""A `divisions`×`divisions` grid of size `size` on the xz-plane."""
+"""
+A `divisions`×`divisions` grid of size `size` on the xz-plane, with the
+vertex order of three.js `GridHelper`: for each offset `k` from `-size/2`, a
+line parallel to x and then one parallel to z.
+"""
 function GridHelper(size=10.0, divisions=10; color=Color3(0.5,0.5,0.5))
     size = _geometry_finite_float(size, "GridHelper size")
     divisions = _clamp_seg(divisions, 1)   # divisions=0 would make step=Inf -> NaN vertices
@@ -2650,13 +2943,15 @@ function GridHelper(size=10.0, divisions=10; color=Color3(0.5,0.5,0.5))
         undef, _helper_line_position_length(lines, "GridHelper"))
     step = size / divisions; half = size / 2
     vi = 1
-    for i in 0:divisions
-        c = -half + i*step
-        _write_line_vertex!(pos, vi, c, 0.0, -half)
-        _write_line_vertex!(pos, vi + 1, c, 0.0, half)      # parallel to z
-        _write_line_vertex!(pos, vi + 2, -half, 0.0, c)
-        _write_line_vertex!(pos, vi + 3, half, 0.0, c)      # parallel to x
+    k = -half
+    # GridHelper.js: `k` advances by `k += step`, not `-half + i*step`.
+    for _ in 0:divisions
+        _write_line_vertex!(pos, vi, -half, 0.0, k)
+        _write_line_vertex!(pos, vi + 1, half, 0.0, k)      # parallel to x
+        _write_line_vertex!(pos, vi + 2, k, 0.0, -half)
+        _write_line_vertex!(pos, vi + 3, k, 0.0, half)      # parallel to z
         vi += 4
+        k += step
     end
     LineSegments(_line_geo(pos), LineBasicMaterial(color=color); name="GridHelper")
 end
@@ -2762,12 +3057,6 @@ function PointLightHelper(light::PointLight, size=0.5; color=Color3(1.0,1.0,0.0)
                   p.x,p.y-size,p.z, p.x,p.y+size,p.z,
                   p.x,p.y,p.z-size, p.x,p.y,p.z+size]
     LineSegments(_line_geo(pos), LineBasicMaterial(color=color); name="PointLightHelper")
-end
-
-# Append the two endpoints of a segment a→b to a flat position buffer.
-@inline function _push_seg!(pos::Vector{Float64}, a::Vec3, b::Vec3)
-    push!(pos, a.x, a.y, a.z, b.x, b.y, b.z)
-    return pos
 end
 
 """
@@ -2963,7 +3252,9 @@ end
 """
 Polar grid on the xz-plane: `rings` concentric circles out to `radius` and
 `sectors` evenly spaced radial spokes (three.js `PolarGridHelper`). Circles are
-approximated by `circle_segments` chords each.
+approximated by `circle_segments` chords each. As in three.js, spokes start on
++z and advance toward +x, a single sector draws no spoke, and rings are listed
+from the outermost inward.
 """
 function PolarGridHelper(radius=10.0, sectors::Int=16, rings::Int=8;
                          circle_segments::Int=64, color=Color3(0.5, 0.5, 0.5))
@@ -2972,29 +3263,33 @@ function PolarGridHelper(radius=10.0, sectors::Int=16, rings::Int=8;
     rings = _geometry_nonnegative_int(rings, "PolarGridHelper rings")
     circle_segments = _geometry_nonnegative_int(
         circle_segments, "PolarGridHelper circle_segments")
+    # PolarGridHelper.js only draws sectors when `sectors > 1`.
+    spokes = sectors > 1 ? sectors : 0
     ring_segments = _geometry_checked_mul(
         rings, circle_segments, "PolarGridHelper segment count")
     n_segments = _geometry_checked_add(
-        sectors, ring_segments, "PolarGridHelper segment count")
+        spokes, ring_segments, "PolarGridHelper segment count")
     pos = Vector{Float64}(
         undef, _helper_line_position_length(
             n_segments, "PolarGridHelper"))
     vi = 1
-    # Radial spokes.
-    for k in 0:sectors-1
-        φ = 2π * k / sectors
-        x = radius * cos(φ); z = radius * sin(φ)
-        vi = _write_line_segment!(pos, vi, Vec3(0.0, 0.0, 0.0), Vec3(x, 0.0, z))
+    # Radial spokes: angle v = (i / sectors) * 2pi, point (sin v, 0, cos v) * radius.
+    for i in 0:spokes-1
+        v = (i / sectors) * (2π)
+        vi = _write_line_segment!(pos, vi, Vec3(0.0, 0.0, 0.0),
+                                  Vec3(sin(v) * radius, 0.0, cos(v) * radius))
     end
-    # Concentric rings.
-    for ri in 1:rings
-        r = radius * ri / rings
-        prev = Vec3(r, 0.0, 0.0)
-        for k in 1:circle_segments
-            φ = 2π * k / circle_segments
-            cur = Vec3(r * cos(φ), 0.0, r * sin(φ))
-            vi = _write_line_segment!(pos, vi, prev, cur)
-            prev = cur
+    # Rings from the outside in: r = radius - radius / rings * i.
+    # Chord j ends where chord j + 1 starts (the same angle expression), so
+    # each ring evaluates sin/cos once per vertex.
+    for i in 0:rings-1
+        r = radius - (radius / rings * i)
+        previous = Vec3(sin(0.0) * r, 0.0, cos(0.0) * r)
+        for j in 0:circle_segments-1
+            v = ((j + 1) / circle_segments) * (2π)
+            current = Vec3(sin(v) * r, 0.0, cos(v) * r)
+            vi = _write_line_segment!(pos, vi, previous, current)
+            previous = current
         end
     end
     LineSegments(_line_geo(pos), LineBasicMaterial(color=color); name="PolarGridHelper")
