@@ -2621,15 +2621,10 @@ function _rasterize_geo_flat!(rt::RenderTarget, geo, world_mat::Mat4, face_flip:
         depth_colors = colorbuf === nothing ? Color3{Float64}[] : colorbuf
         _shade_depth_faces!(depth_colors, geo, modelview, mat)
     else
-        colorbuf === nothing ?
-            shade_mesh_faces(
-                geo, world_mat, mat, lights, cam_pos;
-                shadow_fn=shadow_fn, camera_view=view,
-                ortho_dir=ortho_dir) :
-            shade_mesh_faces!(
-                colorbuf, geo, world_mat, mat, lights, cam_pos;
-                shadow_fn=shadow_fn, camera_view=view,
-                ortho_dir=ortho_dir)
+        _shade_mesh_faces_flip!(
+            colorbuf === nothing ? Color3{Float64}[] : colorbuf,
+            geo, world_mat, mat, lights, cam_pos, face_flip;
+            shadow_fn=shadow_fn, camera_view=view, ortho_dir=ortho_dir)
     end
     has_uvs = length(geo.uvs) >= geo.n_vertices * 2
     albedo_map = has_uvs ? _material_field(mat, :map) : nothing

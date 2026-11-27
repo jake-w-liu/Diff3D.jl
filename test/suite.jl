@@ -32004,8 +32004,11 @@ end
         reflected_back = render_culling(
             culling_scene(1.0, :back; reflected=true),
             camera, shading)
-        @test all(iszero, reflected_front.color)
-        @test sum(reflected_back.color) > 0.0
+        # A mirrored object matrix keeps three.js front faces
+        # (WebGLRenderer.js:1200 frontFaceCW), so the reflected Mesh is
+        # drawn with :front and culled with :back.
+        @test sum(reflected_front.color) > 0.0
+        @test all(iszero, reflected_back.color)
 
         reflected_instance_front = render_culling(
             culling_scene(
@@ -32015,8 +32018,9 @@ end
             culling_scene(
                 1.0, :back; reflected=true, instanced=true),
             camera, shading)
+        # Instance matrices do not flip the front face in three.js.
         @test all(iszero, reflected_instance_front.color)
-        @test reflected_instance_back.color == reflected_back.color
+        @test reflected_instance_back.color == reflected_front.color
     end
 
     # Authored normals remain the shading source; only culling uses winding.

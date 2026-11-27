@@ -114,6 +114,41 @@ end
     end
 end
 
+@testset "Mirrored instance matrices do not flip the lit normal" begin
+    # three.js flips the front face for the object matrix only
+    # (WebGLRenderer.js:1200). A plane mirrored about x by its instance matrix
+    # keeps the transformed normal (0,0,1) but is drawn with clockwise screen
+    # winding, so gl_FrontFacing is false and DOUBLE_SIDED negates the normal
+    # (normal_fragment_begin.glsl.js): no light from +z reaches it. The same
+    # mirror on the InstancedMesh object matrix is compensated and gives 1/pi.
+    # Flat and smooth shading and render!/render_pooled! must agree.
+    camera = audit3_mirror_camera()
+    for object_mirror in (false, true)
+        scene = Scene()
+        plane = InstancedMesh(PlaneGeometry(),
+                              MeshLambertMaterial(color=Color3(1.0, 1.0, 1.0),
+                                                  side=:double), 1)
+        if object_mirror
+            plane.scale = Vec3(-1.0, 1.0, 1.0)
+        else
+            set_instance_matrix!(plane, 1, mat4_scaling(-1.0, 1.0, 1.0))
+        end
+        add!(scene, plane)
+        light = DirectionalLight(intensity=1.0)
+        light.position = Vec3(0.0, 0.0, 5.0)
+        add!(scene, light)
+        expected = object_mirror ? 1 / π : 0.0
+        for shading in (:flat, :smooth), cache in (nothing, RenderCache())
+            target = RenderTarget(32, 32)
+            render!(target, scene, camera; shading=shading, cache=cache)
+            @test isapprox(target.color[16, 16, 1], expected; atol=1e-12)
+        end
+        pooled = RenderTarget(32, 32)
+        render_pooled!(pooled, scene, camera, RenderCache())
+        @test isapprox(pooled.color[16, 16, 1], expected; atol=1e-12)
+    end
+end
+
 function audit3_front_camera()
     camera = PerspectiveCamera()
     camera.position = Vec3(0.0, 0.0, 4.0)
@@ -172,9 +207,12 @@ end
 
 @testset "Opaque depth ties do not depend on the render cache" begin
     # Coplanar opaque meshes tie in depth; the strict depth test keeps the
-    # first drawn. Draw order is nearest first with ties in ascending id
-    # (three.js painterSortStable, WebGLRenderLists.js:1-29), so mesh 2 (the
-    # lowest id at z=0) keeps the pixel with or without a RenderCache.
+    # first drawn. Opaque draws go nearest first with ties in ascending object
+    # id, so the lowest id at z=0 keeps the pixel with or without a
+    # RenderCache. This pins determinism, not three.js parity: three.js
+    # painterSortStable (WebGLRenderLists.js:1-29) orders by material id before
+    # depth and its default depthFunc is LessEqual, so there the last drawn
+    # coplanar surface wins (node oracle draw order [1,2,3,4,5], winner 4).
     for zs in ([-1.0, 0.0, 0.0, 0.0, -1.0], [-1.0, -1.0, 0.0, 0.0, 0.0, -1.0, 0.0])
         scene = Scene()
         for (i, z) in enumerate(zs)

@@ -1078,8 +1078,8 @@ function _rasterize_geo_flat_pooled!(rt::RenderTarget, geo::BufferGeometry, worl
     modelview = view * world_mat
     lazy_shader_faces = mat isa ShaderMaterial
     face_colors = lazy_shader_faces ? nothing :
-                  shade_mesh_faces!(
-                      colorbuf, geo, world_mat, mat, lights, cam_pos;
+                  _shade_mesh_faces_flip!(
+                      colorbuf, geo, world_mat, mat, lights, cam_pos, face_flip;
                       camera_view=view,
                       ortho_dir=ortho_dir)
     Float64(material_opacity(mat)) >= material_alpha_test(mat) || return nothing
