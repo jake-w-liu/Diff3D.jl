@@ -439,7 +439,7 @@ end
 end
 
 @testset "AnimationMixer finish, reversal and restore through the 1.0 API" begin
-    # AnimationAction.js:780-812: every wrap adds |loopDelta| to the loop count,
+    # AnimationAction.js:806-823: every wrap adds |loopDelta| to the loop count,
     # in either direction; at 0 pending repetitions an unclamped action is
     # disabled and PropertyMixer.apply mixes the original value back in
     # (weight 0). Repeat, 2 repetitions, d = 2: +1.5, +1.0 (wrap, loop 1),
@@ -453,7 +453,7 @@ end
     @test obj.position == Vec3(7.0, 8.0, 9.0)       # 1.0 code sampled clip time 1.5
     @test !m.enabled
     # The finish is sticky: later deltas in either direction change nothing
-    # (a disabled action is skipped, AnimationAction.js:562-567).
+    # (a disabled action is skipped, AnimationAction.js:564-570).
     obj.position = Vec3(-4.0, 0.0, 0.0)
     mixer_update!(m, -0.5); mixer_update!(m, 0.75)
     @test obj.position == Vec3(-4.0, 0.0, 0.0)
@@ -483,7 +483,7 @@ end
 end
 
 @testset "AnimationMixer zero_slope_at_start / zero_slope_at_end" begin
-    # AnimationAction._setEndings (AnimationAction.js:882-915) with
+    # AnimationAction._setEndings (AnimationAction.js:882-917) with
     # zeroSlopeAtStart/End. Oracle (node, r186): smooth position[x] keys
     # [0, .5, 2] -> [0, 1, -3], clip 2 s, updates 0.25, 1.0, 0.5, 0.75, 0.375.
     expected = Dict(
@@ -633,4 +633,120 @@ end
     @test [tr.component for tr in groups[1].tracks] == [1, 2, 4]
     @test [tr.component for tr in groups[2].tracks] == [3, 5, 7]
     @test Diff3D.clip_find_by_name(groups, "run") === groups[2]
+end
+
+# Oracle for the helper testsets: node, three.js r186; world-space vertex
+# lists of each helper as WebGLRenderer draws it (LineSegments pairs, Line
+# strips as consecutive pairs, wireframe meshes as the three edges of every
+# triangle). three.js keeps positions in Float32 buffers, hence rtol 1e-6.
+_helper_close(a, b) = length(a) == length(b) &&
+    isapprox(a, b; rtol=1e-6, atol=1e-6 * max(1.0, maximum(abs, b)))
+_helper_colors(h) = get_attribute(h.geometry, :color).data
+
+@testset "light helpers match three.js geometry and colours" begin
+    rig = Group(); rig.position = Vec3(0.0, 1.0, 0.0); rig.rotation = Euler(0.0, 0.5, 0.0)
+
+    # PointLightHelper.js: SphereGeometry(0.5, 4, 2) wireframe in the light's
+    # world matrix (light at (1,2,3), rotation (.25,.5,.125), in the rig);
+    # 8 triangles -> 24 edges; colour = light.color.
+    pl = PointLight(position=Vec3(1.0, 2.0, 3.0), color=Color3(1.0, 0.25, 0.0))
+    pl.rotation = Euler(0.25, 0.5, 0.125); add!(rig, pl)
+    ph = PointLightHelper(pl, 0.5)
+    @test ph.geometry.n_vertices == 48
+    @test _helper_close(ph.geometry.positions[1:6],
+        [2.340575891, 3.473282376, 2.312673571, 2.036877042, 2.880757387, 2.550751596])
+    @test _helper_close(ph.geometry.positions[end-5:end],
+        [2.291142465, 2.526717624, 1.993970723, 2.036877042, 2.880757387, 2.550751596])
+    @test ph.material.color == pl.color
+    @test PointLightHelper(PointLight()).geometry.positions[2] == 1.0   # sphereSize defaults to 1
+
+    # DirectionalLightHelper.js: lightPlane (5-point Line, size 0.5) and
+    # targetLine, both lookAt(target); light (5,4,3) -> (0,0,0).
+    dl = DirectionalLight(position=Vec3(5.0, 4.0, 3.0), color=Color3(0.0, 1.0, 0.0))
+    dl.target = Vec3(0.0, 0.0, 0.0)
+    dh = DirectionalLightHelper(dl, 0.5)
+    @test _helper_close(dh.geometry.positions,
+        [5.014712253, 4.412310563, 2.425732162, 4.500216497, 4.412310563, 3.283225088,
+         4.500216497, 4.412310563, 3.283225088, 4.985287747, 3.587689437, 3.574267838,
+         4.985287747, 3.587689437, 3.574267838, 5.499783503, 3.587689437, 2.716774912,
+         5.499783503, 3.587689437, 2.716774912, 5.014712253, 4.412310563, 2.425732162,
+         5, 4, 3, 0, 0, 0])
+    @test dh.material.color == dl.color
+    # Straight down: Matrix4.lookAt nudges z by 1e-4 when up x z is zero.
+    down = DirectionalLight(position=Vec3(0.0, 5.0, 0.0)); down.target = Vec3(0.0, 0.0, 0.0)
+    @test _helper_close(DirectionalLightHelper(down, 0.5).geometry.positions,
+        [-0.5, 5.00005, 0.4999999975, 0.5, 5.00005, 0.4999999975, 0.5, 5.00005, 0.4999999975,
+         0.5, 4.99995, -0.4999999975, 0.5, 4.99995, -0.4999999975, -0.5, 4.99995, -0.4999999975,
+         -0.5, 4.99995, -0.4999999975, -0.5, 5.00005, 0.4999999975, 0, 5, 0,
+         0, 2.500000029e-8, 0.0004999999975])
+
+    # SpotLightHelper.js: 5 spokes + 32-chord circle, scale (w, w, L) with
+    # L = distance || 1000 and w = L tan(angle); light (0,2,0) in the rig,
+    # target (1,0,0.5), angle pi/6.
+    s4 = SpotLight(position=Vec3(0.0, 2.0, 0.0), target=Vec3(1.0, 0.0, 0.5),
+                   angle=π / 6, distance=4.0)
+    add!(rig, s4)
+    sh = SpotLightHelper(s4)
+    @test sh.geometry.n_vertices == 74
+    @test _helper_close(sh.geometry.positions[1:12],
+        [0, 3, 0, 1.249390095, -0.7481702853, 0.6246950476, 0, 3, 0,
+         2.282185654, -0.7481702853, -1.44089607])
+    @test _helper_close(sh.geometry.positions[end-5:end],
+        [1.884734292, -0.9055063079, -1.590009482, 2.282185654, -0.7481702853, -1.44089607])
+    s0 = SpotLight(position=Vec3(0.0, 2.0, 0.0), target=Vec3(1.0, 0.0, 0.5), angle=π / 6)
+    add!(rig, s0)
+    @test _helper_close(SpotLightHelper(s0).geometry.positions[4:6],
+                        [312.3475238, -934.0425713, 156.1737619])
+
+    # HemisphereLightHelper.js: OctahedronGeometry(0.75).rotateY(pi/2),
+    # lookAt(-light position); first half of the vertices sky, second ground.
+    sky = Color3(0.03310476616, 0.1328683197, 1.0)               # 0x3366ff
+    ground = Color3(0.2158605009, 0.05126945674, 0.01444384363)  # 0x804020
+    hl = HemisphereLight(color=sky, ground_color=ground); hl.position = Vec3(0.0, 1.0, 0.0)
+    hh = HemisphereLightHelper(hl, 0.75)
+    @test hh.geometry.n_vertices == 48
+    @test _helper_close(hh.geometry.positions[1:9],
+        [0, 1.000075, 0.7499999963, 0.75, 1, 0, 0.75, 1, 0])
+    @test _helper_close(hh.geometry.positions[end-8:end],
+        [0, 0.2500000037, 0.00007499999962, 0, 0.2500000037, 0.00007499999962, 0.75, 1, 0])
+    cols = _helper_colors(hh)
+    @test cols[1:3] == [sky.r, sky.g, sky.b] && cols[70:72] == [sky.r, sky.g, sky.b]
+    @test cols[73:75] == [ground.r, ground.g, ground.b] && cols[end-2:end] == [ground.r, ground.g, ground.b]
+    @test hh.material.color == Color3(1.0, 1.0, 1.0)
+    hl.position = Vec3(2.0, 3.0, -1.0)
+    @test _helper_close(HemisphereLightHelper(hl, 0.75).geometry.positions[1:9],
+        [1.462147126, 3.448210729, -0.7310735629, 2.335410197, 3, -0.3291796068,
+         2.335410197, 3, -0.3291796068])
+    tinted = HemisphereLightHelper(hl, 0.75; color=Color3(1.0, 0.0, 0.0))
+    @test !has_attribute(tinted.geometry, :color) && tinted.material.color == Color3(1.0, 0.0, 0.0)
+end
+
+@testset "grid and skeleton helpers use three.js vertex colours" begin
+    # SkeletonHelper.js: each segment is (bone, parent) coloured 0x0000ff and
+    # 0x00ff00; depthTest/depthWrite false. Bones (0,0,1) > +y 1 > +x 2.
+    b0 = Bone(); b1 = Bone(); b2 = Bone()
+    b0.position = Vec3(0.0, 0.0, 1.0); b1.position = Vec3(0.0, 1.0, 0.0)
+    b2.position = Vec3(2.0, 0.0, 0.0); add!(b0, b1); add!(b1, b2)
+    sk = SkeletonHelper(Skeleton([b0, b1, b2]))
+    @test sk.geometry.positions == [0.0, 1, 1, 0, 0, 1, 2, 1, 1, 0, 1, 1]
+    @test _helper_colors(sk) == [0.0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 1, 0]
+    @test !sk.material.depth_test && !sk.material.depth_write
+    @test !has_attribute(SkeletonHelper(Skeleton([b0, b1, b2]); color=Color3(1.0, 0.0, 0.0)).geometry, :color)
+
+    # GridHelper.js: colour1 0x444444 on the centre line (i == divisions/2),
+    # colour2 0x888888 elsewhere, in the linear working space (three.js keeps
+    # them in a Float32 buffer, hence atol 1e-8).
+    c1 = 0.05780543014; c2 = 0.2462013215
+    g = GridHelper(4.0, 2)
+    @test all(isapprox.(_helper_colors(g)[1:12:end], [c2, c1, c2]; atol=1e-8))
+    @test all(isapprox.(_helper_colors(GridHelper(3.0, 3)), c2; atol=1e-8))
+    @test g.material.color == Color3(1.0, 1.0, 1.0)
+    plain = GridHelper(4.0, 2; color=Color3(0.5, 0.5, 0.5))
+    @test !has_attribute(plain.geometry, :color) && plain.material.color == Color3(0.5, 0.5, 0.5)
+
+    # PolarGridHelper.js (radius 2, 4 sectors, 2 rings, 4 divisions): sectors
+    # and rings alternate colour2, colour1 by index parity.
+    pg = PolarGridHelper(2.0, 4, 2; circle_segments=4)
+    @test all(isapprox.(_helper_colors(pg)[1:6:end],
+                       [c2, c1, c2, c1, c2, c2, c2, c2, c1, c1, c1, c1]; atol=1e-8))
 end

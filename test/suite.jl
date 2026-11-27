@@ -11182,9 +11182,13 @@ end
         mixer_set_time!(AnimationMixer(once_clip), 2.5)
         @test mesh.position.x ≈ 10.0
         @test mesh.position.y ≈ 5.0
+        # An unclamped :once action that finishes is disabled
+        # (AnimationAction.js:771-772) and PropertyMixer.apply mixes back the
+        # value saved when it started playing, here the clamped pose (10, 5, 0).
         once_reset = AnimationMixer(AnimationClip("once_reset", [tr]; loop=:once))
         mixer_set_time!(once_reset, 2.5)
-        @test mesh.position.x ≈ 0.0
+        @test mesh.position.x ≈ 10.0
+        @test mesh.position.y ≈ 5.0
         pingpong = AnimationMixer(AnimationClip("pingpong", [tr]; loop=:pingpong))
         mixer_set_time!(pingpong, 2.5)
         @test mesh.position.x ≈ 10.0
@@ -11617,7 +11621,10 @@ end
         @test GridHelper(10.0, 5).geometry.n_vertices == 24      # 6 lines × 2 dirs × 2 verts
         grid64 = GridHelper(10.0, 64)
         @test grid64.geometry.n_vertices == 260                  # 65 lines × 2 dirs × 2 verts
-        @test_opt_alloc 12000 GridHelper(10.0, 64)
+        # GridHelper.js also fills a colour buffer as large as the positions
+        # (65 x 4 vertices x 3 floats); Julia 1.13/1.10 account 15,552/14,448 bytes.
+        @test has_attribute(grid64.geometry, :color)
+        @test_opt_alloc 16384 GridHelper(10.0, 64)
         helper_mesh = Mesh(BoxGeometry(width=2.0,height=2.0,depth=2.0), MeshBasicMaterial())
         bh = BoxHelper(helper_mesh)
         @test bh.geometry.n_vertices == 24                       # 12 edges × 2 verts
@@ -11625,8 +11632,11 @@ end
         helper_camera = PerspectiveCamera()
         @test CameraHelper(helper_camera).geometry.n_vertices == 24
         @test_opt_alloc 2048 CameraHelper(helper_camera)
-        @test DirectionalLightHelper(DirectionalLight(position=Vec3(5.0,5,5))).geometry.n_vertices == 2
-        @test PointLightHelper(PointLight(position=Vec3(1.0,1,1))).geometry.n_vertices == 6
+        # DirectionalLightHelper.js: a 4-segment light plane plus the target
+        # line; PointLightHelper.js: SphereGeometry(r, 4, 2) wireframe, 8
+        # triangles of 3 edges.
+        @test DirectionalLightHelper(DirectionalLight(position=Vec3(5.0,5,5))).geometry.n_vertices == 10
+        @test PointLightHelper(PointLight(position=Vec3(1.0,1,1))).geometry.n_vertices == 48
     end
 
     @testset "Alpha PNG round-trip" begin
@@ -14234,21 +14244,22 @@ end
 
         # [CTRL:controls] SpotLightHelper / HemisphereLightHelper / SkeletonHelper / PlaneHelper / PolarGr
         @testset "Control helpers geometry" begin
-            # SpotLightHelper: cone with 16-segment base ring + 4 spokes = 20 segments = 40 verts.
+            # SpotLightHelper.js: 5 spokes + 32-segment circle = 37 segments = 74 verts.
             sl = SpotLight(position=Vec3(0.0,2.0,0.0), angle=pi/6)
             sh = SpotLightHelper(sl)
             @test sh isa LineSegments
-            @test sh.geometry.n_vertices == 40
+            @test sh.geometry.n_vertices == 74
             @test iseven(sh.geometry.n_vertices)
             @test_opt_alloc 4096 SpotLightHelper(sl)
 
-            # HemisphereLightHelper: octahedron (4 equator + 8 spoke segs = 12 segs = 24 verts) with colors.
+            # HemisphereLightHelper.js: wireframe octahedron, 8 triangles x 3 edges
+            # = 24 segs = 48 verts, sky/ground vertex colours.
             hl = HemisphereLight(color=Color3(0.1,0.2,0.9), ground_color=Color3(0.3,0.2,0.1))
             hh = HemisphereLightHelper(hl, 1.0)
             @test hh isa LineSegments
-            @test hh.geometry.n_vertices == 24
+            @test hh.geometry.n_vertices == 48
             @test has_attribute(hh.geometry, :color)
-            @test length(get_attribute(hh.geometry, :color).data) == 72
+            @test length(get_attribute(hh.geometry, :color).data) == 144
             @test_opt_alloc 4096 HemisphereLightHelper(hl, 1.0)
 
             # SkeletonHelper: two bones, child offset from parent; one bone-to-parent segment.
@@ -14261,8 +14272,9 @@ end
             @test sk.geometry.n_vertices == 2          # exactly one connecting segment
             @test_opt_alloc 4096 SkeletonHelper(skel)
             px = sk.geometry.positions
-            @test isapprox(px[4]-px[1], 0.0; atol=1e-9) # parent->child spans +y by 1
-            @test isapprox(px[5]-px[2], 1.0; atol=1e-9)
+            # SkeletonHelper.js writes the bone, then its parent.
+            @test isapprox(px[1]-px[4], 0.0; atol=1e-9) # child->parent spans -y by 1
+            @test isapprox(px[2]-px[5], 1.0; atol=1e-9)
             helper_geo = PlaneGeometry(width=1.0, height=1.0)
             helper_idx = fill((1, 1, 1, 1), helper_geo.n_vertices)
             helper_wts = fill((1.0, 0.0, 0.0, 0.0), helper_geo.n_vertices)
@@ -14279,7 +14291,7 @@ end
             deep_skel = Skeleton(deep_bones, fill(Mat4{Float64}(), length(deep_bones)))
             deep_sk = SkeletonHelper(deep_skel)
             @test deep_sk.geometry.n_vertices == 254
-            @test deep_sk.geometry.positions[end-5:end] == [0.0, 126.0, 0.0, 0.0, 127.0, 0.0]
+            @test deep_sk.geometry.positions[end-5:end] == [0.0, 127.0, 0.0, 0.0, 126.0, 0.0]
             @test_opt_alloc 80000 SkeletonHelper(deep_skel)
 
             # PlaneHelper: 4 square edges + 1 normal = 5 segs = 10 verts.
@@ -14295,7 +14307,9 @@ end
             @test pg isa LineSegments
             @test pg.geometry.n_vertices == 1056
             @test iseven(pg.geometry.n_vertices)
-            @test_opt_alloc 35000 PolarGridHelper(10.0, 16, 8)
+            # PolarGridHelper.js also fills a colour buffer as large as the
+            # positions; Julia 1.13/1.10 account 58,560/52,176 bytes.
+            @test_opt_alloc 64000 PolarGridHelper(10.0, 16, 8)
         end
 
         # [RAY:raycaster] Raycaster Points/Line thresholds + Layers filtering + recursive flag (three.js R
@@ -18031,16 +18045,19 @@ end
             qdot = abs(q.x*q2.x + q.y*q2.y + q.z*q2.z + q.w*q2.w)
             @test isapprox(qdot, 1.0; atol=1e-6)                   # old code: ~0.9553
 
-            # SpotLightHelper with position == target falls back to a unit cone along (0,-1,0).
+            # SpotLightHelper with position == target: Matrix4.lookAt turns a
+            # zero z into (0,0,1) (Matrix4.js lookAt), so the cone of length
+            # 1000 (distance 0, SpotLightHelper.js update) points along +z.
             sl = SpotLight(position=Vec3(1.0, 2.0, 3.0), target=Vec3(1.0, 2.0, 3.0), angle=pi/6)
             sh = SpotLightHelper(sl)
             ps = sh.geometry.positions
-            ys = ps[2:3:end]
-            @test isapprox(maximum(ys), 2.0; atol=1e-9)            # apex at the light position
-            @test isapprox(minimum(ys), 1.0; atol=1e-9)            # base one unit below (old: collapsed point)
-            xs = ps[1:3:end]; zs = ps[3:3:end]
-            rmax = maximum(sqrt.((xs .- 1.0).^2 .+ (zs .- 3.0).^2))
-            @test isapprox(rmax, tan(pi/6); atol=1e-9)             # base ring radius tan(angle)
+            @test all(isfinite, ps)                                 # old code: collapsed point
+            zs = ps[3:3:end]
+            @test isapprox(minimum(zs), 3.0; atol=1e-9)            # apex at the light position
+            @test isapprox(maximum(zs), 1003.0; atol=1e-9)         # base 1000 units along +z
+            xs = ps[1:3:end]; ys = ps[2:3:end]
+            rmax = maximum(sqrt.((xs .- 1.0).^2 .+ (ys .- 2.0).^2))
+            @test isapprox(rmax, 1000 * tan(pi/6); rtol=1e-12)     # base ring radius L tan(angle)
         end
 
         @testset "loaders" begin

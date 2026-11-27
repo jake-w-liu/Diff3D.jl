@@ -3117,7 +3117,7 @@ function AnimationMixer(clip::AnimationClip; loop::Union{Symbol,Nothing}=nothing
                          zero_slope_at_start, zero_slope_at_end)
 end
 
-# three.js AnimationAction._setEndings (AnimationAction.js:882-915).
+# three.js AnimationAction._setEndings (AnimationAction.js:882-917).
 function _set_action_endings!(mixer::AnimationMixer, at_start::Bool, at_end::Bool,
                               pingpong::Bool)
     if pingpong
@@ -3133,7 +3133,7 @@ function _set_action_endings!(mixer::AnimationMixer, at_start::Bool, at_end::Boo
 end
 
 # A finishing action pauses on its last pose when clamping, otherwise it is
-# disabled (AnimationAction.js:734-735, 808-809).
+# disabled (AnimationAction.js:771-772, 822-823).
 @inline function _finish_action!(mixer::AnimationMixer)
     mixer.clamp_when_finished ? (mixer.paused = true) : (mixer.enabled = false)
     return nothing
@@ -3143,7 +3143,7 @@ end
 # cannot throw (exact for every count below 2^52).
 @inline _action_loop_delta(x::Float64) = Int(clamp(floor(x), -2.0^52, 2.0^52))
 
-# three.js AnimationAction._updateTime (AnimationAction.js:689-880): advance
+# three.js AnimationAction._updateTime (AnimationAction.js:724-880): advance
 # the clip-local time by the scaled `delta` and return the clip time to
 # sample. A zero-length repeating clip samples time 0 (three.js divides by
 # the zero duration there).
@@ -3217,10 +3217,14 @@ function _update_action_time!(mixer::AnimationMixer, delta::Float64)
     return pingpong && isodd(loop_count) ? duration - time : time
 end
 
-# Clip time that `mixer_set_time!(mixer, t)` samples (t already scaled), in
-# closed form for the exported web player's clipTime, which plays clips from
-# absolute time; `nothing` when the action finishes unclamped (disabled, so
-# the original values show).
+# Clip time of an action played from its start up to (scaled) time `t` in
+# frame steps shorter than the clip, in closed form for the exported web
+# player's clipTime; `nothing` once the action finishes unclamped (disabled,
+# so the original values show). While running this is what one
+# _update_action_time! step of `t` gives (mixer_set_time!). After a clamped
+# finish three.js keeps the loop count from before the final wrap
+# (AnimationAction.js:815-829 leaves `_loopCount` unchanged), so later frames
+# mirror a pingpong clip by that count, not by the finishing step's count.
 function _animation_loop_time(t::Real, duration::Real, loop::Symbol,
                               repetitions::Int, clamp_when_finished::Bool)
     duration isa Bool &&
@@ -3233,8 +3237,6 @@ function _animation_loop_time(t::Real, duration::Real, loop::Symbol,
     isfinite(x) ||
         throw(ArgumentError("animation time must be finite"))
     loop = _animation_loop_mode(loop)
-    # One _update_action_time! step of `x` from a restarted action (what
-    # mixer_set_time! samples); `nothing` when that step disables it.
     x == 0.0 && return 0.0
     if loop === :once
         0.0 < x < d && return x
@@ -3251,6 +3253,12 @@ function _animation_loop_time(t::Real, duration::Real, loop::Symbol,
         if repetitions >= 0 && repetitions - loop_count <= 0
             clamp_when_finished || return nothing
             time = x > 0.0 ? d : 0.0
+            # Frame steps wrap one loop at a time, so the kept count is the
+            # finishing count minus one: forward max(repetitions, 1) - 1,
+            # backward (from -1, first wrap free) repetitions - 1. A kept
+            # count of -1 returns the time unmirrored (_updateTime, deltaTime 0).
+            kept = (x > 0.0 ? max(repetitions, 1) : repetitions) - 1
+            return loop === :pingpong && kept >= 0 && isodd(kept) ? d - time : time
         end
     end
     return loop === :pingpong && isodd(loop_count) ? d - time : time
@@ -3781,7 +3789,7 @@ function _write_morph_component_track_tree!(@nospecialize(node), tr::NumberKeyfr
 end
 
 # Sample `tr` at the mixer's clip time. A :cubic track evaluates like the
-# action's CubicInterpolant (Interpolant.evaluate, CubicInterpolant.js:40-118):
+# action's CubicInterpolant (Interpolant.js:92-248, CubicInterpolant.js:41-155):
 # outside the keys it copies the end value and forgets its interval; inside,
 # it computes its weights with the action's current endings only when the
 # sample enters a different key interval, and keeps them while it stays.
@@ -4243,32 +4251,72 @@ function AxesHelper(size=1.0)
     LineSegments(geo, LineBasicMaterial(color=Color3(1.0,1.0,1.0)); name="AxesHelper")
 end
 
+# three.js `new Color(hex)` in the linear working space (Color.setHex with
+# ColorManagement converting from sRGB).
+_helper_hex_color(hex::Integer) = Color3(srgb_to_linear(((hex >> 16) & 0xff) / 255),
+                                         srgb_to_linear(((hex >> 8) & 0xff) / 255),
+                                         srgb_to_linear((hex & 0xff) / 255))
+
+# GridHelper.js / PolarGridHelper.js default colours 0x444444 and 0x888888.
+const _HELPER_GRID_COLOR1 = _helper_hex_color(0x444444)
+const _HELPER_GRID_COLOR2 = _helper_hex_color(0x888888)
+
+# Line material and per-vertex colours of a helper: three.js helpers draw
+# with `vertexColors` and a white material; an explicit `color` instead
+# draws every line in that one colour.
+function _helper_line_object(T, pos::Vector{Float64}, colors::Vector{Float64}, color,
+                             name::String; depth_test::Bool=true)
+    geo = _line_geo(pos)
+    if color === nothing
+        set_attribute!(geo, :color, colors, 3)
+        color = Color3(1.0, 1.0, 1.0)
+    end
+    return T(geo, LineBasicMaterial(color=color, depth_test=depth_test,
+                                    depth_write=depth_test); name=name)
+end
+
 """
+    GridHelper(size=10.0, divisions=10; color=nothing,
+               color1=<0x444444>, color2=<0x888888>)
+
 A `divisions`×`divisions` grid of size `size` on the xz-plane, with the
 vertex order of three.js `GridHelper`: for each offset `k` from `-size/2`, a
-line parallel to x and then one parallel to z.
+line parallel to x and then one parallel to z. As in three.js the centre
+lines (present when `divisions` is even) take `color1` and the others
+`color2`, as a per-vertex `:color` attribute; the defaults are three.js's
+`0x444444` and `0x888888` in the linear working space. Passing `color`
+draws every line in that colour instead.
 """
-function GridHelper(size=10.0, divisions=10; color=Color3(0.5,0.5,0.5))
+function GridHelper(size=10.0, divisions=10; color=nothing,
+                    color1=_HELPER_GRID_COLOR1, color2=_HELPER_GRID_COLOR2)
     size = _geometry_finite_float(size, "GridHelper size")
     divisions = _clamp_seg(divisions, 1)   # divisions=0 would make step=Inf -> NaN vertices
     lines = _geometry_checked_mul(
         2, _geometry_checked_add(divisions, 1, "GridHelper line count"),
         "GridHelper line count")
-    pos = Vector{Float64}(
-        undef, _helper_line_position_length(lines, "GridHelper"))
+    len = _helper_line_position_length(lines, "GridHelper")
+    pos = Vector{Float64}(undef, len)
+    colors = Vector{Float64}(undef, color === nothing ? len : 0)
     step = size / divisions; half = size / 2
+    center = divisions / 2
     vi = 1
     k = -half
     # GridHelper.js: `k` advances by `k += step`, not `-half + i*step`.
-    for _ in 0:divisions
+    for i in 0:divisions
         _write_line_vertex!(pos, vi, -half, 0.0, k)
         _write_line_vertex!(pos, vi + 1, half, 0.0, k)      # parallel to x
         _write_line_vertex!(pos, vi + 2, k, 0.0, -half)
         _write_line_vertex!(pos, vi + 3, k, 0.0, half)      # parallel to z
+        if color === nothing
+            c = i == center ? color1 : color2
+            for j in 0:3
+                _write_line_color!(colors, vi + j, c)
+            end
+        end
         vi += 4
         k += step
     end
-    LineSegments(_line_geo(pos), LineBasicMaterial(color=color); name="GridHelper")
+    _helper_line_object(LineSegments, pos, colors, color, "GridHelper")
 end
 
 function _box_edge_positions(c1::Vec3, c2::Vec3, c3::Vec3, c4::Vec3,
@@ -4357,103 +4405,184 @@ function CameraHelper(camera::AbstractCamera; color=Color3(1.0,1.0,1.0))
     LineSegments(_line_geo(pos), LineBasicMaterial(color=color); name="CameraHelper")
 end
 
-"""A single segment from a directional light's position toward its target."""
-function DirectionalLightHelper(light::DirectionalLight; color=Color3(1.0,1.0,0.0))
-    p = _light_world_position(light); t = _light_world_target(light)
-    LineSegments(_line_geo(Float64[p.x,p.y,p.z, t.x,t.y,t.z]),
-                 LineBasicMaterial(color=color); name="DirectionalLightHelper")
+# Translation (column 4) of a 4×4 transform.
+@inline _mat4_translation_vec(m::Mat4) =
+    Vec3(mat4_get(m, 1, 4), mat4_get(m, 2, 4), mat4_get(m, 3, 4))
+
+# World matrix of a helper part placed at the origin of `parent` (a light's
+# world matrix) and turned by three.js `Object3D.lookAt(target)`
+# (Object3D.js lookAt): Matrix4.lookAt(target, position, up) gives the world
+# rotation, which is made relative to the parent's rotation
+# (Matrix4.extractRotation), so the parent's scale still applies.
+function _helper_look_at_world(parent::Mat4, target::Vec3)
+    position = _mat4_translation_vec(parent)
+    v = mat4_look_at(target, position, Vec3(0.0, 1.0, 0.0)).e
+    # mat4_look_at returns the transposed (view) rotation: its rows are the
+    # x, y and z axes of the rotation three.js builds.
+    look = Mat4{Float64}((v[1], v[5], v[9], 0.0,
+                          v[2], v[6], v[10], 0.0,
+                          v[3], v[7], v[11], 0.0,
+                          0.0, 0.0, 0.0, 1.0))
+    s1 = _mat4_linear_column_norm(parent, 1)
+    s2 = _mat4_linear_column_norm(parent, 2)
+    s3 = _mat4_linear_column_norm(parent, 3)
+    m(r, c) = mat4_get(parent, r, c)
+    inverse_rotation = Mat4{Float64}((m(1, 1) / s1, m(1, 2) / s2, m(1, 3) / s3, 0.0,
+                                      m(2, 1) / s1, m(2, 2) / s2, m(2, 3) / s3, 0.0,
+                                      m(3, 1) / s1, m(3, 2) / s2, m(3, 3) / s3, 0.0,
+                                      0.0, 0.0, 0.0, 1.0))
+    return parent * inverse_rotation * look
 end
 
-"""Cross-hair lines marking a point light's position."""
-function PointLightHelper(light::PointLight, size=0.5; color=Color3(1.0,1.0,0.0))
-    p = _light_world_position(light)
+"""
+    DirectionalLightHelper(light::DirectionalLight, size=1.0; color=light.color)
+
+Wireframe of three.js `DirectionalLightHelper`: a square of half-width
+`size` at the light, facing its target, and a line from the light to the
+target. Both follow the light's world matrix (so a scaled light scales them)
+and are turned toward the target like `Object3D.lookAt`.
+"""
+function DirectionalLightHelper(light::DirectionalLight, size=1.0; color=light.color)
+    size = _geometry_finite_float(size, "DirectionalLightHelper size")
+    parent = compute_world_matrix(light)::Mat4{Float64}
+    target = _light_world_target(light)
+    world = _helper_look_at_world(parent, target)
+    s = size
+    pos = Vector{Float64}(undef, 30)
+    vi = 1
+    # DirectionalLightHelper.js lightPlane: a Line through these five points.
+    corners = ((-s, s), (s, s), (s, -s), (-s, -s), (-s, s))
+    for k in 1:4
+        a = mat4_transform_point(world, Vec3(corners[k][1], corners[k][2], 0.0))
+        b = mat4_transform_point(world, Vec3(corners[k + 1][1], corners[k + 1][2], 0.0))
+        vi = _write_line_segment!(pos, vi, a, b)
+    end
+    # targetLine: (0,0,0)-(0,0,1) with scale.z = |target - light|.
+    distance = norm(target - _mat4_translation_vec(parent))
+    _write_line_segment!(pos, vi, mat4_transform_point(world, Vec3(0.0, 0.0, 0.0)),
+                         mat4_transform_point(world, Vec3(0.0, 0.0, distance)))
+    LineSegments(_line_geo(pos), LineBasicMaterial(color=color);
+                 name="DirectionalLightHelper")
+end
+
+@inline function _write_triangle_edges!(pos::Vector{Float64}, vi::Int, a::Vec3, b::Vec3, c::Vec3)
+    vi = _write_line_segment!(pos, vi, a, b)
+    vi = _write_line_segment!(pos, vi, b, c)
+    return _write_line_segment!(pos, vi, c, a)
+end
+
+"""
+    PointLightHelper(light::PointLight, size=1.0; color=light.color)
+
+three.js `PointLightHelper`: the wireframe of `SphereGeometry(size, 4, 2)`
+(an octahedron) placed by the light's world matrix, drawn as the three edges
+of each of its eight triangles like a `wireframe` mesh.
+"""
+function PointLightHelper(light::PointLight, size=1.0; color=light.color)
     size = _geometry_finite_float(size, "PointLightHelper size")
-    pos = Float64[p.x-size,p.y,p.z, p.x+size,p.y,p.z,
-                  p.x,p.y-size,p.z, p.x,p.y+size,p.z,
-                  p.x,p.y,p.z-size, p.x,p.y,p.z+size]
+    world = compute_world_matrix(light)::Mat4{Float64}
+    # SphereGeometry.js vertex grid for widthSegments 4, heightSegments 2.
+    grid = ntuple(Val(3)) do row
+        v = (row - 1) / 2
+        ntuple(Val(5)) do column
+            u = (column - 1) / 4
+            mat4_transform_point(world, Vec3(-size * cos(u * (2π)) * sin(v * π),
+                                             size * cos(v * π),
+                                             size * sin(u * (2π)) * sin(v * π)))
+        end
+    end
+    pos = Vector{Float64}(undef, 144)
+    vi = 1
+    # SphereGeometry.js indices: the top row keeps only (b, c, d) and the
+    # bottom row only (a, b, d).
+    for iy in 1:2, ix in 1:4
+        a = grid[iy][ix + 1]; b = grid[iy][ix]
+        c = grid[iy + 1][ix]; d = grid[iy + 1][ix + 1]
+        iy != 1 && (vi = _write_triangle_edges!(pos, vi, a, b, d))
+        iy != 2 && (vi = _write_triangle_edges!(pos, vi, b, c, d))
+    end
     LineSegments(_line_geo(pos), LineBasicMaterial(color=color); name="PointLightHelper")
 end
 
 """
-Cone outline of a spot light: the apex sits at the light position and the base
-circle marks the cone of half-angle `light.angle` at the distance to the target
-(three.js `SpotLightHelper`). Four apex-to-rim spokes plus the base ring.
+    SpotLightHelper(light::SpotLight; color=light.color, segments=32)
+
+three.js `SpotLightHelper`: five lines from the light to `(0,0,1)`,
+`(±1,0,1)` and `(0,±1,1)` and a `segments`-chord circle of radius 1 at
+`z = 1` (three.js uses 32), scaled to the cone width
+`length * tan(light.angle)` and length `light.distance` (1000 when the
+distance is 0), turned toward the target and placed by the light's world
+matrix.
 """
-function SpotLightHelper(light::SpotLight; color=light.color, segments::Int=16)
+function SpotLightHelper(light::SpotLight; color=light.color, segments::Int=32)
     segments = _geometry_nonnegative_int(segments, "SpotLightHelper segments")
-    apex = _light_world_position(light)
-    axis = _light_world_target(light) - apex
-    len = norm(axis)
-    dir = len > 0 ? normalize(axis) : Vec3(0.0, -1.0, 0.0)
-    len = len > 0 ? len : 1.0
-    base = apex + dir * len
-    r = len * tan(light.angle)              # cone base radius at the target plane
-    u, v = _perp_basis(dir)
     total_segments = _geometry_checked_add(
-        segments, 4, "SpotLightHelper segment count")
+        segments, 5, "SpotLightHelper segment count")
     pos = Vector{Float64}(
         undef, _helper_line_position_length(
             total_segments, "SpotLightHelper"))
+    parent = compute_world_matrix(light)::Mat4{Float64}
+    world = _helper_look_at_world(parent, _light_world_target(light))
+    cone_length = light.distance != 0 ? light.distance : 1000.0
+    cone_width = cone_length * tan(light.angle)
+    cone(x, y, z) = mat4_transform_point(
+        world, Vec3(x * cone_width, y * cone_width, z * cone_length))
+    apex = cone(0.0, 0.0, 0.0)
     vi = 1
-    # Base ring.
-    prev = base + u * r
-    for k in 1:segments
-        φ = 2π * k / segments
-        cur = base + (u * (r * cos(φ)) + v * (r * sin(φ)))
-        vi = _write_line_segment!(pos, vi, prev, cur)
-        prev = cur
+    for (x, y) in ((0.0, 0.0), (1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0))
+        vi = _write_line_segment!(pos, vi, apex, cone(x, y, 1.0))
     end
-    # Four spokes from apex to the rim.
-    for φ in (0.0, π/2, π, 3π/2)
-        rim = base + (u * (r * cos(φ)) + v * (r * sin(φ)))
-        vi = _write_line_segment!(pos, vi, apex, rim)
+    for i in 0:segments-1
+        p1 = (i / segments) * π * 2
+        p2 = ((i + 1) / segments) * π * 2
+        vi = _write_line_segment!(pos, vi, cone(cos(p1), sin(p1), 1.0),
+                                  cone(cos(p2), sin(p2), 1.0))
     end
     LineSegments(_line_geo(pos), LineBasicMaterial(color=color); name="SpotLightHelper")
 end
 
-"""
-Small octahedron wireframe at a hemisphere light's position, sized by `size`
-(three.js `HemisphereLightHelper` uses a sphere/octahedron icon). The upper apex
-takes the sky colour, the lower apex the ground colour, stored as a per-vertex
-`:color` attribute.
-"""
-function HemisphereLightHelper(light::HemisphereLight, size=1.0; color=light.color)
-    size = _geometry_finite_float(size, "HemisphereLightHelper size")
-    p = _light_world_position(light); s = size
-    top = Vec3(p.x, p.y+s, p.z); bot = Vec3(p.x, p.y-s, p.z)
-    px = Vec3(p.x+s, p.y, p.z); nx = Vec3(p.x-s, p.y, p.z)
-    pz = Vec3(p.x, p.y, p.z+s); nz = Vec3(p.x, p.y, p.z-s)
-    eq = (px, pz, nx, nz)
-    pos = Vector{Float64}(undef, 72)
-    vi = 1
-    # Equator ring.
-    for k in 1:4
-        vi = _write_line_segment!(pos, vi, eq[k], eq[mod1(k+1, 4)])
-    end
-    # Spokes to the two apices.
-    for e in eq
-        vi = _write_line_segment!(pos, vi, top, e)
-        vi = _write_line_segment!(pos, vi, bot, e)
-    end
-    geo = _line_geo(pos)
-    sky = light.color; grd = light.ground_color
-    cols = Vector{Float64}(undef, 72)
-    blend = _stable_color_lerp(sky, grd, 0.5)
-    # First 4 segments are the (mid-latitude) equator: blend; the remaining
-    # spokes inherit the apex colour (sky for top spokes, ground for bottom).
-    for seg in 1:12
-        c = seg <= 4 ? blend : ((seg - 5) % 2 == 0 ? sky : grd)
-        vi = 2seg - 1
-        _write_line_color!(cols, vi, c)
-        _write_line_color!(cols, vi + 1, c)
-    end
-    set_attribute!(geo, :color, cols, 3)
-    LineSegments(geo, LineBasicMaterial(color=color); name="HemisphereLightHelper")
-end
+# OctahedronGeometry (PolyhedronGeometry with detail 0) emits each face
+# (a, b, c) of these indices as (b, c, a).
+const _OCTAHEDRON_VERTICES = ((1.0, 0.0, 0.0), (-1.0, 0.0, 0.0), (0.0, 1.0, 0.0),
+                              (0.0, -1.0, 0.0), (0.0, 0.0, 1.0), (0.0, 0.0, -1.0))
+const _OCTAHEDRON_FACES = ((1, 3, 5), (1, 5, 4), (1, 4, 6), (1, 6, 3),
+                           (2, 3, 6), (2, 6, 4), (2, 4, 5), (2, 5, 3))
 
-# World-space translation (column 4) of a 4×4 transform.
-@inline _mat4_translation_vec(m::Mat4) =
-    Vec3(mat4_get(m, 1, 4), mat4_get(m, 2, 4), mat4_get(m, 3, 4))
+"""
+    HemisphereLightHelper(light::HemisphereLight, size=1.0; color=nothing)
+
+three.js `HemisphereLightHelper`: the wireframe of `OctahedronGeometry(size)`
+turned by `rotateY(π/2)`, placed by the light's world matrix and turned to
+look at the negated light position, drawn as the three edges of each of its
+eight triangles. Without `color`, the first four faces take the sky colour
+and the last four the ground colour as a per-vertex `:color` attribute;
+`color` draws every line in that one colour instead.
+"""
+function HemisphereLightHelper(light::HemisphereLight, size=1.0; color=nothing)
+    size = _geometry_finite_float(size, "HemisphereLightHelper size")
+    parent = compute_world_matrix(light)::Mat4{Float64}
+    world = _helper_look_at_world(parent, -_mat4_translation_vec(parent))
+    c, s = cos(π * 0.5), sin(π * 0.5)          # geometry.rotateY(Math.PI * 0.5)
+    vertex(i) = begin
+        x, y, z = _OCTAHEDRON_VERTICES[i]
+        mat4_transform_point(world, Vec3((c * x + s * z) * size, y * size,
+                                         (-s * x + c * z) * size))
+    end
+    pos = Vector{Float64}(undef, 144)
+    colors = Vector{Float64}(undef, color === nothing ? 144 : 0)
+    vi = 1
+    for (f, (a, b, cc)) in enumerate(_OCTAHEDRON_FACES)
+        first_vertex = vi
+        vi = _write_triangle_edges!(pos, vi, vertex(b), vertex(cc), vertex(a))
+        if color === nothing
+            face_color = f <= 4 ? light.color : light.ground_color
+            for j in first_vertex:vi-1
+                _write_line_color!(colors, j, face_color)
+            end
+        end
+    end
+    _helper_line_object(LineSegments, pos, colors, color, "HemisphereLightHelper")
+end
 
 function _skeleton_world_matrix!(worlds::Vector{Mat4{Float64}}, computed::Vector{Bool},
                                  bone_index::Dict{UInt,Int}, bones::Vector{Bone},
@@ -4477,11 +4606,18 @@ function _skeleton_world_matrix!(worlds::Vector{Mat4{Float64}}, computed::Vector
 end
 
 """
+    SkeletonHelper(skeleton; color=nothing, color1=Color3(0,0,1), color2=Color3(0,1,0))
+
 Line segments connecting each bone to its parent bone in world space
 (three.js `SkeletonHelper`). Bones whose parent is not itself a bone in the
-skeleton are skipped, matching three.js which only links bone-to-bone.
+skeleton are skipped, matching three.js which only links bone-to-bone. As in
+three.js each segment runs from the bone (`color1`, blue) to its parent
+(`color2`, green) with per-vertex `:color`s, and the material neither tests
+nor writes depth, so the skeleton draws over the mesh. Passing `color` draws
+every segment in that one colour instead.
 """
-function SkeletonHelper(skeleton::Skeleton; color=Color3(0.0, 0.0, 1.0))
+function SkeletonHelper(skeleton::Skeleton; color=nothing,
+                        color1=Color3(0.0, 0.0, 1.0), color2=Color3(0.0, 1.0, 0.0))
     bones = skeleton.bones
     n_bones = length(bones)
     pos = Vector{Float64}(
@@ -4498,7 +4634,7 @@ function SkeletonHelper(skeleton::Skeleton; color=Color3(0.0, 0.0, 1.0))
             (par isa Bone && objectid(par) in boneids) || continue
             cw = _mat4_translation_vec(compute_world_matrix(bone))
             pw = _mat4_translation_vec(compute_world_matrix(par))
-            vi = _write_line_segment!(pos, vi, pw, cw)
+            vi = _write_line_segment!(pos, vi, cw, pw)
         end
     else
         bone_index = Dict{UInt,Int}()
@@ -4515,16 +4651,24 @@ function SkeletonHelper(skeleton::Skeleton; color=Color3(0.0, 0.0, 1.0))
             parent_i == 0 && continue
             cw = _mat4_translation_vec(_skeleton_world_matrix!(worlds, computed, bone_index, bones, i))
             pw = _mat4_translation_vec(_skeleton_world_matrix!(worlds, computed, bone_index, bones, parent_i))
-            vi = _write_line_segment!(pos, vi, pw, cw)
+            vi = _write_line_segment!(pos, vi, cw, pw)
         end
     end
     resize!(pos, 3 * (vi - 1))
-    LineSegments(_line_geo(pos), LineBasicMaterial(color=color); name="SkeletonHelper")
+    colors = Vector{Float64}(undef, color === nothing ? length(pos) : 0)
+    if color === nothing
+        for j in 1:2:vi-1
+            _write_line_color!(colors, j, color1)
+            _write_line_color!(colors, j + 1, color2)
+        end
+    end
+    _helper_line_object(LineSegments, pos, colors, color, "SkeletonHelper"; depth_test=false)
 end
 
 """Build a `SkeletonHelper` from the skeleton owned by a `SkinnedMesh`."""
-SkeletonHelper(mesh::SkinnedMesh; color=Color3(0.0, 0.0, 1.0)) =
-    SkeletonHelper(mesh.skeleton; color=color)
+SkeletonHelper(mesh::SkinnedMesh; color=nothing,
+               color1=Color3(0.0, 0.0, 1.0), color2=Color3(0.0, 1.0, 0.0)) =
+    SkeletonHelper(mesh.skeleton; color=color, color1=color1, color2=color2)
 
 """
 Square outline lying in `plane` with side length `size`, plus a segment along the
@@ -4569,10 +4713,14 @@ Polar grid on the xz-plane: `rings` concentric circles out to `radius` and
 `sectors` evenly spaced radial spokes (three.js `PolarGridHelper`). Circles are
 approximated by `circle_segments` chords each. As in three.js, spokes start on
 +z and advance toward +x, a single sector draws no spoke, and rings are listed
-from the outermost inward.
+from the outermost inward. Odd-numbered spokes and rings (counting from 0)
+take `color1` and the others `color2`, as a per-vertex `:color` attribute
+with three.js's defaults `0x444444` and `0x888888`; passing `color` draws
+every line in that one colour instead.
 """
 function PolarGridHelper(radius=10.0, sectors::Int=16, rings::Int=8;
-                         circle_segments::Int=64, color=Color3(0.5, 0.5, 0.5))
+                         circle_segments::Int=64, color=nothing,
+                         color1=_HELPER_GRID_COLOR1, color2=_HELPER_GRID_COLOR2)
     radius = _geometry_finite_float(radius, "PolarGridHelper radius")
     sectors = _geometry_nonnegative_int(sectors, "PolarGridHelper sectors")
     rings = _geometry_nonnegative_int(rings, "PolarGridHelper rings")
@@ -4584,15 +4732,20 @@ function PolarGridHelper(radius=10.0, sectors::Int=16, rings::Int=8;
         rings, circle_segments, "PolarGridHelper segment count")
     n_segments = _geometry_checked_add(
         spokes, ring_segments, "PolarGridHelper segment count")
-    pos = Vector{Float64}(
-        undef, _helper_line_position_length(
-            n_segments, "PolarGridHelper"))
+    len = _helper_line_position_length(n_segments, "PolarGridHelper")
+    pos = Vector{Float64}(undef, len)
+    colors = Vector{Float64}(undef, color === nothing ? len : 0)
     vi = 1
     # Radial spokes: angle v = (i / sectors) * 2pi, point (sin v, 0, cos v) * radius.
     for i in 0:spokes-1
         v = (i / sectors) * (2π)
         vi = _write_line_segment!(pos, vi, Vec3(0.0, 0.0, 0.0),
                                   Vec3(sin(v) * radius, 0.0, cos(v) * radius))
+        if color === nothing
+            c = isodd(i) ? color1 : color2
+            _write_line_color!(colors, vi - 2, c)
+            _write_line_color!(colors, vi - 1, c)
+        end
     end
     # Rings from the outside in: r = radius - radius / rings * i.
     # Chord j ends where chord j + 1 starts (the same angle expression), so
@@ -4605,9 +4758,14 @@ function PolarGridHelper(radius=10.0, sectors::Int=16, rings::Int=8;
             current = Vec3(sin(v) * r, 0.0, cos(v) * r)
             vi = _write_line_segment!(pos, vi, previous, current)
             previous = current
+            if color === nothing
+                c = isodd(i) ? color1 : color2
+                _write_line_color!(colors, vi - 2, c)
+                _write_line_color!(colors, vi - 1, c)
+            end
         end
     end
-    LineSegments(_line_geo(pos), LineBasicMaterial(color=color); name="PolarGridHelper")
+    _helper_line_object(LineSegments, pos, colors, color, "PolarGridHelper")
 end
 
 """
