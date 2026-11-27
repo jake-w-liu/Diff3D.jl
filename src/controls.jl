@@ -298,8 +298,13 @@ MapControls(cam::_OrbitCamera; kwargs...) =
 # by `_quat = setFromUnitVectors(camera.up, +y)` into a y-up frame, works in
 # spherical coordinates there, and rotates back with the inverse
 # (OrbitControls.js:406-407, 703-704, 794-795). Diff3D reads `camera.up` live.
-@inline _orbit_up_quaternion(oc::OrbitControls) =
-    quat_from_unit_vectors(oc.camera.up, Vec3(0.0, 1.0, 0.0))
+@inline function _orbit_up_quaternion(oc::OrbitControls)
+    up = oc.camera.up
+    # A +y up (any positive length) is the identity frame.
+    iszero(up.x) && iszero(up.z) && up.y > 0.0 &&
+        return Quaternion(0.0, 0.0, 0.0, 1.0)
+    return quat_from_unit_vectors(up, Vec3(0.0, 1.0, 0.0))
+end
 
 # three.js Vector3.applyQuaternion. The identity (a y-up camera) returns `v`
 # unchanged, so the default frame stays exact even for overflowing offsets.
@@ -350,6 +355,8 @@ end
 # maxTargetRadius).add(cursor) (OrbitControls.js:768-771). A target already in
 # range is returned unchanged; a target on the cursor has no direction and stays.
 function _orbit_limited_target(oc::OrbitControls, target::Vec3{Float64})
+    # The default [0, Inf) range keeps every target.
+    iszero(oc.min_target_radius) && oc.max_target_radius == Inf && return target
     offset = target - oc.cursor
     distance = norm(offset)
     limited = clamp(distance, oc.min_target_radius, oc.max_target_radius)
@@ -388,16 +395,27 @@ end
 # outside [min_zoom, max_zoom] is clamped as well.
 function _orbit_enforce_limits!(oc::OrbitControls)
     zoom = _orbit_limited_zoom(oc)
-    s = _orbit_spherical(oc)
-    clamp(s.radius, oc.min_distance, oc.max_distance) == s.radius &&
-        clamp(s.phi, oc.min_polar_angle, oc.max_polar_angle) == s.phi &&
-        _clamp_azimuth(s.theta, oc.min_azimuth_angle,
-                       oc.max_azimuth_angle) == s.theta &&
-        _orbit_limited_target(oc, oc.target) === oc.target ||
-        _orbit_apply!(oc, s)
+    if _orbit_has_placement_limits(oc)
+        s = _orbit_spherical(oc)
+        clamp(s.radius, oc.min_distance, oc.max_distance) == s.radius &&
+            clamp(s.phi, oc.min_polar_angle, oc.max_polar_angle) == s.phi &&
+            _clamp_azimuth(s.theta, oc.min_azimuth_angle,
+                           oc.max_azimuth_angle) == s.theta &&
+            _orbit_limited_target(oc, oc.target) === oc.target ||
+            _orbit_apply!(oc, s)
+    end
     oc.camera isa OrthographicCamera && (oc.camera.zoom = zoom)
     return oc
 end
+
+# With the three.js default limits (distance [0, Inf), polar [0, pi], an
+# unbounded azimuth and target radius) no camera is outside them: the
+# spherical radius is non-negative and its polar angle lies in [0, pi].
+@inline _orbit_has_placement_limits(oc::OrbitControls) =
+    !iszero(oc.min_distance) || oc.max_distance != Inf ||
+    !iszero(oc.min_polar_angle) || oc.max_polar_angle != Float64(π) ||
+    (isfinite(oc.min_azimuth_angle) && isfinite(oc.max_azimuth_angle)) ||
+    !iszero(oc.min_target_radius) || oc.max_target_radius != Inf
 
 """Place the camera at an absolute orbit (azimuth, polar, radius) about the target."""
 function orbit_set!(oc::OrbitControls; azimuth, polar, radius)
@@ -3259,13 +3277,16 @@ function PolarGridHelper(radius=10.0, sectors::Int=16, rings::Int=8;
                                   Vec3(sin(v) * radius, 0.0, cos(v) * radius))
     end
     # Rings from the outside in: r = radius - radius / rings * i.
+    # Chord j ends where chord j + 1 starts (the same angle expression), so
+    # each ring evaluates sin/cos once per vertex.
     for i in 0:rings-1
         r = radius - (radius / rings * i)
+        previous = Vec3(sin(0.0) * r, 0.0, cos(0.0) * r)
         for j in 0:circle_segments-1
-            v1 = (j / circle_segments) * (2π)
-            v2 = ((j + 1) / circle_segments) * (2π)
-            vi = _write_line_segment!(pos, vi, Vec3(sin(v1) * r, 0.0, cos(v1) * r),
-                                      Vec3(sin(v2) * r, 0.0, cos(v2) * r))
+            v = ((j + 1) / circle_segments) * (2π)
+            current = Vec3(sin(v) * r, 0.0, cos(v) * r)
+            vi = _write_line_segment!(pos, vi, previous, current)
+            previous = current
         end
     end
     LineSegments(_line_geo(pos), LineBasicMaterial(color=color); name="PolarGridHelper")
