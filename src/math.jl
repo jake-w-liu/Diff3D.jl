@@ -36,6 +36,17 @@ Base.convert(::Type{Vec3{T}}, v::Vec3) where {T<:Real} =
 Base.convert(::Type{Vec4{T}}, v::Vec4) where {T<:Real} =
     Vec4{T}(convert(T, v.x), convert(T, v.y), convert(T, v.z), convert(T, v.w))
 
+@inline _vec3_eltype(::Vec3{T}) where {T} = T
+# Fixed arities (no varargs closure) so Julia 1.10 infers the promoted type.
+@inline function _promote_vec3s(a::Vec3, b::Vec3)
+    T = promote_type(_vec3_eltype(a), _vec3_eltype(b))
+    return convert(Vec3{T}, a), convert(Vec3{T}, b)
+end
+@inline function _promote_vec3s(a::Vec3, b::Vec3, c::Vec3)
+    T = promote_type(_vec3_eltype(a), _vec3_eltype(b), _vec3_eltype(c))
+    return convert(Vec3{T}, a), convert(Vec3{T}, b), convert(Vec3{T}, c)
+end
+
 # Vec3 arithmetic
 Base.:+(a::Vec3, b::Vec3) = Vec3(a.x + b.x, a.y + b.y, a.z + b.z)
 Base.:-(a::Vec3, b::Vec3) = Vec3(a.x - b.x, a.y - b.y, a.z - b.z)
@@ -50,6 +61,8 @@ function dot(a::Vec3, b::Vec3)
     product_z = a.z * b.z
     result = product_x + product_y + product_z
     if result isa AbstractFloat &&
+       !_float_dot_clearly_accurate(
+           result, max(max(abs(product_x), abs(product_y)), abs(product_z)), 3) &&
        isfinite(a.x) && isfinite(a.y) && isfinite(a.z) &&
        isfinite(b.x) && isfinite(b.y) && isfinite(b.z) &&
        _float_dot_needs_fallback(
@@ -82,7 +95,7 @@ norm(a::Vec3) = _norm3(a.x, a.y, a.z)
 
 function normalize(a::Vec3)
     l = norm(a)
-    iszero(_primal_value(l)) && return Vec3(zero(a.x), zero(a.y), zero(a.z))
+    iszero(_primal_value(l)) && (z = zero(a.x) / one(l); return Vec3(z, z, z))
     !_normal_length_needs_scaling(l) && return a / l
 
     # Scaling preserves direction when the length overflows or its subnormal
@@ -99,8 +112,11 @@ end
     # derivative is retained.
     constant_parameter =
         t isa AbstractFloat || t isa Integer || t isa Rational
-    constant_parameter && iszero(t) && return a
-    constant_parameter && t == one(t) && return b
+    # Endpoints convert to the interpolated type so integer endpoints with a
+    # floating parameter do not return a value-dependent type.
+    R = promote_type(typeof(a), typeof(b), typeof(t))
+    constant_parameter && iszero(t) && return convert(R, a)
+    constant_parameter && t == one(t) && return convert(R, b)
     same_sign = (a >= zero(a) && b >= zero(b)) ||
                 (a <= zero(a) && b <= zero(b))
     result = if same_sign
@@ -136,6 +152,8 @@ function dot(a::Vec2, b::Vec2)
     product_y = a.y * b.y
     result = product_x + product_y
     if result isa AbstractFloat &&
+       !_float_dot_clearly_accurate(
+           result, max(abs(product_x), abs(product_y)), 2) &&
        isfinite(a.x) && isfinite(a.y) &&
        isfinite(b.x) && isfinite(b.y) &&
        _float_dot_needs_fallback(
@@ -247,13 +265,31 @@ end
 end
 
 function mat4_multiply(a::Mat4, b::Mat4)
+    be = b.e
+    column1 = Vec4(be[1], be[2], be[3], be[4])
+    column2 = Vec4(be[5], be[6], be[7], be[8])
+    column3 = Vec4(be[9], be[10], be[11], be[12])
+    column4 = Vec4(be[13], be[14], be[15], be[16])
+    # Branch-free products first; any entry that is not clearly accurate sends
+    # the whole product through the per-entry cancellation checks.
+    c1, ok1 = _mat4_transform_vec4_fast(a, column1)
+    c2, ok2 = _mat4_transform_vec4_fast(a, column2)
+    c3, ok3 = _mat4_transform_vec4_fast(a, column3)
+    c4, ok4 = _mat4_transform_vec4_fast(a, column4)
+    (ok1 & ok2 & ok3 & ok4) || return _mat4_multiply_checked(a, b)
+    T = promote_type(eltype(a.e), eltype(b.e))
+    # Build the tuple directly so repeated products remain allocation-free.
+    return Mat4{T}((c1.x, c1.y, c1.z, c1.w, c2.x, c2.y, c2.z, c2.w,
+                    c3.x, c3.y, c3.z, c3.w, c4.x, c4.y, c4.z, c4.w))
+end
+
+@noinline function _mat4_multiply_checked(a::Mat4, b::Mat4)
     T = promote_type(eltype(a.e), eltype(b.e))
     be = b.e
     column1 = Vec4(be[1], be[2], be[3], be[4])
     column2 = Vec4(be[5], be[6], be[7], be[8])
     column3 = Vec4(be[9], be[10], be[11], be[12])
     column4 = Vec4(be[13], be[14], be[15], be[16])
-    # Build the tuple directly so repeated products remain allocation-free.
     return Mat4{T}((
         _mat4_row_dot(a, 1, column1),
         _mat4_row_dot(a, 2, column1),
@@ -276,12 +312,53 @@ end
 Base.:*(a::Mat4, b::Mat4) = mat4_multiply(a, b)
 
 function mat4_transform_vec4(m::Mat4, v::Vec4)
+    result, accurate = _mat4_transform_vec4_fast(m, v)
+    accurate && return result
+    return _mat4_transform_vec4_checked(m, v)
+end
+
+@noinline function _mat4_transform_vec4_checked(m::Mat4, v::Vec4)
     return Vec4(
         _mat4_row_dot(m, 1, v),
         _mat4_row_dot(m, 2, v),
         _mat4_row_dot(m, 3, v),
         _mat4_row_dot(m, 4, v),
     )
+end
+
+# The four row sums of `_mat4_row_dot`, evaluated identically, plus whether
+# every float sum passes `_float_dot_clearly_accurate`. When it does,
+# `_mat4_row_dot` would return these same sums, so callers can skip its
+# per-row checks; otherwise they call it for the exact fallback decision.
+@inline function _mat4_transform_vec4_fast(m::Mat4, v::Vec4)
+    x, okx = _mat4_row_sum(m, 1, v)
+    y, oky = _mat4_row_sum(m, 2, v)
+    z, okz = _mat4_row_sum(m, 3, v)
+    w, okw = _mat4_row_sum(m, 4, v)
+    return Vec4(x, y, z, w), okx & oky & okz & okw
+end
+
+@inline function _mat4_row_sum(m::Mat4, row::Int, v::Vec4)
+    m1 = mat4_get(m, row, 1)
+    m2 = mat4_get(m, row, 2)
+    m3 = mat4_get(m, row, 3)
+    m4 = mat4_get(m, row, 4)
+    product1 = m1 * v.x
+    product2 = m2 * v.y
+    product3 = m3 * v.z
+    product4 = m4 * v.w
+    result = product1 + product2 + product3 + product4
+    result isa AbstractFloat || return result, true
+    largest = max(max(abs(product1), abs(product2)),
+                  max(abs(product3), abs(product4)))
+    # All-zero products need the fallback only when some factor pair is
+    # nonzero (an underflowed product); structural zeros such as the bottom
+    # row of an affine matrix are exact.
+    structural_zero = iszero(largest) &
+        !((!iszero(m1) & !iszero(v.x)) | (!iszero(m2) & !iszero(v.y)) |
+          (!iszero(m3) & !iszero(v.z)) | (!iszero(m4) & !iszero(v.w)))
+    return result,
+           _float_dot_clearly_accurate(result, largest, 4) | structural_zero
 end
 
 @inline function _mat4_row_dot(m::Mat4, row::Int, v::Vec4)
@@ -295,6 +372,9 @@ end
     product4 = m4 * v.w
     result = product1 + product2 + product3 + product4
     if result isa AbstractFloat &&
+       !_float_dot_clearly_accurate(
+           result, max(max(abs(product1), abs(product2)),
+                       max(abs(product3), abs(product4))), 4) &&
        isfinite(m1) && isfinite(m2) &&
        isfinite(m3) && isfinite(m4) &&
        isfinite(v.x) && isfinite(v.y) && isfinite(v.z) && isfinite(v.w) &&
@@ -386,13 +466,20 @@ function mat4_rotation_z(θ)
              zero(T), zero(T), zero(T), one(T)))
 end
 
+# three.js lookAt uses +z when eye == target. Dividing keeps the floating type
+# that normalize(d) returns for integer input.
+@inline function _look_at_default_z(d::Vec3)
+    zero_component = zero(d.x) / one(d.x)
+    return Vec3(zero_component, zero_component, one(d.z) / one(d.z))
+end
+
 function mat4_look_at(eye::Vec3, target::Vec3, up::Vec3)
     d = eye - target
-    # Guard the degenerate eye==target case before normalising (three.js lookAt):
-    # normalize(0) is NaN and would poison the whole view matrix and its AD gradients.
+    # eye == target looks along +z like three.js lookAt; normalize(0) would
+    # return the zero vector and collapse the whole view basis.
     z = if isfinite(d.x) && isfinite(d.y) && isfinite(d.z)
         iszero(_primal_value(d.x)) && iszero(_primal_value(d.y)) && iszero(_primal_value(d.z)) ?
-            Vec3(zero(d.x), zero(d.y), one(d.z)) : normalize(d)
+            _look_at_default_z(d) : normalize(d)
     else
         # Finite endpoints with opposite extreme signs can overflow during the
         # subtraction even though their direction is well-defined. Recover it
@@ -400,15 +487,22 @@ function mat4_look_at(eye::Vec3, target::Vec3, up::Vec3)
         scaled, _, nonzero =
             _difference_direction_and_logscale(target, eye)
         nonzero ? normalize(scaled) :
-            Vec3(zero(d.x), zero(d.y), one(d.z))
+            _look_at_default_z(d)
     end
     up_direction = normalize(up)
     xc = cross(up_direction, z)
-    if dot(xc, xc) < 1e-12          # up parallel to view dir: perturb z (three.js lookAt)
-        if abs(z.z) > one(z.z) - 1e-4
-            z = normalize(Vec3(z.x + 1e-4, z.y, z.z))
+    # three.js Matrix4.lookAt (src/math/Matrix4.js:498-517) perturbs z only
+    # when up × z is exactly zero. A tolerance would discard the azimuth of
+    # nearly vertical views such as OrbitControls at its 1e-6 polar clamp.
+    if iszero(_primal_value(xc.x)) && iszero(_primal_value(xc.y)) &&
+       iszero(_primal_value(xc.z))
+        # Keep the component type: a Float64 literal would widen Float32 input
+        # in this branch only and make the returned matrix type unstable.
+        Z = typeof(z.x)
+        if abs(up_direction.z) == one(up_direction.z)
+            z = normalize(Vec3(convert(Z, z.x + 1e-4), z.y, z.z))
         else
-            z = normalize(Vec3(z.x, z.y, z.z + 1e-4))
+            z = normalize(Vec3(z.x, z.y, convert(Z, z.z + 1e-4)))
         end
         xc = cross(up_direction, z)
     end
@@ -561,7 +655,8 @@ end
     _primal_value(ForwardDiff.value(value))
 
 @inline function _mat4_zero_like(value)
-    z = zero(value)
+    # Divide so integer input yields the floating type of the general path.
+    z = zero(value) / one(value)
     return Mat4((z, z, z, z,
                  z, z, z, z,
                  z, z, z, z,
@@ -911,33 +1006,54 @@ function quat_from_rotation_matrix(m::Mat4)
     m21, m22, m23 = mat4_get(m, 2, 1), mat4_get(m, 2, 2), mat4_get(m, 2, 3)
     m31, m32, m33 = mat4_get(m, 3, 1), mat4_get(m, 3, 2), mat4_get(m, 3, 3)
     trace = m11 + m22 + m33
+    # 1/2 and 1/4 in the element type (exact in every binary float) keep a
+    # Float32 matrix from producing a Float64 quaternion.
+    half = one(trace) / 2
+    quarter = one(trace) / 4
     if trace > 0
-        s = 0.5 / sqrt(trace + 1)
-        return Quaternion((m32 - m23) * s, (m13 - m31) * s, (m21 - m12) * s, 0.25 / s)
+        s = half / sqrt(trace + 1)
+        return Quaternion((m32 - m23) * s, (m13 - m31) * s, (m21 - m12) * s, quarter / s)
     elseif m11 > m22 && m11 > m33
         s = 2 * sqrt(1 + m11 - m22 - m33)
-        return Quaternion(0.25 * s, (m12 + m21) / s, (m13 + m31) / s, (m32 - m23) / s)
+        return Quaternion(quarter * s, (m12 + m21) / s, (m13 + m31) / s, (m32 - m23) / s)
     elseif m22 > m33
         s = 2 * sqrt(1 + m22 - m11 - m33)
-        return Quaternion((m12 + m21) / s, 0.25 * s, (m23 + m32) / s, (m13 - m31) / s)
+        return Quaternion((m12 + m21) / s, quarter * s, (m23 + m32) / s, (m13 - m31) / s)
     end
     s = 2 * sqrt(1 + m33 - m11 - m22)
-    return Quaternion((m13 + m31) / s, (m23 + m32) / s, 0.25 * s, (m21 - m12) / s)
+    return Quaternion((m13 + m31) / s, (m23 + m32) / s, quarter * s, (m21 - m12) / s)
+end
+
+# Determinant of the upper-left 3×3 block (three.js `Matrix4.determinantAffine`,
+# src/math/Matrix4.js:661-673), evaluated with the same products and order.
+function _mat4_determinant_affine(m::Mat4)
+    e = m.e
+    n11, n21, n31 = e[1], e[2], e[3]
+    n12, n22, n32 = e[5], e[6], e[7]
+    n13, n23, n33 = e[9], e[10], e[11]
+    return n11 * (n22 * n33 - n23 * n32) -
+           n12 * (n21 * n33 - n23 * n31) +
+           n13 * (n21 * n32 - n22 * n31)
 end
 
 """
     mat4_decompose(m) -> (position, quaternion, scale)
 
 Split an affine matrix into translation, rotation, and scale (three.js
-`Matrix4.decompose`). A negative determinant negates the x scale; a singular
-linear part yields an identity rotation and unit scale.
+`Matrix4.decompose`). The bottom row is ignored. A negative determinant of the
+upper-left 3×3 block negates the x scale; a singular 3×3 block yields an
+identity rotation and unit scale.
 """
 function mat4_decompose(m::Mat4)
     e = m.e
     position = Vec3(e[13], e[14], e[15])
-    det = mat4_determinant(m)
+    # three.js r186 Matrix4.decompose (src/math/Matrix4.js:1079) tests the
+    # affine 3×3 determinant, so a projective bottom row cannot flip or zero it.
+    det = _mat4_determinant_affine(m)
     if iszero(det)
-        o, z = one(det), zero(det)
+        # Divide so integer input yields the floating type of the general path.
+        o = one(det) / one(det)
+        z = zero(det) / one(det)
         return position, Quaternion(z, z, z, o), Vec3(o, o, o)
     end
     sx = _norm3(e[1], e[2], e[3])
@@ -958,7 +1074,9 @@ function quat_normalize(q::Quaternion)
     # -> Dual(NaN,NaN) while 3-arg preserves 0). Matches normalize() intent.
     if iszero(_primal_value(q.x)) && iszero(_primal_value(q.y)) &&
        iszero(_primal_value(q.z)) && iszero(_primal_value(q.w))
-        return Quaternion(zero(q.x), zero(q.y), zero(q.z), one(q.w))
+        # Divide so integer input yields the floating type of the general path.
+        z = zero(q.x) / one(q.x)
+        return Quaternion(z, z, z, one(q.w) / one(q.w))
     end
     l = _norm4(q.x, q.y, q.z, q.w)
     !_normal_length_needs_scaling(l) && return Quaternion(q.x/l, q.y/l, q.z/l, q.w/l)
@@ -1023,6 +1141,29 @@ function _rotation_matrix_to_euler(matrix::Mat4, order::Symbol=:XYZ)
     return Euler(angles...,order)
 end
 
+"""
+    euler_from_rotation_matrix(m, order=:XYZ)
+
+Intrinsic Euler angles, in the given order, of the pure rotation in the
+upper-left 3×3 block of `m` (three.js `Euler.setFromRotationMatrix`). When the
+sine of the middle angle is within 1e-7 of ±1 (the middle angle within about
+4.5e-4 radians of ±π/2), three.js sets one of the other angles to zero, which
+only approximates `m`; this function instead returns coupled angles that
+reproduce `m`, so the angles differ from three.js in that band.
+"""
+euler_from_rotation_matrix(m::Mat4, order::Symbol=:XYZ) =
+    _rotation_matrix_to_euler(m, order)
+
+"""
+    euler_from_quaternion(q, order=:XYZ)
+
+Intrinsic Euler angles of the unit quaternion `q` (three.js
+`Euler.setFromQuaternion`), with the gimbal-lock behaviour of
+[`euler_from_rotation_matrix`](@ref).
+"""
+euler_from_quaternion(q::Quaternion, order::Symbol=:XYZ) =
+    _rotation_matrix_to_euler(quat_to_mat4(q), order)
+
 # Orthonormal basis (u, v) spanning the plane perpendicular to unit vector w.
 function _perp_basis(w::Vec3)
     ref = abs(w.y) < 0.99 ? Vec3(0.0, 1.0, 0.0) : Vec3(1.0, 0.0, 0.0)
@@ -1038,6 +1179,8 @@ struct Box3{T<:Real}
     max::Vec3{T}
 end
 Box3() = Box3(Vec3(Inf, Inf, Inf), Vec3(-Inf, -Inf, -Inf))
+# Mixed element types promote like the Vec3 and Ray constructors.
+Box3(min::Vec3, max::Vec3) = Box3(_promote_vec3s(min, max)...)
 
 function box3_expand_by_point(box::Box3, p::Vec3)
     Box3(
@@ -1046,9 +1189,141 @@ function box3_expand_by_point(box::Box3, p::Vec3)
     )
 end
 
+"""
+    box3_is_empty(box)
+
+`true` when `box` contains no point, i.e. some `max` component is below the
+matching `min` component (three.js `Box3.isEmpty`). `Box3()` is empty.
+"""
+box3_is_empty(box::Box3) =
+    box.max.x < box.min.x || box.max.y < box.min.y || box.max.z < box.min.z
+
+# (a + b) / 2 as three.js computes it; halve first only when the sum overflows.
+# Integer bounds are summed as floats because an integer sum wraps silently.
+@inline function _box3_midpoint(a, b)
+    a isa Integer && return (float(a) + float(b)) / 2
+    sum = a + b
+    isfinite(_primal_value(sum)) && return sum / 2
+    return a / 2 + b / 2
+end
+
+"""
+    box3_center(box)
+
+Center of `box`, or the origin for an empty box (three.js `Box3.getCenter`).
+Unlike three.js, a finite box whose `min + max` overflows still has a finite
+center.
+"""
+function box3_center(box::Box3)
+    if box3_is_empty(box)
+        z = zero(box.min.x) / 2
+        return Vec3(z, z, z)
+    end
+    return Vec3(_box3_midpoint(box.min.x, box.max.x),
+                _box3_midpoint(box.min.y, box.max.y),
+                _box3_midpoint(box.min.z, box.max.z))
+end
+
+"""
+    box3_size(box)
+
+Extent `max - min` of `box`, or the zero vector for an empty box (three.js
+`Box3.getSize`).
+"""
+function box3_size(box::Box3)
+    if box3_is_empty(box)
+        z = zero(box.min.x)
+        return Vec3(z, z, z)
+    end
+    return box.max - box.min
+end
+
+"""
+    box3_union(a, b)
+
+Smallest box containing both `a` and `b` (three.js `Box3.union`).
+"""
+function box3_union(a::Box3, b::Box3)
+    return Box3(
+        Vec3(min(a.min.x, b.min.x), min(a.min.y, b.min.y), min(a.min.z, b.min.z)),
+        Vec3(max(a.max.x, b.max.x), max(a.max.y, b.max.y), max(a.max.z, b.max.z)))
+end
+
+"""
+    box3_intersect(a, b)
+
+Overlap of `a` and `b` (three.js `Box3.intersect`). Disjoint boxes give the
+empty box with `+Inf` minimum and `-Inf` maximum, like three.js `makeEmpty`;
+integer boxes, which cannot hold infinities, return the empty overlap itself.
+"""
+function box3_intersect(a::Box3, b::Box3)
+    result = Box3(
+        Vec3(max(a.min.x, b.min.x), max(a.min.y, b.min.y), max(a.min.z, b.min.z)),
+        Vec3(min(a.max.x, b.max.x), min(a.max.y, b.max.y), min(a.max.z, b.max.z)))
+    box3_is_empty(result) || return result
+    # three.js makeEmpty() uses ±Infinity, which integers cannot hold; an
+    # integer box stays the (already empty) overlap.
+    result.min.x isa Integer && return result
+    inf = oftype(result.min.x, Inf)
+    return Box3(Vec3(inf, inf, inf), Vec3(-inf, -inf, -inf))
+end
+
+"""
+    box3_contains_point(box, p)
+
+`true` when `p` lies inside or on the boundary of `box` (three.js
+`Box3.containsPoint`).
+"""
+box3_contains_point(box::Box3, p::Vec3) =
+    # three.js's conjunction of >=/<= tests, so a NaN coordinate is outside.
+    p.x >= box.min.x && p.x <= box.max.x &&
+    p.y >= box.min.y && p.y <= box.max.y &&
+    p.z >= box.min.z && p.z <= box.max.z
+
+"""
+    box3_intersects_box(a, b)
+
+`true` when `a` and `b` overlap, including touching faces (three.js
+`Box3.intersectsBox`).
+"""
+box3_intersects_box(a::Box3, b::Box3) =
+    # three.js's conjunction of >=/<= tests, so a NaN bound never overlaps.
+    b.max.x >= a.min.x && b.min.x <= a.max.x &&
+    b.max.y >= a.min.y && b.min.y <= a.max.y &&
+    b.max.z >= a.min.z && b.min.z <= a.max.z
+
+"""
+    box3_apply_matrix4(box, m)
+
+Axis-aligned box around the eight corners of `box` transformed by `m` with
+`mat4_transform_point`; an empty box stays unchanged (three.js
+`Box3.applyMatrix4`).
+"""
+function box3_apply_matrix4(box::Box3, m::Mat4)
+    if box3_is_empty(box)
+        # Same element type as mat4_transform_point results.
+        R = typeof(zero(eltype(m.e)) * zero(box.min.x) / one(eltype(m.e)))
+        return Box3(convert(Vec3{R}, box.min), convert(Vec3{R}, box.max))
+    end
+    lo, hi = box.min, box.max
+    p = mat4_transform_point(m, lo)
+    result = Box3(p, p)
+    result = box3_expand_by_point(result, mat4_transform_point(m, Vec3(lo.x, lo.y, hi.z)))
+    result = box3_expand_by_point(result, mat4_transform_point(m, Vec3(lo.x, hi.y, lo.z)))
+    result = box3_expand_by_point(result, mat4_transform_point(m, Vec3(lo.x, hi.y, hi.z)))
+    result = box3_expand_by_point(result, mat4_transform_point(m, Vec3(hi.x, lo.y, lo.z)))
+    result = box3_expand_by_point(result, mat4_transform_point(m, Vec3(hi.x, lo.y, hi.z)))
+    result = box3_expand_by_point(result, mat4_transform_point(m, Vec3(hi.x, hi.y, lo.z)))
+    return box3_expand_by_point(result, mat4_transform_point(m, hi))
+end
+
 struct BoundingSphere{T<:Real}
     center::Vec3{T}
     radius::T
+end
+function BoundingSphere(center::Vec3, radius::Real)
+    T = promote_type(_vec3_eltype(center), typeof(radius))
+    return BoundingSphere{T}(convert(Vec3{T}, center), convert(T, radius))
 end
 
 struct Ray{T<:Real}
@@ -1067,12 +1342,18 @@ struct Plane{T<:Real}
     normal::Vec3{T}
     constant::T
 end
+function Plane(normal::Vec3, constant::Real)
+    T = promote_type(_vec3_eltype(normal), typeof(constant))
+    return Plane{T}(convert(Vec3{T}, normal), convert(T, constant))
+end
 
 # Signed distance from a plane (a·x + d = 0) to a point; >0 on the normal side.
 function plane_distance_to_point(p::Plane, pt::Vec3)
     projected = dot(p.normal, pt)
     result = projected + p.constant
     if result isa AbstractFloat &&
+       !_float_dot_clearly_accurate(
+           result, max(abs(projected), abs(p.constant)), 2) &&
        isfinite(p.normal.x) && isfinite(p.normal.y) &&
        isfinite(p.normal.z) && isfinite(p.constant) &&
        isfinite(pt.x) && isfinite(pt.y) && isfinite(pt.z) &&
@@ -1137,6 +1418,79 @@ function quat_from_unit_vectors(from::Vec3, to::Vec3)
     quat_normalize(q)
 end
 
+"""
+    quat_from_axis_angle(axis, angle)
+
+Quaternion rotating by `angle` radians about `axis` (three.js
+`Quaternion.setFromAxisAngle`). As in three.js, `axis` is used as given and
+should have unit length.
+"""
+function quat_from_axis_angle(axis::Vec3, angle::Real)
+    half_angle = angle / 2
+    s = sin(half_angle)
+    return Quaternion(axis.x * s, axis.y * s, axis.z * s, cos(half_angle))
+end
+
+"""
+    quat_conjugate(q)
+
+Quaternion with the vector part negated (three.js `Quaternion.conjugate`). For
+a unit quaternion this is the inverse rotation.
+"""
+quat_conjugate(q::Quaternion) = Quaternion(-q.x, -q.y, -q.z, q.w)
+
+"""
+    quat_invert(q)
+
+Inverse rotation of the unit quaternion `q` (three.js `Quaternion.invert`,
+which returns the conjugate and assumes unit length).
+"""
+quat_invert(q::Quaternion) = quat_conjugate(q)
+
+"""
+    quat_angle_to(a, b)
+
+Angle in radians, in `[0, π]`, of the rotation between unit quaternions `a`
+and `b` (three.js `Quaternion.angleTo`).
+"""
+function quat_angle_to(a::Quaternion, b::Quaternion)
+    d = quat_dot(a, b)
+    return 2 * acos(abs(clamp(d, -one(d), one(d))))
+end
+
+"""
+    quat_rotate_towards(a, b, step)
+
+Rotate unit quaternion `a` towards `b` by at most `step` radians, reaching the
+rotation of `b` (as `b` or `-b`, along the shorter arc) when the remaining angle
+is not larger than `step` (three.js `Quaternion.rotateTowards`).
+"""
+function quat_rotate_towards(a::Quaternion, b::Quaternion, step::Real)
+    angle = quat_angle_to(a, b)
+    if iszero(angle)
+        # three.js returns `a` unchanged; give it the element type of the
+        # slerp branch so the result type does not depend on the value.
+        R = promote_type(typeof(a.x), typeof(angle), typeof(step))
+        return convert(Quaternion{R}, a)
+    end
+    return quat_slerp(a, b, min(one(angle), step / angle))
+end
+
+"""
+    quat_rotate_vector(q, v)
+
+Rotate `v` by the unit quaternion `q` (three.js `Vector3.applyQuaternion`).
+"""
+function quat_rotate_vector(q::Quaternion, v::Vec3)
+    # t = 2 q.xyz × v; v' = v + q.w t + q.xyz × t, in three.js's order.
+    tx = 2 * (q.y * v.z - q.z * v.y)
+    ty = 2 * (q.z * v.x - q.x * v.z)
+    tz = 2 * (q.x * v.y - q.y * v.x)
+    return Vec3(v.x + q.w * tx + q.y * tz - q.z * ty,
+                v.y + q.w * ty + q.z * tx - q.x * tz,
+                v.z + q.w * tz + q.x * ty - q.y * tx)
+end
+
 # ========================== Triangle ==========================
 
 struct Triangle{T<:Real}
@@ -1144,6 +1498,7 @@ struct Triangle{T<:Real}
     b::Vec3{T}
     c::Vec3{T}
 end
+Triangle(a::Vec3, b::Vec3, c::Vec3) = Triangle(_promote_vec3s(a, b, c)...)
 
 @inline _vec3_max_abs(v::Vec3) =
     max(max(abs(v.x), abs(v.y)), abs(v.z))
@@ -1151,7 +1506,7 @@ end
 @inline function _triangle_axis_edges(a, b, c)
     scale = max(abs(_primal_value(a)), abs(_primal_value(b)), abs(_primal_value(c)))
     # A zero coordinate axis still has edge derivatives when vertices move.
-    iszero(scale) && return b - a, c - a, one(scale)
+    iszero(scale) && return (b - a) / one(scale), (c - a) / one(scale), one(scale)
     ab, ac = b - a, c - a
     return (isfinite(_primal_value(ab)) ? ab / scale : b / scale - a / scale),
            (isfinite(_primal_value(ac)) ? ac / scale : c / scale - a / scale), scale
@@ -1353,6 +1708,14 @@ end
     )
 end
 
+# Cheap sufficient test that `_float_dot_needs_fallback` is false: a finite
+# sum larger than its cancellation bound cannot need the fallback (when the
+# largest product is zero the sum is zero and this test fails). Evaluating it
+# before the input finiteness checks leaves each fallback decision unchanged.
+@inline _float_dot_clearly_accurate(result::T, largest_product,
+                                    term_count::Int) where {T<:AbstractFloat} =
+    isfinite(result) & (abs(result) > largest_product * ((2 * term_count) * eps(T)))
+
 @inline function _float_dot_needs_fallback(
         result::T, largest_product, has_nonzero_input_product::Bool,
         term_count::Int) where {T<:AbstractFloat}
@@ -1372,6 +1735,8 @@ end
     product2 = c * d
     result = product1 - product2
     if result isa AbstractFloat &&
+       !_float_dot_clearly_accurate(
+           result, max(abs(product1), abs(product2)), 2) &&
        isfinite(a) && isfinite(b) && isfinite(c) && isfinite(d) &&
        _float_dot_needs_fallback(
            result,
@@ -1385,7 +1750,7 @@ end
     return result
 end
 
-@inline function _stable_float_product_difference(a, b, c, d)
+@noinline function _stable_float_product_difference(a, b, c, d)
     a, b, c, d = promote(a, b, c, d)
     product1 = a * b
     product2 = c * d
@@ -1413,7 +1778,7 @@ end
     return _float_representation_value(difference)
 end
 
-@inline function _stable_float_dot(a::Vec3, b::Vec3)
+@noinline function _stable_float_dot(a::Vec3, b::Vec3)
     ax, ay, az, bx, by, bz = promote(
         a.x, a.y, a.z, b.x, b.y, b.z)
     product_x = ax * bx
@@ -1452,7 +1817,7 @@ end
             _float_zero_representation(typeof(ax))))
 end
 
-@inline function _stable_float_dot(a::Vec2, b::Vec2)
+@noinline function _stable_float_dot(a::Vec2, b::Vec2)
     ax, ay, bx, by = promote(a.x, a.y, b.x, b.y)
     product_x = ax * bx
     product_y = ay * by
@@ -1502,12 +1867,12 @@ end
     return _float_representation_dot4(matrix_row, vector)
 end
 
-@inline function _stable_float_mat4_row(m::Mat4, row::Int, v::Vec4)
+@noinline function _stable_float_mat4_row(m::Mat4, row::Int, v::Vec4)
     return _float_representation_value(
         _stable_float_mat4_row_representation(m, row, v))
 end
 
-@inline function _stable_float_mat4_transform_point(m::Mat4, p::Vec3)
+@noinline function _stable_float_mat4_transform_point(m::Mat4, p::Vec3)
     homogeneous = Vec4(p.x, p.y, p.z, one(p.x))
     x = _stable_float_mat4_row_representation(m, 1, homogeneous)
     y = _stable_float_mat4_row_representation(m, 2, homogeneous)
@@ -1521,7 +1886,7 @@ end
     return result, w.nonzero
 end
 
-@inline function _stable_float_plane_distance(p::Plane, pt::Vec3)
+@noinline function _stable_float_plane_distance(p::Plane, pt::Vec3)
     nx, ny, nz, constant, x, y, z = promote(
         p.normal.x, p.normal.y, p.normal.z, p.constant,
         pt.x, pt.y, pt.z,
@@ -1622,7 +1987,7 @@ end
         return (a + b + c) / 3
     end
     scale = max(max(abs(a), abs(b)), abs(c))
-    iszero(scale) && return zero(a)
+    iszero(scale) && return zero(a) / one(a)
     return ((a / scale + b / scale + c / scale) / 3) * scale
 end
 
@@ -1642,7 +2007,7 @@ function triangle_barycentric(tri::Triangle, p::Vec3)
         _vec3_max_abs(tri.c),
     )
     if iszero(scale)
-        z = zero(tri.a.x + p.x)
+        z = zero(tri.a.x + p.x) / one(tri.a.x + p.x)
         return Vec3(z, z, z)
     end
     a = tri.a / scale
@@ -1699,6 +2064,7 @@ struct Line3{T<:Real}
     start::Vec3{T}
     finish::Vec3{T}
 end
+Line3(start::Vec3, finish::Vec3) = Line3(_promote_vec3s(start, finish)...)
 
 line3_delta(l::Line3)  = l.finish - l.start
 line3_length(l::Line3) = norm(line3_delta(l))
@@ -1795,7 +2161,7 @@ end
 function line3_closest_point_parameter(l::Line3, p::Vec3; clamp_to_segment=true)
     direction, direction_scale, nondegenerate =
         _difference_direction_and_scale(l.start, l.finish)
-    nondegenerate || return zero(l.start.x + l.finish.x + p.x)
+    nondegenerate || return zero(p.x) / one(l.start.x + l.finish.x + p.x)
     denominator = dot(direction, direction)
     # A common scale evaluates the projection directly, including its AD
     # derivative at coincident or perpendicular query points.
@@ -1850,6 +2216,8 @@ struct Spherical{T<:Real}
     phi::T
     theta::T
 end
+Spherical(radius::Real, phi::Real, theta::Real) =
+    Spherical(promote(radius, phi, theta)...)
 
 function spherical_to_cartesian(s::Spherical)
     sinphi_r = sin(s.phi) * s.radius
@@ -1880,6 +2248,8 @@ struct Cylindrical{T<:Real}
     theta::T
     y::T
 end
+Cylindrical(radius::Real, theta::Real, y::Real) =
+    Cylindrical(promote(radius, theta, y)...)
 
 cylindrical_to_cartesian(c::Cylindrical) =
     Vec3(c.radius * sin(c.theta), c.y, c.radius * cos(c.theta))

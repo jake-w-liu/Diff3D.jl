@@ -82,6 +82,34 @@ end
     return position, target, up
 end
 
+# A camera's ancestors are abstractly typed. Branch over the concrete node
+# types so per-node work dispatches statically; a dynamic call would box each
+# returned matrix or Euler value on every view_matrix call. The fallback
+# asserts the result type so the known branches are not merged into `Any`.
+@inline function _with_concrete_node(f::F, node::AbstractObject3D,
+                                     ::Type{R}) where {F, R}
+    node isa Group && return f(node)::R
+    node isa Scene && return f(node)::R
+    node isa Object3D && return f(node)::R
+    node isa Mesh && return f(node)::R
+    node isa PerspectiveCamera && return f(node)::R
+    node isa OrthographicCamera && return f(node)::R
+    node isa Bone && return f(node)::R
+    node isa SkinnedMesh && return f(node)::R
+    node isa InstancedMesh && return f(node)::R
+    node isa LineObject && return f(node)::R
+    node isa PointsObject && return f(node)::R
+    return f(node)::R
+end
+
+@inline _node_world_matrix(node::AbstractObject3D) =
+    @inline _with_concrete_node(compute_world_matrix, node, Mat4{Float64})
+
+@inline function _validated_node_rotation(node::AbstractObject3D)
+    _validate_object_transform(node)
+    return get_rotation(node)
+end
+
 function _camera_world_pose(camera::AbstractCamera)
     if hasfield(typeof(camera), :rotation_driven) && camera.rotation_driven
         position, direction, up = _camera_rotation_pose(camera)
@@ -91,12 +119,12 @@ function _camera_world_pose(camera::AbstractCamera)
     position, target, up = _validated_camera_view_vectors(camera, kind)
     parent = get_parent(camera)
     parent === nothing && return position, target, up
-    parent_world = compute_world_matrix(parent)::Mat4{Float64}
+    parent_world = _node_world_matrix(parent)
     world_position = _validated_camera_vector(
         mat4_transform_point(parent_world, position), kind, :position)
     if hasfield(typeof(camera), :ignore_parent_scale) &&
        getfield(camera, :ignore_parent_scale)
-        rotation_matrix = _rotation_without_scale(parent)
+        rotation_matrix = @inline _rotation_without_scale(parent)
         world_direction = _validated_camera_vector(
             mat4_transform_direction(rotation_matrix, target - position),
             kind, :target)
@@ -119,10 +147,10 @@ end
 
 function _rotation_without_scale(object::AbstractObject3D)
     quaternion = Quaternion()
-    node = object
+    node::Union{Nothing, AbstractObject3D} = object
     while node !== nothing
-        _validate_object_transform(node)
-        angles = get_rotation(node)
+        angles = @inline _with_concrete_node(
+            _validated_node_rotation, node, Euler{Float64})
         quaternion = quat_multiply(quat_from_euler(
             angles.x, angles.y, angles.z; order=angles.order), quaternion)
         node = get_parent(node)
@@ -134,7 +162,7 @@ end
 function _camera_rotation_pose(camera::AbstractCamera)
     _validate_object_transform(camera)
     parent = get_parent(camera)
-    parent_world = parent === nothing ? Mat4() : compute_world_matrix(parent)
+    parent_world = parent === nothing ? Mat4() : _node_world_matrix(parent)
     position = mat4_transform_point(parent_world, camera.position)
     rotation = camera.rotation
     local_rotation = quat_to_mat4(quat_from_euler(
