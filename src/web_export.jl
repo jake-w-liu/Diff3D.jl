@@ -250,14 +250,20 @@ function _js_str(s::AbstractString)
 end
 const _WEB_NUM_BUFFER_BYTES = 64
 const _WEB_NUM_PRINTF_FORMAT = Printf.Format("%.17g")
-const _WEB_INT_PRINTF_FORMAT = Printf.Format("%d")
 
 _web_num_buffer() = Base.StringVector(_WEB_NUM_BUFFER_BYTES)
 
 @inline function _js_write_int(io::IO, x::Int, buf::Vector{UInt8})
     # A signed 64-bit decimal needs at most 20 bytes.
     length(buf) < 21 && resize!(buf, 21)
-    n = Printf.format(buf, 1, _WEB_INT_PRINTF_FORMAT, x) - 1
+    pos = 1
+    if x < 0
+        @inbounds buf[1] = UInt8('-')
+        pos = 2
+    end
+    # Two's-complement magnitude; also exact for typemin(Int).
+    v = x < 0 ? zero(UInt64) - (x % UInt64) : x % UInt64
+    n = _web_write_decimal_digits!(buf, pos, v, ndigits(v)) - 1
     GC.@preserve buf unsafe_write(io, pointer(buf), UInt(n))
     return nothing
 end
@@ -268,12 +274,118 @@ function _js_num(x::Real)
     return String(take!(io))
 end
 
-# Printf's buffer method preserves %.17g formatting without a per-number
-# allocation or a platform-dependent libc symbol lookup. The 64-byte buffer
-# also fits the scientific-notation scratch output used by general formatting.
+# Exported numbers use Printf's "%.17g" text (round-trip exact). Printf derives
+# the %g exponent from a 17-decimal `Ryu.writeexp` (18 significant digits) and
+# then formats again with `writefixed`, so every number costs two Ryu passes.
+# `_web_format_g17!` produces the same bytes for the fixed-notation range with
+# exact integer arithmetic: a normal double is m * 2^e with m < 2^53, and for
+# 1e-5 <= |x| < 1e17 every scaled product m * 10^p (p <= 22) fits in UInt128.
+# Both roundings are round-half-even on the exact value, like Ryu's tie rule
+# (base/ryu/exp.jl and fixed.jl: `roundUp == 2` rounds only odd digits).
+# Values outside that range (exponent notation, subnormals) use Printf.
+const _WEB_G17_POW10 = ntuple(i -> UInt128(10)^(i - 1), 23)  # 10^0 ... 10^22
+const _WEB_G17_E17 = UInt64(10)^17
+const _WEB_G17_E18 = UInt64(10)^18
+# floor(k * log10(2)) estimates the decimal exponent of a value in [2^k, 2^(k+1)).
+const _WEB_LOG10_2 = 0.30102999566398120
+
+# Round-half-even of m * 2^e * 10^p; callers keep the result below 10^18.
+@inline function _web_g17_scaled_round(m::UInt64, e::Int, p::Int)
+    product = UInt128(m) * @inbounds(_WEB_G17_POW10[p + 1])
+    e >= 0 && return (product << e) % UInt64
+    shift = -e
+    q = product >> shift
+    r = product - (q << shift)
+    half = UInt128(1) << (shift - 1)
+    (r > half || (r == half && isodd(q))) && (q += one(UInt128))
+    return q % UInt64
+end
+
+const _WEB_DIGIT_PAIRS = let pairs = Vector{UInt8}(undef, 200)
+    for i in 0:99
+        pairs[2i + 1] = UInt8('0') + UInt8(i ÷ 10)
+        pairs[2i + 2] = UInt8('0') + UInt8(i % 10)
+    end
+    Tuple(pairs)
+end
+
+# Writes the lowest `ndig` decimal digits of `v` (zero-padded) at `pos`.
+@inline function _web_write_decimal_digits!(buf::Vector{UInt8}, pos::Int, v::UInt64,
+                                            ndig::Int)
+    last = pos + ndig - 1
+    p = last
+    @inbounds while p > pos
+        q = v ÷ UInt64(100)
+        r = (v - q * UInt64(100)) % Int
+        buf[p] = _WEB_DIGIT_PAIRS[2r + 2]
+        buf[p - 1] = _WEB_DIGIT_PAIRS[2r + 1]
+        v = q
+        p -= 2
+    end
+    p == pos && @inbounds(buf[p] = UInt8('0') + (v % UInt64(10)) % UInt8)
+    return last + 1
+end
+
+# Writes "%.17g" text of a finite `x` into `buf` (at least 64 bytes) and returns
+# the byte count, or 0 when `x` is outside the exact fast range.
+function _web_format_g17!(buf::Vector{UInt8}, x::Float64)
+    if x == 0.0
+        signbit(x) || (@inbounds buf[1] = UInt8('0'); return 1)
+        @inbounds buf[1] = UInt8('-')
+        @inbounds buf[2] = UInt8('0')
+        return 2
+    end
+    ax = abs(x)
+    (ax >= 1.0e-5 && ax < 1.0e17) || return 0
+    bits = reinterpret(UInt64, ax)
+    m = (bits & 0x000fffffffffffff) | 0x0010000000000000
+    e = Int(bits >> 52) - 1075
+    # The true decimal exponent is est or est + 1.
+    est = floor(Int, (e + 52) * _WEB_LOG10_2)
+    x0 = est + 1
+    n18 = _web_g17_scaled_round(m, e, 17 - x0)
+    if n18 < _WEB_G17_E17
+        x0 = est
+        n18 = _web_g17_scaled_round(m, e, 17 - x0)
+    end
+    # Printf's exponent is that of the value rounded to 18 significant digits.
+    xexp = n18 >= _WEB_G17_E18 ? x0 + 1 : x0
+    (-4 <= xexp < 17) || return 0
+    decimals = 16 - xexp
+    n = _web_g17_scaled_round(m, e, decimals)
+    pos = 1
+    if signbit(x)
+        @inbounds buf[1] = UInt8('-')
+        pos = 2
+    end
+    if decimals >= 18
+        # n <= 10^17 < 10^decimals: no integer digits.
+        ip = UInt64(0)
+        fp = n
+    else
+        scale = @inbounds(_WEB_G17_POW10[decimals + 1]) % UInt64
+        ip = n ÷ scale
+        fp = n - ip * scale
+    end
+    pos = _web_write_decimal_digits!(buf, pos, ip, ndigits(ip))
+    if fp != 0
+        while fp % UInt64(10) == 0
+            fp ÷= UInt64(10)
+            decimals -= 1
+        end
+        @inbounds buf[pos] = UInt8('.')
+        pos += 1
+        pos = _web_write_decimal_digits!(buf, pos, fp, decimals)
+    end
+    return pos - 1
+end
+
+# Neither path allocates per number. Printf's buffer method needs no libc
+# symbol lookup, and the 64-byte buffer fits its scientific-notation scratch.
 @inline function _js_write_finite_num(io::IO, x::Float64, buf::Vector{UInt8})
     length(buf) < _WEB_NUM_BUFFER_BYTES && resize!(buf, _WEB_NUM_BUFFER_BYTES)
-    n = Printf.format(buf, 1, _WEB_NUM_PRINTF_FORMAT, x) - 1
+    n = _web_format_g17!(buf, x)
+    n == 0 && (n = Printf.format(buf, 1, _WEB_NUM_PRINTF_FORMAT, x) - 1)
     GC.@preserve buf unsafe_write(io, pointer(buf), UInt(n))
     return nothing
 end
@@ -285,6 +397,20 @@ end
     xf = Float64(x)
     isfinite(xf) || _throw_web_nonfinite_number(xf)
     _js_write_finite_num(io, xf, buf)
+    return nothing
+end
+
+# Integers within +-2^53 convert to Float64 exactly and have at most 16 digits,
+# so their "%.17g" text is the plain decimal integer.
+const _WEB_MAX_EXACT_INT = 2^53
+
+@inline function _js_write_num(io::IO, x::Union{Int,Int32,UInt32,Int16,UInt16,Int8,UInt8},
+                               buf::Vector{UInt8})
+    if -_WEB_MAX_EXACT_INT <= x <= _WEB_MAX_EXACT_INT
+        _js_write_int(io, Int(x), buf)
+    else
+        _js_write_finite_num(io, Float64(x), buf)
+    end
     return nothing
 end
 
@@ -4142,8 +4268,55 @@ function _web_light_caps(cases::AbstractVector{WebGLExportCase})
             hemi=max(1, max_hemi), rect=max(1, max_rect))
 end
 
+# Serialization emits one small write per number and separator. IOStream locks
+# on every write and IOBuffer checks capacity on every write, so the data JSON
+# goes through this fixed-size staging buffer (bounded memory, one write to the
+# destination per 64 KiB chunk).
+const _WEB_STAGING_BYTES = 1 << 16
+
+mutable struct _WebStagedIO{T<:IO} <: IO
+    io::T
+    buf::Vector{UInt8}
+    n::Int
+end
+
+_WebStagedIO(io::IO) = _WebStagedIO(io, Vector{UInt8}(undef, _WEB_STAGING_BYTES), 0)
+
+function _web_flush_staged!(s::_WebStagedIO)
+    if s.n > 0
+        GC.@preserve s unsafe_write(s.io, pointer(s.buf), UInt(s.n))
+        s.n = 0
+    end
+    return nothing
+end
+
+@inline function Base.write(s::_WebStagedIO, b::UInt8)
+    s.n == length(s.buf) && _web_flush_staged!(s)
+    s.n += 1
+    @inbounds s.buf[s.n] = b
+    return 1
+end
+
+function Base.unsafe_write(s::_WebStagedIO, p::Ptr{UInt8}, nb::UInt)
+    n = Int(nb)
+    if n > length(s.buf) - s.n
+        _web_flush_staged!(s)
+        n >= length(s.buf) && return unsafe_write(s.io, p, nb)
+    end
+    GC.@preserve s unsafe_copyto!(pointer(s.buf, s.n + 1), p, n)
+    s.n += n
+    return n
+end
+
 function _web_write_data_json_validated(io::IO,
                                         cases::AbstractVector{WebGLExportCase})
+    staged = _WebStagedIO(io)
+    _web_write_data_json_cases(staged, cases)
+    _web_flush_staged!(staged)
+    return nothing
+end
+
+function _web_write_data_json_cases(io::IO, cases::AbstractVector{WebGLExportCase})
     write(io, "{\"cases\":[")
     for (i, case) in enumerate(cases)
         i == 1 || write(io, ',')
