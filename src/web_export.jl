@@ -274,6 +274,24 @@ _web_num_buffer() = Base.StringVector(_WEB_NUM_BUFFER_BYTES)
     return nothing
 end
 
+# Same text as `print(io, x)` for an Int, without allocating a String per call.
+function _web_print_int(io::IO, x::Int)
+    if x < 0
+        write(io, UInt8('-'))
+    end
+    v = x < 0 ? zero(UInt64) - (x % UInt64) : x % UInt64
+    scale = UInt64(1)
+    while v ÷ scale >= UInt64(10)
+        scale *= UInt64(10)
+    end
+    while true
+        write(io, UInt8('0') + ((v ÷ scale) % UInt64(10)) % UInt8)
+        scale == 1 && break
+        scale ÷= UInt64(10)
+    end
+    return nothing
+end
+
 function _js_num(x::Real)
     io = IOBuffer(sizehint=32)
     _js_write_num(io, x)
@@ -1018,7 +1036,7 @@ function _web_write_camera_json_validated(io::IO, camera, num_buf::Vector{UInt8}
     if camera isa PerspectiveCamera
         position, target, up = _camera_world_pose(camera)
         write(io, "{\"type\":\"perspective\",\"id\":")
-        print(io, camera.id)
+        _web_print_int(io, camera.id)
         write(io, ",\"name\":")
         _js_write_str(io, camera.name)
         write(io, ",\"position\":")
@@ -1050,7 +1068,7 @@ function _web_write_camera_json_validated(io::IO, camera, num_buf::Vector{UInt8}
     elseif camera isa OrthographicCamera
         position, target, up = _camera_world_pose(camera)
         write(io, "{\"type\":\"orthographic\",\"id\":")
-        print(io, camera.id)
+        _web_print_int(io, camera.id)
         write(io, ",\"name\":")
         _js_write_str(io, camera.name)
         write(io, ",\"position\":")
@@ -1244,9 +1262,9 @@ function _web_write_texture_json(io::IO, tex, num_buf::Vector{UInt8})
     tex_coord = _texture_tex_coord(tex.tex_coord)
     colorspace = _texture_colorspace_symbol(tex.colorspace)
     write(io, "{\"width\":")
-    print(io, W)
+    _web_print_int(io, W)
     write(io, ",\"height\":")
-    print(io, H)
+    _web_print_int(io, H)
     write(io, ",\"wrapS\":")
     _js_write_str(io, String(wrap_s))
     write(io, ",\"wrapT\":")
@@ -1280,7 +1298,7 @@ function _web_write_texture_json(io::IO, tex, num_buf::Vector{UInt8})
     write(io, ",\"matrixAutoUpdate\":")
     write(io, tex.matrix_auto_update ? "true" : "false")
     write(io, ",\"texCoord\":")
-    print(io, tex_coord)
+    _web_print_int(io, tex_coord)
     write(io, ",\"needsUpdate\":")
     write(io, tex.needs_update ? "true" : "false")
     write(io, ",\"data\":")
@@ -1412,14 +1430,17 @@ function _web_material_texture(mat)
     return nothing
 end
 
-struct _WebTextureRegistry
-    ids::IdDict{Texture,Int}
-    textures::Vector{Texture}
+# Mutable so the registries pass by reference: drawable writers hand them to
+# calls that dispatch on `Any`-typed material maps, which would otherwise box an
+# immutable registry on every call.
+mutable struct _WebTextureRegistry
+    const ids::IdDict{Texture,Int}
+    const textures::Vector{Texture}
 end
 
-struct _WebCubeTextureRegistry
-    ids::IdDict{CubeTexture,Int}
-    textures::Vector{CubeTexture}
+mutable struct _WebCubeTextureRegistry
+    const ids::IdDict{CubeTexture,Int}
+    const textures::Vector{CubeTexture}
 end
 
 _web_texture_registry() = _WebTextureRegistry(IdDict{Texture,Int}(), Texture[])
@@ -1479,7 +1500,7 @@ function _web_write_texture_or_ref_json(io::IO, tex, num_buf::Vector{UInt8},
         id = get(registry.ids, tex, 0)
         if id != 0
             write(io, "{\"ref\":")
-            print(io, id)
+            _web_print_int(io, id)
             write(io, '}')
             return nothing
         end
@@ -1494,7 +1515,7 @@ function _web_write_env_or_ref_json(io::IO, env, num_buf::Vector{UInt8},
         id = get(registry.ids, env, 0)
         if id != 0
             write(io, "{\"ref\":")
-            print(io, id)
+            _web_print_int(io, id)
             write(io, '}')
             return nothing
         end
@@ -1510,7 +1531,7 @@ function _web_write_env_texture_registry_json(io::IO,
     for (i, env) in enumerate(registry.textures)
         i == 1 || write(io, ',')
         write(io, "{\"id\":")
-        print(io, i)
+        _web_print_int(io, i)
         write(io, ",\"texture\":")
         _web_write_env_json(io, env, num_buf)
         write(io, '}')
@@ -1525,7 +1546,7 @@ function _web_write_texture_registry_json(io::IO, registry::_WebTextureRegistry,
     for (i, tex) in enumerate(registry.textures)
         i == 1 || write(io, ',')
         write(io, "{\"id\":")
-        print(io, i)
+        _web_print_int(io, i)
         write(io, ",\"texture\":")
         _web_write_texture_json(io, tex, num_buf)
         write(io, '}')
@@ -1604,11 +1625,11 @@ function _web_shadow_json(scene::Scene, light::Union{DirectionalLight,PointLight
     _js_write_str(io, light isa DirectionalLight ? "directionalStatic" :
                       light isa PointLight ? "pointStatic" : "spotStatic")
     write(io, ",\"size\":")
-    print(io, W)
+    _web_print_int(io, W)
     write(io, ",\"bias\":")
     _js_write_num(io, sm.bias * 0.5, num_buf)
     write(io, ",\"pcfRadius\":")
-    print(io, sm.pcf_radius)
+    _web_print_int(io, sm.pcf_radius)
     write(io, ",\"matrix\":")
     _js_write_mat(io, sm.light_vp, num_buf)
     write(io, ",\"data\":")
@@ -2274,11 +2295,11 @@ function _web_write_bone_json(io::IO, bone::Bone, num_buf::Vector{UInt8})
     parent_id = parent === nothing ? 0 : parent.id
     parent_matrix = parent === nothing ? Mat4() : compute_world_matrix(parent)
     write(io, "{\"id\":")
-    print(io, bone.id)
+    _web_print_int(io, bone.id)
     write(io, ",\"name\":")
     _js_write_str(io, bone.name)
     write(io, ",\"parentId\":")
-    print(io, parent_id)
+    _web_print_int(io, parent_id)
     write(io, ",\"matrix\":")
     _js_write_mat(io, compute_world_matrix(bone), num_buf)
     write(io, ",\"parentMatrix\":")
@@ -2469,9 +2490,9 @@ function _web_write_geo_object(io::IO, geo::BufferGeometry,
     write(io, ",\"indices\":")
     _js_write_index_array_zero_based(io, indices, num_buf)
     write(io, ",\"drawStart\":")
-    print(io, draw_start)
+    _web_print_int(io, draw_start)
     write(io, ",\"drawCount\":")
-    print(io, draw_count)
+    _web_print_int(io, draw_count)
     return nothing
 end
 
@@ -2497,7 +2518,7 @@ end
 
 function _web_write_visibility_state(io::IO, id::Int, visible::Bool)
     write(io, "{\"id\":")
-    print(io, id)
+    _web_print_int(io, id)
     write(io, ",\"visible\":")
     write(io, visible ? "true" : "false")
     write(io, '}')
@@ -2639,7 +2660,7 @@ function _web_write_transform_node_json(io::IO, obj::AbstractObject3D,
     if obj isa LOD
         write(io, ",\"lodAutoUpdate\":", obj.auto_update ? "true" : "false")
         write(io, ",\"lodInitialLevel\":")
-        print(io, obj._manual_level)
+        _web_print_int(io, obj._manual_level)
         _web_write_lod_path_json(io, lod_path, num_buf)
         write(io, ",\"visibilityStates\":")
         _web_write_visibility_states_json(io, visibility_target_ids, visibility_values;
@@ -2648,7 +2669,7 @@ function _web_write_transform_node_json(io::IO, obj::AbstractObject3D,
         for (index, level) in enumerate(obj.levels)
             index == 1 || write(io, ',')
             write(io, "{\"object\":")
-            print(io, level.object.id)
+            _web_print_int(io, level.object.id)
             write(io, ",\"distance\":")
             _js_write_num(io, level.distance, num_buf)
             write(io, ",\"hysteresis\":")
@@ -2873,7 +2894,7 @@ function _web_write_drawable_json(io::IO, obj, world::Mat4, num_buf::Vector{UInt
     positions = positions_override === nothing ? _web_positions(obj, geo) : positions_override
     use_vertex_colors = !wireframe && (mode != "triangles" || _web_material_vertex_colors(mat))
     write(io, "{\"id\":")
-    print(io, transform_obj.id)
+    _web_print_int(io, transform_obj.id)
     write(io, ",\"name\":")
     _js_write_str(io, getproperty(obj, :name))
     write(io, ",\"mode\":")
@@ -2900,7 +2921,7 @@ function _web_write_drawable_json(io::IO, obj, world::Mat4, num_buf::Vector{UInt
     end
     _web_write_lod_path_json(io, lod_path, num_buf)
     write(io, ",\"parentId\":")
-    print(io, parent_id)
+    _web_print_int(io, parent_id)
     write(io, ",\"matrix\":")
     _js_write_mat(io, m, num_buf)
     write(io, ",\"parentMatrix\":")
@@ -2950,7 +2971,7 @@ function _web_write_drawable_json(io::IO, obj, world::Mat4, num_buf::Vector{UInt
     write(io, ",\"depthPacking\":")
     _js_write_str(io, _web_material_depth_packing(mat))
     write(io, ",\"depthPackingMode\":")
-    print(io, _web_material_depth_packing_id(mat))
+    _web_print_int(io, _web_material_depth_packing_id(mat))
     write(io, ",\"toonSteps\":")
     _js_write_num(io, _web_material_toon_steps(mat), num_buf)
     write(io, ",\"color\":")
@@ -3777,7 +3798,7 @@ _web_track_json_sizehint(tr::CubicSplineQuaternionKeyframeTrack) =
 
 function _web_write_track_json(io::IO, tr::KeyframeTrack, num_buf::Vector{UInt8})
     write(io, "{\"target\":")
-    print(io, tr.target.id)
+    _web_print_int(io, tr.target.id)
     write(io, ",\"property\":")
     _js_write_str(io, _web_track_property_name(tr))
     write(io, ",\"kind\":\"vec3\",\"times\":")
@@ -3792,11 +3813,11 @@ end
 
 function _web_write_track_json(io::IO, tr::NumberKeyframeTrack, num_buf::Vector{UInt8})
     write(io, "{\"target\":")
-    print(io, tr.target.id)
+    _web_print_int(io, tr.target.id)
     write(io, ",\"property\":")
     _js_write_str(io, _web_track_property_name(tr))
     write(io, ",\"component\":")
-    print(io, tr.component)
+    _web_print_int(io, tr.component)
     write(io, ",\"kind\":\"number\",\"times\":")
     _js_write_array(io, tr.times, num_buf)
     write(io, ",\"values\":")
@@ -3809,7 +3830,7 @@ end
 
 function _web_write_track_json(io::IO, tr::QuaternionKeyframeTrack, num_buf::Vector{UInt8})
     write(io, "{\"target\":")
-    print(io, tr.target.id)
+    _web_print_int(io, tr.target.id)
     write(io, ",\"property\":")
     _js_write_str(io, _web_track_property_name(tr))
     write(io, ",\"kind\":\"quat\",\"times\":")
@@ -3825,11 +3846,11 @@ end
 function _web_write_track_json(io::IO, tr::MorphWeightsKeyframeTrack, num_buf::Vector{UInt8})
     stride = isempty(tr.values) ? 0 : length(tr.values[1])
     write(io, "{\"target\":")
-    print(io, tr.target.id)
+    _web_print_int(io, tr.target.id)
     write(io, ",\"property\":")
     _js_write_str(io, _web_track_property_name(tr))
     write(io, ",\"kind\":\"weights\",\"stride\":")
-    print(io, stride)
+    _web_print_int(io, stride)
     write(io, ",\"times\":")
     _js_write_array(io, tr.times, num_buf)
     write(io, ",\"values\":")
@@ -3846,11 +3867,11 @@ function _web_write_track_json(io::IO, tr::CubicSplineMorphWeightsKeyframeTrack,
                                num_buf::Vector{UInt8})
     stride = isempty(tr.values) ? 0 : length(tr.values[1])
     write(io, "{\"target\":")
-    print(io, tr.target.id)
+    _web_print_int(io, tr.target.id)
     write(io, ",\"property\":")
     _js_write_str(io, _web_track_property_name(tr))
     write(io, ",\"kind\":\"weights\",\"stride\":")
-    print(io, stride)
+    _web_print_int(io, stride)
     write(io, ",\"times\":")
     _js_write_array(io, tr.times, num_buf)
     write(io, ",\"values\":")
@@ -3872,7 +3893,7 @@ end
 function _web_write_track_json(io::IO, tr::CubicSplineKeyframeTrack,
                                num_buf::Vector{UInt8})
     write(io, "{\"target\":")
-    print(io, tr.target.id)
+    _web_print_int(io, tr.target.id)
     write(io, ",\"property\":")
     _js_write_str(io, _web_track_property_name(tr))
     write(io, ",\"kind\":\"vec3\",\"times\":")
@@ -3890,7 +3911,7 @@ end
 function _web_write_track_json(io::IO, tr::CubicSplineQuaternionKeyframeTrack,
                                num_buf::Vector{UInt8})
     write(io, "{\"target\":")
-    print(io, tr.target.id)
+    _web_print_int(io, tr.target.id)
     write(io, ",\"property\":")
     _js_write_str(io, _web_track_property_name(tr))
     write(io, ",\"kind\":\"quat\",\"times\":")
@@ -3931,7 +3952,7 @@ function _web_write_clip_json(io::IO, clip::AnimationClip, num_buf::Vector{UInt8
     write(io, ",\"loop\":")
     _js_write_str(io, String(clip.loop))
     write(io, ",\"repetitions\":")
-    print(io, clip.repetitions)
+    _web_print_int(io, clip.repetitions)
     write(io, ",\"clampWhenFinished\":")
     write(io, clip.clamp_when_finished ? "true" : "false")
     write(io, ",\"timeScale\":")
@@ -4200,13 +4221,13 @@ function _web_write_case_json_parts(io::IO, case::WebGLExportCase,
     write(io, ",\"toneMapping\":")
     _js_write_str(io, String(case.tone_mapping))
     write(io, ",\"toneMappingMode\":")
-    print(io, _web_tone_mapping_id(case.tone_mapping))
+    _web_print_int(io, _web_tone_mapping_id(case.tone_mapping))
     write(io, ",\"toneExposure\":")
     _js_write_num(io, case.tone_exposure, num_buf)
     write(io, ",\"outputColorSpace\":")
     _js_write_str(io, String(case.output_color_space))
     write(io, ",\"outputColorSpaceMode\":")
-    print(io, _web_output_color_space_id(case.output_color_space))
+    _web_print_int(io, _web_output_color_space_id(case.output_color_space))
     write(io, ",\"clippingPlanes\":[")
     for (i, plane) in enumerate(case.clipping_planes)
         i == 1 || write(io, ',')
