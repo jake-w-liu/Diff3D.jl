@@ -112,3 +112,16 @@ end
     slope = ForwardDiff.derivative(u -> sample_texture_linear(texture, u, 0.5).r, 0.5)
     @test slope ≈ 2.0 rtol = 1e-12
 end
+
+@testset "Light defaults follow three.js" begin
+    # HemisphereLight.js:50 `new Color(groundColor)` is white when omitted
+    # (node oracle: new HemisphereLight().groundColor = [1, 1, 1]).
+    @test HemisphereLight().ground_color == Color3(1.0, 1.0, 1.0)
+    @test HemisphereLight().color == Color3(1.0, 1.0, 1.0)
+    # RectAreaLight.js:38 `width = 10, height = 10` (oracle: 10, 10), so the
+    # default luminous power is intensity * 10 * 10 * pi (RectAreaLight.js:87).
+    rect = RectAreaLight()
+    @test (rect.width, rect.height) == (10.0, 10.0)
+    @test rect.power ≈ 100pi rtol = 1e-15
+    @test RectAreaLight(width=2.0, height=3.0).width == 2.0
+end

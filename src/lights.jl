@@ -658,8 +658,10 @@ mutable struct HemisphereLight <: AbstractLight
     intensity::Float64
 end
 
+# three.js HemisphereLight.js:50 builds `groundColor` with `new Color(groundColor)`,
+# which is white when the argument is omitted.
 function HemisphereLight(; color=Color3(1.0, 1.0, 1.0),
-                          ground_color=Color3(0.0, 0.0, 0.0),
+                          ground_color=Color3(1.0, 1.0, 1.0),
                           intensity=1.0, position=Vec3(0.0, 1.0, 0.0),
                           name="HemisphereLight")
     HemisphereLight(_validated_light_vec3(position, :position), Euler(), Vec3(1.0,1.0,1.0),
@@ -697,7 +699,8 @@ mutable struct RectAreaLight <: AbstractLight
     target::Vec3{Float64}
 end
 
-function RectAreaLight(; color=Color3(1.0,1.0,1.0), intensity=1.0, width=1.0, height=1.0,
+# three.js RectAreaLight.js:38: `constructor( color, intensity, width = 10, height = 10 )`.
+function RectAreaLight(; color=Color3(1.0,1.0,1.0), intensity=1.0, width=10.0, height=10.0,
                         position=Vec3(0.0,1.0,0.0), name="RectAreaLight")
     RectAreaLight(_validated_light_vec3(position, :position),
                   Euler(), Vec3(1.0,1.0,1.0), nothing, AbstractObject3D[],
