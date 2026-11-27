@@ -250,11 +250,14 @@ const _EMPTY_INT_STAMP = zeros(Int, 0, 0)
 @inline _inside_far_clip(z) = isfinite(z) && z <= one(z)
 
 # The depth test compares at the target's depth precision, as a GPU compares a
-# fragment depth quantized to its depth-buffer format. Without the conversion a
-# Float32 target would let a coplanar later surface win wherever rounding the
-# stored depth moved it beyond the unrounded incoming value.
+# fragment depth quantized to its depth-buffer format; without the conversion a
+# Float32 target would decide coplanar surfaces by how rounding moved the stored
+# depth. The comparison is three.js's default LessEqualDepth (Material.js:211,
+# applied by WebGLState.js:769), so of two surfaces at exactly equal depth the
+# one drawn later is kept. Meshes, wireframes, lines, points and sprites all
+# use this one test.
 @inline _depth_passes(depth::AbstractMatrix{T}, z, py::Int, px::Int) where {T} =
-    convert(T, z) < @inbounds(depth[py, px])
+    convert(T, z) <= @inbounds(depth[py, px])
 @inline _inside_near_clip(z) = isfinite(z) && z >= -one(z)
 
 struct _CombinedClippingPlanes{G,M}

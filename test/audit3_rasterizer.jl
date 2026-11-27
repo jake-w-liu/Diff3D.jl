@@ -206,13 +206,14 @@ end
 end
 
 @testset "Opaque depth ties do not depend on the render cache" begin
-    # Coplanar opaque meshes tie in depth; the strict depth test keeps the
-    # first drawn. Opaque draws go nearest first with ties in ascending object
-    # id, so the lowest id at z=0 keeps the pixel with or without a
-    # RenderCache. This pins determinism, not three.js parity: three.js
-    # painterSortStable (WebGLRenderLists.js:1-29) orders by material id before
-    # depth and its default depthFunc is LessEqual, so there the last drawn
-    # coplanar surface wins (node oracle draw order [1,2,3,4,5], winner 4).
+    # Coplanar opaque meshes tie in depth. three.js's default depthFunc is
+    # LessEqual (Material.js:211, WebGLState.js:769), so the last drawn
+    # coplanar surface wins; painterSortStable (WebGLRenderLists.js:1-29) draws
+    # these one-material-each meshes in creation order (node oracle draw order
+    # [1,2,3,4,5], winner 4). Opaque draws here go nearest first with ties in
+    # ascending object id, so the highest id at z=0 keeps the pixel, with or
+    # without a RenderCache. (Render-parity round 2 replaced the strict test
+    # that kept the first drawn, lowest id.)
     for zs in ([-1.0, 0.0, 0.0, 0.0, -1.0], [-1.0, -1.0, 0.0, 0.0, 0.0, -1.0, 0.0])
         scene = Scene()
         for (i, z) in enumerate(zs)
@@ -221,11 +222,11 @@ end
             mesh.position = Vec3(0.0, 0.0, z)
             add!(scene, mesh)
         end
-        first_near = findfirst(iszero, zs)
+        last_near = findlast(iszero, zs)
         for cache in (nothing, RenderCache())
             target = RenderTarget(8, 8)
             render!(target, scene, audit3_front_camera(); cache=cache)
-            @test target.color[4, 4, 1] == first_near / length(zs)
+            @test target.color[4, 4, 1] == last_near / length(zs)
         end
     end
 end
@@ -406,8 +407,10 @@ end
 @testset "Float32 targets depth-test at their own precision" begin
     # A GPU compares the fragment depth after quantizing it to the depth-buffer
     # format (GLES 2.0 sec. 4.1.5). Two identical coplanar planes therefore
-    # tie exactly in a Float32 buffer too, and the strict test keeps the first
-    # drawn (red, lower id) everywhere, as in a Float64 target.
+    # tie exactly in a Float32 buffer too, and three.js's LessEqual depth test
+    # (Material.js:211) keeps the last drawn (green, higher id) everywhere, as
+    # in a Float64 target. (Before render-parity round 2 the strict test kept
+    # the first drawn, red.)
     camera = PerspectiveCamera()
     camera.position = Vec3(0.3, 0.2, 4.0)
     camera.target = Vec3(0.0, 0.0, 0.0)
@@ -421,10 +424,10 @@ end
     for shading in (:flat, :smooth), T in (Float64, Float32)
         target = RenderTarget(64, 64; T=T)
         render!(target, scene, camera; shading=shading)
-        @test count(>(0.5), target.color[:, :, 1]) > 2000
-        @test count(>(0.5), target.color[:, :, 2]) == 0
+        @test count(>(0.5), target.color[:, :, 2]) > 2000
+        @test count(>(0.5), target.color[:, :, 1]) == 0
     end
     pooled = RenderTarget(64, 64; T=Float32)
     render_pooled!(pooled, scene, camera, RenderCache())
-    @test count(>(0.5), pooled.color[:, :, 2]) == 0
+    @test count(>(0.5), pooled.color[:, :, 1]) == 0
 end
