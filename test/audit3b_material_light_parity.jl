@@ -10,6 +10,11 @@ function _audit3b_sample_sum(texture, us, vs)
     return total
 end
 
+function _audit3b_sample_allocations(texture, us, vs)
+    _audit3b_sample_sum(texture, us, vs)
+    return @allocated _audit3b_sample_sum(texture, us, vs)
+end
+
 @testset "sRGB textures decode each texel before filtering" begin
     # three.js uploads sRGB color maps as SRGB8_ALPHA8 (WebGLTextures.js:234),
     # and GL converts every texel to linear light before it is filtered
@@ -102,8 +107,9 @@ end
         generate_mipmaps!(texture)
         @test (@inferred sample_texture_linear(texture, 0.3, 0.7, 0.2)) isa Color3{Float64}
         us = rand(64); vs = rand(64)
-        _audit3b_sample_sum(texture, us, vs)
-        @test (@allocated _audit3b_sample_sum(texture, us, vs)) == 0
+        if Base.JLOptions().opt_level > 0
+            @test _audit3b_sample_allocations(texture, us, vs) == 0
+        end
     end
     # Derivative of a bilinear sample is the decoded texel difference times W.
     data = zeros(1, 2, 3)
@@ -420,4 +426,32 @@ end
     ambient_image = sphere_image(AmbientLight(color=l00 * 0.886227))
     @test maximum(abs.(sh_image .- ambient_image)) <= 1e-12
     @test maximum(sh_image) > 0
+end
+
+function _audit3b_normal_lookup_allocations(query, light, points, normal)
+    total = 0.0
+    for p in points
+        total += Diff3D._shadow_fn_visibility(query, light, p, normal)
+    end
+    return @allocated for p in points
+        total += Diff3D._shadow_fn_visibility(query, light, p, normal)
+    end
+end
+
+@testset "Normal-biased shadow queries stay allocation free" begin
+    light = PointLight(position=Vec3(0.0, 3.0, 0.0), cast_shadow=true,
+                       shadow_intensity=0.5, shadow_normal_bias=0.05)
+    scene = _audit3b_tile_scene(light)
+    maps = IdDict{Diff3D.AbstractLight,ShadowMap}()
+    query = Diff3D._build_shadow_query_from_drawables!(maps, Matrix{Float64}[], [light],
+                                                       collect_meshes(scene),
+                                                       InstancedMesh[]; resolution=32)
+    points = [Vec3(0.1i - 2.0, 0.0, 0.05i) for i in 1:40]
+    normal = Vec3(0.0, 1.0, 0.0)
+    @test (@inferred Diff3D._shadow_fn_visibility(query, light, points[1], normal)) isa Float64
+    # A caller-supplied two-argument shadow function keeps working.
+    @test Diff3D._shadow_fn_visibility((l, p) -> 0.25, light, points[1], normal) == 0.25
+    if Base.JLOptions().opt_level > 0
+        @test _audit3b_normal_lookup_allocations(query, light, points, normal) == 0
+    end
 end
