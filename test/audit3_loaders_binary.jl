@@ -526,12 +526,19 @@ end
 
 @testset "MTL d and Tr set opacity only as MTLLoader does" begin
     # three.js MTLLoader.js:478-500 (r186): `d n` sets opacity only when
-    # n < 1, `Tr n` only when n > 0 (to 1 - n). Expected (opacity,
-    # transparent) pairs printed by MTLLoader.parse(...).create("m") in node.
+    # n < 1, `Tr n` only when n > 0 (to 1 - n). MTLLoader.js:150 keeps the
+    # last value of each keyword and applies keywords in first-seen order.
+    # Expected (opacity, transparent) pairs printed by
+    # MTLLoader.parse(...).create("m") in node.
     cases = ("d 0.5\nTr 0\n" => (0.5, true), "Tr 0.25\nd 1\n" => (0.75, true),
              "d 1.5\n" => (1.0, false), "Tr -0.5\n" => (1.0, false),
              "d 0.25\n" => (0.25, true), "Tr 0.25\n" => (0.75, true),
-             "d 0\n" => (0.0, true))
+             "d 0\n" => (0.0, true), "Tr 1\n" => (0.0, true),
+             "d 0.5\nd 1\n" => (1.0, false), "d 0.2\nTr 0.5\n" => (0.5, true),
+             "Tr 0.5\nd 0.2\n" => (0.2, true), "D 0.3\n" => (0.3, true),
+             "TR 0.4\n" => (0.6, true), "d 0.2\nTr 0.5\nd 0.3\n" => (0.5, true),
+             "Tr 0.5\nd 0.2\nTr 0.1\n" => (0.2, true), "d 0.5\nTr 1e-20\n" => (1.0, true),
+             "Tr 0\nd 0.5\nTr 0\n" => (0.5, true))
     for (body, (opacity, transparent)) in cases
         path = tempname() * ".mtl"
         write(path, "newmtl m\n" * body)

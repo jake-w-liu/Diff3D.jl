@@ -2752,14 +2752,36 @@ function _mtl_texture_option(tokens, option::String, default::Float64, label::St
     return Vec2(u, v === nothing ? default : v)
 end
 
+# MTLLoader keeps the last value of each keyword (`info[key] = value`) and
+# applies the keywords in the order they were first seen (MTLLoader.js:150,
+# 478-500): `d n` sets the opacity only when n < 1, `Tr n` only when n > 0 (to
+# 1 - n), and either one makes the material transparent. So `Tr 0` beside
+# `d 0.5` keeps 0.5, and `d 0.5` followed by `d 1` leaves the material opaque.
+function _mtl_opacity(has_dissolve::Bool, dissolve::Float64, has_transmission::Bool,
+                      transmission::Float64, transmission_first::Bool)
+    opacity = 1.0
+    translucent = false
+    for step in (transmission_first ? (:tr, :d) : (:d, :tr))
+        if step === :d && has_dissolve && dissolve < 1.0
+            opacity = dissolve
+            translucent = true
+        elseif step === :tr && has_transmission && transmission > 0.0
+            opacity = 1.0 - transmission
+            translucent = true
+        end
+    end
+    return opacity, translucent
+end
+
 """
     load_mtl(path) -> Dict{String, MeshPhongMaterial}
 
 Parse a Wavefront .mtl file like three.js `MTLLoader`: keywords are
 case-insensitive and `newmtl` names are the rest of the line. Reads `Kd`
 (diffuse), `Ks` (specular), `Ns` (shininess), `Ke` (emissive), `d`/`Tr`
-(opacity: like MTLLoader, only `d` below 1 or `Tr` above 0 sets it, to `d`
-or `1 - Tr`), and the texture maps `map_Kd` (`map`), `map_Ks` (`specular_map`),
+(opacity: as in MTLLoader, the last `d` and the last `Tr` of a material are
+applied in the order their keywords first appear, and only `d` below 1 or `Tr`
+above 0 sets the opacity, to `d` or `1 - Tr`), and the texture maps `map_Kd` (`map`), `map_Ks` (`specular_map`),
 `map_Ke` (`emissive_map`), `norm` (`normal_map`), and `map_d` (`alpha_map`,
 which also makes the material transparent). The first map of each kind wins;
 texture `-s` and `-o` options set the texture `repeat` and `offset`. Other
@@ -2771,14 +2793,18 @@ function load_mtl(path::String)
     default_specular = MeshPhongMaterial().specular
     name = ""
     kd = Color3(1.0,1.0,1.0); ks = default_specular; ke = Color3(0.0,0.0,0.0)
-    ns = 30.0; d = 1.0
+    ns = 30.0
+    dissolve = 1.0; has_dissolve = false
+    transmission = 0.0; has_transmission = false; transmission_first = false
     diffuse_map = specular_map = emissive_map = normal_map = alpha_map = nothing
     dir = dirname(path)
     function flush!()
         isempty(name) && return
+        opacity, translucent = _mtl_opacity(has_dissolve, dissolve, has_transmission,
+                                            transmission, transmission_first)
         mats[name] = MeshPhongMaterial(color=kd, specular=ks, emissive=ke, shininess=ns,
-                                       opacity=d,
-                                       transparent=(d < 1.0 || alpha_map !== nothing),
+                                       opacity=opacity,
+                                       transparent=(translucent || alpha_map !== nothing),
                                        map=diffuse_map, specular_map=specular_map,
                                        emissive_map=emissive_map, normal_map=normal_map,
                                        alpha_map=alpha_map)
@@ -2796,7 +2822,9 @@ function load_mtl(path::String)
             name = String(_mtl_rest_of_line(line, tag))
             isempty(name) && error("MTL newmtl requires a material name")
             kd = Color3(1.0,1.0,1.0); ks = default_specular
-            ke = Color3(0.0,0.0,0.0); ns = 30.0; d = 1.0
+            ke = Color3(0.0,0.0,0.0); ns = 30.0
+            dissolve = 1.0; has_dissolve = false
+            transmission = 0.0; has_transmission = false; transmission_first = false
             diffuse_map = specular_map = emissive_map = normal_map = alpha_map = nothing
         elseif _mtl_key_is(tag, "kd")
             kd = _mtl_parse_color_tokens(parts, tag_state[2],
@@ -2810,13 +2838,12 @@ function load_mtl(path::String)
         elseif _mtl_key_is(tag, "ns")
             ns = _mtl_parse_scalar_token(parts, tag_state[2], "Ns")
         elseif _mtl_key_is(tag, "d")
-            # MTLLoader only lets `d` below 1 and `Tr` above 0 set the
-            # opacity, so `Tr 0` written next to `d 0.5` keeps 0.5.
             dissolve = _mtl_parse_scalar_token(parts, tag_state[2], "d")
-            dissolve < 1.0 && (d = dissolve)
+            has_dissolve = true
         elseif _mtl_key_is(tag, "tr")
             transmission = _mtl_parse_scalar_token(parts, tag_state[2], "Tr")
-            transmission > 0.0 && (d = 1.0 - transmission)
+            has_dissolve || (transmission_first = true)
+            has_transmission = true
         elseif _mtl_key_is(tag, "map_kd")
             diffuse_map === nothing &&
                 (diffuse_map = _mtl_texture(dir, line, "map_Kd", :srgb))
