@@ -379,6 +379,15 @@ function _inflate_codes!(out::Vector{UInt8}, olen::Int, br::_BitReader,
     return olen
 end
 
+# Append one Huffman-coded block to `out` (test/suite.jl drives the decoder
+# with hand-built tables through this entry point).
+function _inflate_block!(out::Vector{UInt8}, br::_BitReader, lit::_Huff, dist::_Huff,
+                         max_output::Int)
+    olen = _inflate_codes!(out, length(out), br, lit, dist, max_output)
+    resize!(out, olen)
+    return out
+end
+
 function _inflate_stored!(out::Vector{UInt8}, olen::Int, br::_BitReader, limit::Int)
     _bitreader_align!(br)
     data = br.data
