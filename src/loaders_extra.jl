@@ -10346,6 +10346,29 @@ function _gltf_instance_matrices(gltf, buffers, node)
     return matrices
 end
 
+# three.js GLTFLoader.js:1795-1798 maps the custom instance attribute
+# `_COLOR_0` to `InstancedMesh.instanceColor`. Like COLOR_0 it holds linear
+# RGB(A) as FLOAT or normalized UNSIGNED_BYTE/UNSIGNED_SHORT; alpha is unused.
+function _gltf_instance_colors(gltf, buffers, node, count::Int)
+    ext = get(get(node, "extensions", Dict{String,Any}()),
+              "EXT_mesh_gpu_instancing", nothing)
+    ext === nothing && return nothing
+    attrs = ext["attributes"]
+    haskey(attrs, "_COLOR_0") || return nothing
+    accessor_index = _gltf_checked_accessor_index(
+        gltf, attrs["_COLOR_0"], "EXT_mesh_gpu_instancing _COLOR_0")
+    _gltf_validate_attribute_format(
+        gltf, accessor_index, "EXT_mesh_gpu_instancing _COLOR_0",
+        (5126,), (5121, 5123))
+    data, ncomp, color_count = _gltf_accessor(gltf, buffers, accessor_index)
+    ncomp in (3, 4) ||
+        error("EXT_mesh_gpu_instancing _COLOR_0 accessor must be VEC3 or VEC4")
+    color_count == count ||
+        error("EXT_mesh_gpu_instancing attribute accessors must have matching counts")
+    return [Color3(data[ncomp * (i - 1) + 1], data[ncomp * (i - 1) + 2],
+                   data[ncomp * (i - 1) + 3]) for i in 1:count]
+end
+
 # Decompose a validated TRS matrix. Missing zero-scale axes admit several
 # rotations; complete a proper orthonormal basis that preserves the matrix.
 function _gltf_decompose(M::Mat4)
@@ -10891,6 +10914,8 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
         obj = node_objects[node_idx]
         add!(parent, obj)
         instance_matrices = _gltf_instance_matrices(gltf, buffers, node)
+        instance_colors = instance_matrices === nothing ? nothing :
+            _gltf_instance_colors(gltf, buffers, node, length(instance_matrices))
         instance_matrices !== nothing && !haskey(node, "mesh") &&
             error("EXT_mesh_gpu_instancing can only be used on glTF mesh nodes")
         if haskey(node, "mesh")
@@ -10922,6 +10947,11 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
                                          cast_shadow=object_casts_shadow(mesh_obj),
                                          receive_shadow=object_receives_shadow(mesh_obj),
                                          draw_mode=draw_mode)
+                    if instance_colors !== nothing
+                        for (instance, color) in enumerate(instance_colors)
+                            set_instance_color!(inst, instance, color)
+                        end
+                    end
                     add!(obj, inst)
                 end
             end
