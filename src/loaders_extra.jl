@@ -5013,6 +5013,9 @@ end
 
 # Reference links avoid copying every ancestor and preceding sibling. The
 # context fields are fixed at construction; only the parser's sibling state grows.
+# `css` caches the declarations the document's style rules give this element:
+# matching depends only on the fixed context, and the cascade asks for it once
+# per property group (style, display, clip-path, mask, ...).
 mutable struct _SVGElementContext
     tag::String
     attrs::Dict{String,String}
@@ -5020,6 +5023,7 @@ mutable struct _SVGElementContext
     previous_sibling::Union{Nothing,_SVGElementContext}
     child_index::Int
     type_index::Int
+    css::Union{Nothing,Dict{String,String}}
 end
 
 mutable struct _SVGSiblingState
@@ -5037,7 +5041,8 @@ function _svg_element_context(tag::String, attrs::AbstractDict,
                               siblings::_SVGSiblingState)
     parent = isempty(ancestors) ? nothing : ancestors[end]
     return _SVGElementContext(tag,Dict{String,String}(attrs),parent,siblings.last,
-                              siblings.count+1,get(siblings.type_counts,tag,0)+1)
+                              siblings.count+1,get(siblings.type_counts,tag,0)+1,
+                              nothing)
 end
 
 function _svg_record_sibling!(siblings::_SVGSiblingState, context::_SVGElementContext)
@@ -5145,14 +5150,25 @@ function _svg_rule_matches(rule::_SVGStyleRule, context::_SVGElementContext)
     return _svg_rule_matches_from(rule,context,length(rule.chain),failed)
 end
 
+# Declarations from `rules` that apply to the element, in cascade order. With
+# a document `context` the result is cached on it (every call for a document
+# passes that document's rules); callers must not mutate it.
 function _svg_css_attrs(tag::String, attrs::AbstractDict,
                         rules::Vector{_SVGStyleRule},
                         context::Union{Nothing,_SVGElementContext}=nothing)
-    match_context = context === nothing ?
-                    _svg_element_context(tag, attrs, _SVGAncestorStack(),
-                                         _SVGSiblingState()) :
-                    context
+    context === nothing &&
+        return _svg_css_matches(rules, _svg_element_context(tag, attrs, _SVGAncestorStack(),
+                                                            _SVGSiblingState()))
+    cached = context.css
+    cached === nothing || return cached
+    out = _svg_css_matches(rules, context)
+    context.css = out
+    return out
+end
+
+function _svg_css_matches(rules::Vector{_SVGStyleRule}, match_context::_SVGElementContext)
     out = Dict{String,String}()
+    isempty(rules) && return out
     for rule in sort([rule for rule in rules
                       if _svg_rule_matches(rule, match_context)];
                      by=rule -> (rule.specificity, rule.order))
@@ -8099,49 +8115,62 @@ function _svg_arc_points(start::Vec2{Float64}, rx::Float64, ry::Float64,
     return points
 end
 
+# Token cursor of `_svg_path_points`. Keeping the mutable parse position in a
+# struct (instead of variables captured and reassigned by closures, which Julia
+# boxes) keeps the per-number path type-stable.
+mutable struct _SVGPathCursor
+    tokens::Vector{String}
+    i::Int
+    current::Vec2{Float64}
+end
+
+_svg_path_next_is_number(c::_SVGPathCursor) =
+    c.i <= length(c.tokens) && !_svg_is_command(c.tokens[c.i])
+
+function _svg_path_read_number!(c::_SVGPathCursor, context)
+    c.i <= length(c.tokens) || error("SVG path command $context is missing numbers")
+    token = c.tokens[c.i]
+    _svg_is_command(token) && error("SVG path command $context is missing numbers")
+    v = parse(Float64, token)
+    isfinite(v) || error("SVG path number must be finite")
+    c.i += 1
+    return v
+end
+
+function _svg_path_read_point!(c::_SVGPathCursor, relative::Bool, context)
+    x = _svg_path_read_number!(c, context)
+    y = _svg_path_read_number!(c, context)
+    p = Vec2(x, y)
+    return relative ? c.current + p : p
+end
+
+_svg_path_reflect(c::_SVGPathCursor, control::Vec2{Float64}) =
+    Vec2(2.0 * c.current.x - control.x, 2.0 * c.current.y - control.y)
+
+# Emit the active subpath (when it has points) and return the next one.
+function _svg_path_finish!(paths::Vector{SVGPath}, active::Vector{Vec2{Float64}},
+                           closed::Bool)
+    isempty(active) && return active
+    closed && length(active) > 1 && active[end] == active[1] && pop!(active)
+    length(active) >= 2 && push!(paths, SVGPath(:path, active, closed))
+    return Vec2{Float64}[]
+end
+
 function _svg_path_points(raw::AbstractString, segments::Int)
-    tokens = _svg_lex(raw, _SVG_PATH_TOKEN_RE, "SVG path data")
+    c = _SVGPathCursor(_svg_lex(raw, _SVG_PATH_TOKEN_RE, "SVG path data"), 1,
+                       Vec2(0.0, 0.0))
+    tokens = c.tokens
     paths = SVGPath[]
-    i = 1
     cmd = '\0'
-    current = Vec2(0.0, 0.0)
     start = Vec2(0.0, 0.0)
     active = Vec2{Float64}[]
-    last_cubic_control = nothing
-    last_quadratic_control = nothing
+    last_cubic_control::Union{Nothing,Vec2{Float64}} = nothing
+    last_quadratic_control::Union{Nothing,Vec2{Float64}} = nothing
 
-    next_is_number() = i <= length(tokens) && !_svg_is_command(tokens[i])
-
-    reflect_control(control::Vec2{Float64}) =
-        Vec2(2.0 * current.x - control.x, 2.0 * current.y - control.y)
-
-    function read_number(context)
-        i <= length(tokens) || error("SVG path command $context is missing numbers")
-        _svg_is_command(tokens[i]) &&
-            error("SVG path command $context is missing numbers")
-        v = parse(Float64, tokens[i])
-        isfinite(v) || error("SVG path number must be finite")
-        i += 1
-        return v
-    end
-
-    function read_point(relative::Bool, context)
-        p = Vec2(read_number(context), read_number(context))
-        return relative ? current + p : p
-    end
-
-    function finish!(closed::Bool)
-        if !isempty(active)
-            closed && length(active) > 1 && active[end] == active[1] && pop!(active)
-            length(active) >= 2 && push!(paths, SVGPath(:path, active, closed))
-            active = Vec2{Float64}[]
-        end
-    end
-
-    while i <= length(tokens)
-        if _svg_is_command(tokens[i])
-            cmd = tokens[i][1]
-            i += 1
+    while c.i <= length(tokens)
+        if _svg_is_command(tokens[c.i])
+            cmd = tokens[c.i][1]
+            c.i += 1
         elseif cmd == '\0'
             error("SVG path data must start with a command")
         end
@@ -8149,128 +8178,126 @@ function _svg_path_points(raw::AbstractString, segments::Int)
         relative = islowercase(cmd)
 
         if upper == 'M'
-            p = read_point(relative, cmd)
-            finish!(false)
-            current = p
+            p = _svg_path_read_point!(c, relative, cmd)
+            active = _svg_path_finish!(paths, active, false)
+            c.current = p
             start = p
             active = [p]
-            last_cubic_control = nothing
-            last_quadratic_control = nothing
             cmd = relative ? 'l' : 'L'
-            while next_is_number()
-                current = read_point(relative, cmd)
-                push!(active, current)
+            while _svg_path_next_is_number(c)
+                c.current = _svg_path_read_point!(c, relative, cmd)
+                push!(active, c.current)
             end
             last_cubic_control = nothing
             last_quadratic_control = nothing
         elseif upper == 'L'
-            while next_is_number()
-                current = read_point(relative, cmd)
-                push!(active, current)
+            while _svg_path_next_is_number(c)
+                c.current = _svg_path_read_point!(c, relative, cmd)
+                push!(active, c.current)
             end
             last_cubic_control = nothing
             last_quadratic_control = nothing
         elseif upper == 'H'
-            while next_is_number()
-                x = read_number(cmd)
-                current = Vec2(relative ? current.x + x : x, current.y)
-                push!(active, current)
+            while _svg_path_next_is_number(c)
+                x = _svg_path_read_number!(c, cmd)
+                c.current = Vec2(relative ? c.current.x + x : x, c.current.y)
+                push!(active, c.current)
             end
             last_cubic_control = nothing
             last_quadratic_control = nothing
         elseif upper == 'V'
-            while next_is_number()
-                y = read_number(cmd)
-                current = Vec2(current.x, relative ? current.y + y : y)
-                push!(active, current)
+            while _svg_path_next_is_number(c)
+                y = _svg_path_read_number!(c, cmd)
+                c.current = Vec2(c.current.x, relative ? c.current.y + y : y)
+                push!(active, c.current)
             end
             last_cubic_control = nothing
             last_quadratic_control = nothing
         elseif upper == 'Q'
-            while next_is_number()
-                control = read_point(relative, cmd)
-                stop = read_point(relative, cmd)
-                origin = current
+            while _svg_path_next_is_number(c)
+                control = _svg_path_read_point!(c, relative, cmd)
+                stop = _svg_path_read_point!(c, relative, cmd)
+                origin = c.current
                 for step in 1:segments
                     push!(active, _font_quadratic(origin, control, stop,
                                                   step / Float64(segments)))
                 end
-                current = stop
+                c.current = stop
                 last_quadratic_control = control
             end
             last_cubic_control = nothing
         elseif upper == 'T'
-            while next_is_number()
-                control = last_quadratic_control === nothing ? current :
-                          reflect_control(last_quadratic_control)
-                stop = read_point(relative, cmd)
-                origin = current
+            while _svg_path_next_is_number(c)
+                control = last_quadratic_control === nothing ? c.current :
+                          _svg_path_reflect(c, last_quadratic_control)
+                stop = _svg_path_read_point!(c, relative, cmd)
+                origin = c.current
                 for step in 1:segments
                     push!(active, _font_quadratic(origin, control, stop,
                                                   step / Float64(segments)))
                 end
-                current = stop
+                c.current = stop
                 last_quadratic_control = control
             end
             last_cubic_control = nothing
         elseif upper == 'C'
-            while next_is_number()
-                c1 = read_point(relative, cmd)
-                c2 = read_point(relative, cmd)
-                stop = read_point(relative, cmd)
-                origin = current
+            while _svg_path_next_is_number(c)
+                c1 = _svg_path_read_point!(c, relative, cmd)
+                c2 = _svg_path_read_point!(c, relative, cmd)
+                stop = _svg_path_read_point!(c, relative, cmd)
+                origin = c.current
                 for step in 1:segments
                     push!(active, _font_bezier(origin, c1, c2, stop,
                                                step / Float64(segments)))
                 end
-                current = stop
+                c.current = stop
                 last_cubic_control = c2
             end
             last_quadratic_control = nothing
         elseif upper == 'S'
-            while next_is_number()
-                c1 = last_cubic_control === nothing ? current :
-                     reflect_control(last_cubic_control)
-                c2 = read_point(relative, cmd)
-                stop = read_point(relative, cmd)
-                origin = current
+            while _svg_path_next_is_number(c)
+                c1 = last_cubic_control === nothing ? c.current :
+                     _svg_path_reflect(c, last_cubic_control)
+                c2 = _svg_path_read_point!(c, relative, cmd)
+                stop = _svg_path_read_point!(c, relative, cmd)
+                origin = c.current
                 for step in 1:segments
                     push!(active, _font_bezier(origin, c1, c2, stop,
                                                step / Float64(segments)))
                 end
-                current = stop
+                c.current = stop
                 last_cubic_control = c2
             end
             last_quadratic_control = nothing
         elseif upper == 'A'
-            while next_is_number()
-                rx = read_number(cmd)
-                ry = read_number(cmd)
-                rotation = read_number(cmd)
-                large_arc, i = _svg_take_arc_flag!(tokens, i, "large-arc")
-                sweep, i = _svg_take_arc_flag!(tokens, i, "sweep")
-                stop = read_point(relative, cmd)
-                append!(active, _svg_arc_points(current, rx, ry, rotation,
+            while _svg_path_next_is_number(c)
+                rx = _svg_path_read_number!(c, cmd)
+                ry = _svg_path_read_number!(c, cmd)
+                rotation = _svg_path_read_number!(c, cmd)
+                large_arc, c.i = _svg_take_arc_flag!(tokens, c.i, "large-arc")
+                sweep, c.i = _svg_take_arc_flag!(tokens, c.i, "sweep")
+                stop = _svg_path_read_point!(c, relative, cmd)
+                append!(active, _svg_arc_points(c.current, rx, ry, rotation,
                                                 large_arc, sweep, stop,
                                                 segments))
-                current = stop
+                c.current = stop
             end
             last_cubic_control = nothing
             last_quadratic_control = nothing
         elseif upper == 'Z'
-            finish!(true)
-            current = start
+            active = _svg_path_finish!(paths, active, true)
+            c.current = start
             # Closepath has no implicit coordinate form. A later explicit
             # drawing command starts a new subpath at the closed origin.
             cmd = '\0'
-            active = [current]
+            active = [c.current]
             last_cubic_control = nothing
             last_quadratic_control = nothing
         else
             error("unsupported SVG path command $cmd")
         end
     end
-    finish!(false)
+    _svg_path_finish!(paths, active, false)
     return paths
 end
 
