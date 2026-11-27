@@ -1844,6 +1844,10 @@ function _web_write_light_json(io::IO, light::HemisphereLight;
     _js_write_color(io, light.ground_color, num_buf)
     write(io, ",\"intensity\":")
     _js_write_num(io, light.intensity, num_buf)
+    # Sky axis: the normalized world position (WebGLLights.js hemisphere
+    # `direction.setFromMatrixPosition(matrixWorld)`; zero stays zero).
+    write(io, ",\"direction\":")
+    _js_write_vec(io, _hemisphere_direction(light), num_buf)
     _web_write_light_visibility_json(io, light, visibility_target_ids, visibility_values;
                                      visibility_extra_id=visibility_extra_id,
                                      visibility_extra_value=visibility_extra_value)
