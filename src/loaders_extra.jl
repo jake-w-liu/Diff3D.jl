@@ -3366,7 +3366,13 @@ struct FontGlyph
     commands::Vector{FontCommand}
 end
 
-"""Decoded three.js typeface JSON font data."""
+"""
+Decoded three.js typeface JSON font data.
+
+`line_height` is the line advance in font units used for `\\n` in text,
+`boundingBox.yMax - boundingBox.yMin + underlineThickness` as in three.js
+`Font.generateShapes`; it is `NaN` when the JSON lacks those fields.
+"""
 struct FontData
     family_name::String
     resolution::Float64
@@ -3374,11 +3380,16 @@ struct FontData
     descender::Float64
     glyphs::Dict{String,FontGlyph}
     kernings::Dict{Tuple{String,String},Float64}
+    line_height::Float64
 end
 
 FontData(family_name, resolution, ascender, descender, glyphs) =
     FontData(String(family_name), Float64(resolution), Float64(ascender),
-             Float64(descender), glyphs, Dict{Tuple{String,String},Float64}())
+             Float64(descender), glyphs, Dict{Tuple{String,String},Float64}(), NaN)
+
+FontData(family_name, resolution, ascender, descender, glyphs, kernings) =
+    FontData(String(family_name), Float64(resolution), Float64(ascender),
+             Float64(descender), glyphs, kernings, NaN)
 
 _font_float(d::AbstractDict, key::String, default::Real=0.0) =
     haskey(d, key) && d[key] !== nothing ? Float64(d[key]) : Float64(default)
@@ -3500,7 +3511,24 @@ function _font_data(raw)
                     _font_float(raw, "ascender", 0.0),
                     _font_float(raw, "descender", 0.0),
                     glyphs,
-                    _font_kernings(get(raw, "kernings", get(raw, "kerning", nothing))))
+                    _font_kernings(get(raw, "kernings", get(raw, "kerning", nothing))),
+                    _font_line_height(raw))
+end
+
+_font_json_number(value) = value isa Real && !(value isa Bool)
+
+# three.js FontLoader.js createPaths: line_height = (boundingBox.yMax -
+# boundingBox.yMin + underlineThickness) * scale. NaN when the JSON lacks them.
+function _font_line_height(raw::AbstractDict)
+    box = get(raw, "boundingBox", nothing)
+    thickness = get(raw, "underlineThickness", nothing)
+    (box isa AbstractDict && _font_json_number(thickness)) || return NaN
+    y_max = get(box, "yMax", nothing)
+    y_min = get(box, "yMin", nothing)
+    (_font_json_number(y_max) && _font_json_number(y_min)) || return NaN
+    height = Float64(y_max) - Float64(y_min) + Float64(thickness)
+    isfinite(height) || error("font line height must be finite")
+    return height
 end
 
 """Load a three.js typeface JSON font."""
@@ -3525,8 +3553,8 @@ function _font_bezier(p0::Vec2, c1::Vec2, c2::Vec2, p1::Vec2, t::Float64)
 end
 
 function _font_push_scaled!(shape::Vector{Vec2{Float64}}, p::Vec2, scale::Float64,
-                            offset_x::Float64)
-    push!(shape, Vec2(offset_x + p.x * scale, p.y * scale))
+                            offset_x::Float64, offset_y::Float64)
+    push!(shape, Vec2(offset_x + p.x * scale, offset_y + p.y * scale))
 end
 
 function _font_scale(font::FontData, size::Real)
@@ -3541,6 +3569,44 @@ function _font_curve_segments(curve_segments::Integer)
     curve_segments <= _GEOMETRY_MAX_SUBDIVISIONS ||
         throw(ArgumentError("curve_segments is too large"))
     return Int(curve_segments)
+end
+
+function _font_glyph_loops(glyph::FontGlyph, segments::Int, scale::Float64,
+                           xoff::Float64, yoff::Float64)
+    shapes = Vector{Vec2{Float64}}[]
+    current = Vec2(0.0, 0.0)
+    active = Vec2{Float64}[]
+    for cmd in glyph.commands
+        if cmd.kind === :move
+            length(active) >= 2 && push!(shapes, active)
+            active = Vec2{Float64}[]
+            current = cmd.points[1]
+            _font_push_scaled!(active, current, scale, xoff, yoff)
+        elseif cmd.kind === :line
+            current = cmd.points[1]
+            _font_push_scaled!(active, current, scale, xoff, yoff)
+        elseif cmd.kind === :quadratic
+            start = current
+            control, stop = cmd.points
+            for step in 1:segments
+                p = _font_quadratic(start, control, stop, step / Float64(segments))
+                _font_push_scaled!(active, p, scale, xoff, yoff)
+            end
+            current = stop
+        elseif cmd.kind === :bezier
+            start = current
+            c1, c2, stop = cmd.points
+            for step in 1:segments
+                p = _font_bezier(start, c1, c2, stop, step / Float64(segments))
+                _font_push_scaled!(active, p, scale, xoff, yoff)
+            end
+            current = stop
+        else
+            error("unsupported font command $(cmd.kind)")
+        end
+    end
+    length(active) >= 2 && push!(shapes, active)
+    return shapes
 end
 
 """
@@ -3559,72 +3625,63 @@ function font_glyph_shapes(font::FontData, char::AbstractString;
     scale = _font_scale(font, size)
     xoff = Float64(offset_x)
     isfinite(xoff) || throw(ArgumentError("offset_x must be finite"))
-    glyph = font.glyphs[String(char)]
-    shapes = Vector{Vec2{Float64}}[]
-    current = Vec2(0.0, 0.0)
-    active = Vec2{Float64}[]
-    for cmd in glyph.commands
-        if cmd.kind === :move
-            length(active) >= 2 && push!(shapes, active)
-            active = Vec2{Float64}[]
-            current = cmd.points[1]
-            _font_push_scaled!(active, current, scale, xoff)
-        elseif cmd.kind === :line
-            current = cmd.points[1]
-            _font_push_scaled!(active, current, scale, xoff)
-        elseif cmd.kind === :quadratic
-            start = current
-            control, stop = cmd.points
-            for step in 1:segments
-                p = _font_quadratic(start, control, stop, step / Float64(segments))
-                _font_push_scaled!(active, p, scale, xoff)
-            end
-            current = stop
-        elseif cmd.kind === :bezier
-            start = current
-            c1, c2, stop = cmd.points
-            for step in 1:segments
-                p = _font_bezier(start, c1, c2, stop, step / Float64(segments))
-                _font_push_scaled!(active, p, scale, xoff)
-            end
-            current = stop
-        else
-            error("unsupported font command $(cmd.kind)")
+    return _font_glyph_loops(font.glyphs[String(char)], segments, scale, xoff, 0.0)
+end
+
+# Lay out `text` like three.js Font.generateShapes (FontLoader.js createPaths
+# and createPath): `\n` returns to x = 0 one line height lower, a character
+# without a glyph is drawn with the `?` glyph, and each glyph advances by its
+# `ha`. Characters with neither glyph are skipped. Kerning pairs from the JSON
+# are applied between consecutive drawn glyphs. Calls `emit(loops)` per glyph.
+function _font_layout(emit, font::FontData, text::AbstractString, segments::Int,
+                      scale::Float64)
+    cursor_x = 0.0
+    cursor_y = 0.0
+    previous_key = nothing
+    for ch in text
+        if ch == '\n'
+            isfinite(font.line_height) ||
+                error("font JSON lacks boundingBox and underlineThickness, " *
+                      "which define the line height for line breaks")
+            cursor_x = 0.0
+            cursor_y -= font.line_height * scale
+            previous_key = nothing
+            continue
         end
+        key = string(ch)
+        glyph = get(font.glyphs, key, nothing)
+        if glyph === nothing
+            key = "?"
+            glyph = get(font.glyphs, key, nothing)
+        end
+        if glyph === nothing
+            previous_key = nothing
+            continue
+        end
+        previous_key !== nothing &&
+            (cursor_x += font_kerning(font, previous_key, key) * scale)
+        emit(_font_glyph_loops(glyph, segments, scale, cursor_x, cursor_y))
+        cursor_x += glyph.advance_width * scale
+        previous_key = key
     end
-    length(active) >= 2 && push!(shapes, active)
-    return shapes
+    return nothing
 end
 
 """
     font_text_shapes(font, text; size=1.0, curve_segments=8)
 
-Flatten all available glyph outlines for `text` into point loops. Horizontal
-advance uses each glyph's `ha` metric plus any parsed kerning pair adjustment
-from the typeface JSON data.
+Flatten the glyph outlines for `text` into point loops, laid out as three.js
+`Font.generateShapes` does: each glyph advances by its `ha` metric plus any
+kerning pair adjustment parsed from the typeface JSON, `\\n` starts a new line
+`font.line_height` lower, and a character missing from the font is drawn with
+its `?` glyph (or skipped when the font has none).
 """
 function font_text_shapes(font::FontData, text::AbstractString;
                           size::Real=1.0, curve_segments::Integer=8)
     shapes = Vector{Vec2{Float64}}[]
-    cursor = 0.0
     segments = _font_curve_segments(curve_segments)
     scale = _font_scale(font, size)
-    previous_key = nothing
-    for ch in text
-        key = string(ch)
-        glyph = get(font.glyphs, key, nothing)
-        if glyph !== nothing
-            previous_key !== nothing &&
-                (cursor += font_kerning(font, previous_key, key) * scale)
-            append!(shapes, font_glyph_shapes(font, key; size=size,
-                                              curve_segments=segments,
-                                              offset_x=cursor))
-            cursor += glyph.advance_width * scale
-            previous_key = key
-        else
-            previous_key = nothing
-        end
-    end
+    _font_layout(loops -> append!(shapes, loops), font, text, segments, scale)
     return shapes
 end
 
@@ -3708,44 +3765,113 @@ function _font_point_in_loop(p::Vec2{Float64}, loop::Vector{Vec2{Float64}})
     return inside
 end
 
-function _font_loop_groups(loops::Vector{Vector{Vec2{Float64}}})
-    clean = [_font_loop_points(loop) for loop in loops]
-    clean = [loop for loop in clean if length(loop) >= 3 && abs(_font_polygon_area(loop)) > 1e-12]
-    groups = NamedTuple{(:outer, :holes),
-                        Tuple{Vector{Vec2{Float64}},Vector{Vector{Vec2{Float64}}}}}[]
-    isempty(clean) && return groups
-    areas = abs.(_font_polygon_area.(clean))
-    direct_parent = fill(0, length(clean))
-    for i in eachindex(clean)
-        p = clean[i][1]
-        best = 0
-        best_area = Inf
-        for j in eachindex(clean)
-            i == j && continue
-            areas[j] > areas[i] || continue
-            if _font_point_in_loop(p, clean[j]) && areas[j] < best_area
-                best = j
-                best_area = areas[j]
-            end
+const _FontFillGroup = NamedTuple{(:outer, :holes),
+                                  Tuple{Vector{Vec2{Float64}},Vector{Vector{Vec2{Float64}}}}}
+
+# A point strictly inside a simple loop: the bounding-box center when it is
+# inside, otherwise the midpoint of the first two crossings of a horizontal
+# ray through it (three.js ShapePath.js getInteriorPoint).
+function _font_interior_point(loop::Vector{Vec2{Float64}}, bbox::NTuple{4,Float64})
+    center = Vec2((bbox[1] + bbox[3]) / 2, (bbox[2] + bbox[4]) / 2)
+    _font_point_in_loop(center, loop) && return center
+    y = center.y
+    first_x = Inf
+    second_x = Inf
+    n = length(loop)
+    for i in 1:n
+        a = loop[i]
+        b = loop[i == n ? 1 : i + 1]
+        (a.y > y) != (b.y > y) || continue
+        x = a.x + (y - a.y) * (b.x - a.x) / (b.y - a.y)
+        if x < first_x
+            second_x = first_x
+            first_x = x
+        elseif x < second_x
+            second_x = x
         end
-        direct_parent[i] = best
     end
-    for i in eachindex(clean)
-        depth = 0
-        parent = direct_parent[i]
-        while parent != 0
-            depth += 1
-            parent = direct_parent[parent]
+    isfinite(second_x) || return center
+    return Vec2((first_x + second_x) / 2, y)
+end
+
+_font_bbox_contains(outer::NTuple{4,Float64}, inner::NTuple{4,Float64}) =
+    outer[1] <= inner[1] && inner[3] <= outer[3] &&
+    outer[2] <= inner[2] && inner[4] <= outer[4]
+
+_font_fill_inside(winding::Int, fill_rule::Symbol) =
+    fill_rule === :evenodd ? isodd(winding) : winding != 0
+
+# Group closed loops into filled outers and their holes under `fill_rule`, as
+# three.js r186 `ShapePath.toShapes` does (src/extras/core/ShapePath.js:146-366;
+# `SVGLoader.createShapes` forwards to it): loops are visited by decreasing
+# area, each takes the winding of the innermost larger loop whose bounding box
+# contains it and that contains its interior point, and a loop that does not
+# change the fill state under the rule is dropped. Outers are returned
+# counter-clockwise and holes clockwise, in input order.
+function _font_fill_groups(loops::Vector{Vector{Vec2{Float64}}}, fill_rule::Symbol)
+    fill_rule === :nonzero || fill_rule === :evenodd ||
+        error("unsupported fill rule $(fill_rule)")
+    groups = _FontFillGroup[]
+    clean = Vector{Vec2{Float64}}[]
+    areas = Float64[]
+    for loop in loops
+        points = _font_loop_points(loop)
+        length(points) >= 3 || continue
+        area = _font_polygon_area(points)
+        abs(area) > 1e-12 || continue
+        push!(clean, points)
+        push!(areas, area)
+    end
+    isempty(clean) && return groups
+    n = length(clean)
+    boxes = Vector{NTuple{4,Float64}}(undef, n)
+    for i in 1:n
+        xmin = ymin = Inf
+        xmax = ymax = -Inf
+        for p in clean[i]
+            xmin = min(xmin, p.x); xmax = max(xmax, p.x)
+            ymin = min(ymin, p.y); ymax = max(ymax, p.y)
         end
-        # A contour inside a hole is filled again and owns its own holes.
-        iseven(depth) || continue
-        outer = _font_orient_loop(clean[i], true)
-        holes = Vector{Vec2{Float64}}[]
-        for j in eachindex(clean)
-            direct_parent[j] == i || continue
-            push!(holes, _font_orient_loop(clean[j], false))
+        boxes[i] = (xmin, ymin, xmax, ymax)
+    end
+    # JavaScript's Array.prototype.sort is stable; keep equal areas in input order.
+    order = sortperm(abs.(areas); rev=true, alg=MergeSort)
+    winding = [area < 0.0 ? -1 : 1 for area in areas]
+    container = zeros(Int, n)
+    exclude = falses(n)
+    for (position, i) in enumerate(order)
+        interior = _font_interior_point(clean[i], boxes[i])
+        container_winding = 0
+        for back in (position - 1):-1:1
+            j = order[back]
+            _font_bbox_contains(boxes[j], boxes[i]) || continue
+            _font_point_in_loop(interior, clean[j]) || continue
+            container[i] = exclude[j] ? container[j] : j
+            container_winding = winding[j]
+            winding[i] += container_winding
+            break
         end
-        push!(groups, (outer=outer, holes=holes))
+        _font_fill_inside(winding[i], fill_rule) ==
+            _font_fill_inside(container_winding, fill_rule) && (exclude[i] = true)
+    end
+    # 0: excluded, 1: outer, 2: hole. A solid inside a hole starts a new shape.
+    role = zeros(Int, n)
+    for i in order
+        exclude[i] && continue
+        role[i] = container[i] == 0 || role[container[i]] == 2 ? 1 : 2
+    end
+    group_of = zeros(Int, n)
+    for i in 1:n
+        role[i] == 1 || continue
+        push!(groups, (outer=_font_orient_loop(clean[i], true),
+                       holes=Vector{Vec2{Float64}}[]))
+        group_of[i] = length(groups)
+    end
+    for i in 1:n
+        role[i] == 2 || continue
+        group = group_of[container[i]]
+        group == 0 && continue
+        push!(groups[group].holes, _font_orient_loop(clean[i], false))
     end
     return groups
 end
@@ -3906,75 +4032,13 @@ end
 function _font_text_shape_groups(font::FontData, text::AbstractString;
                                  size::Real=1.0,
                                  curve_segments::Integer=8)
-    groups = NamedTuple{(:outer, :holes),
-                        Tuple{Vector{Vec2{Float64}},Vector{Vector{Vec2{Float64}}}}}[]
-    cursor = 0.0
+    groups = _FontFillGroup[]
     segments = _font_curve_segments(curve_segments)
     scale = _font_scale(font, size)
-    previous_key = nothing
-    for ch in text
-        key = string(ch)
-        glyph = get(font.glyphs, key, nothing)
-        if glyph !== nothing
-            previous_key !== nothing &&
-                (cursor += font_kerning(font, previous_key, key) * scale)
-            loops = font_glyph_shapes(font, key; size=size,
-                                      curve_segments=segments,
-                                      offset_x=cursor)
-            append!(groups, _font_loop_groups(loops))
-            cursor += glyph.advance_width * scale
-            previous_key = key
-        else
-            previous_key = nothing
-        end
-    end
+    # Each glyph is its own ShapePath in three.js, so loops never group across glyphs.
+    _font_layout(loops -> append!(groups, _font_fill_groups(loops, :nonzero)),
+                 font, text, segments, scale)
     return groups
-end
-
-function _font_line_intersection(p1::Vec2{Float64}, d1, p2::Vec2{Float64}, d2)
-    denom = d1[1] * d2[2] - d1[2] * d2[1]
-    abs(denom) > 1e-12 || return nothing
-    qx = p2.x - p1.x
-    qy = p2.y - p1.y
-    t = (qx * d2[2] - qy * d2[1]) / denom
-    return Vec2(p1.x + d1[1] * t, p1.y + d1[2] * t)
-end
-
-function _font_inward_normal(a::Vec2{Float64}, b::Vec2{Float64}, ccw::Bool)
-    dx = b.x - a.x
-    dy = b.y - a.y
-    len = hypot(dx, dy)
-    len > 0.0 || return (0.0, 0.0)
-    return ccw ? (-dy / len, dx / len) : (dy / len, -dx / len)
-end
-
-function _font_offset_loop(shape::Vector{Vec2{Float64}}, amount::Float64)
-    amount == 0.0 && return copy(shape)
-    n = length(shape)
-    n >= 3 || return copy(shape)
-    ccw = _font_polygon_area(shape) >= 0.0
-    out = Vec2{Float64}[]
-    for i in 1:n
-        prev = shape[i == 1 ? n : i - 1]
-        p = shape[i]
-        next = shape[i == n ? 1 : i + 1]
-        dprev = (p.x - prev.x, p.y - prev.y)
-        dnext = (next.x - p.x, next.y - p.y)
-        nprev = _font_inward_normal(prev, p, ccw)
-        nnext = _font_inward_normal(p, next, ccw)
-        l1 = Vec2(p.x + nprev[1] * amount, p.y + nprev[2] * amount)
-        l2 = Vec2(p.x + nnext[1] * amount, p.y + nnext[2] * amount)
-        hit = _font_line_intersection(l1, dprev, l2, dnext)
-        if hit === nothing || !isfinite(hit.x) || !isfinite(hit.y)
-            nx = nprev[1] + nnext[1]
-            ny = nprev[2] + nnext[2]
-            len = hypot(nx, ny)
-            hit = len > 0.0 ? Vec2(p.x + nx / len * amount,
-                                   p.y + ny / len * amount) : p
-        end
-        push!(out, hit)
-    end
-    return out
 end
 
 function _font_clean_group(outer::Vector{Vec2{Float64}},
@@ -4090,17 +4154,13 @@ function _font_extrude_geometry_with_holes(outer::Vector{Vec2{Float64}},
                           length(positions) ÷ 3, length(indices) ÷ 3)
 end
 
-function _font_offset_group(outer::Vector{Vec2{Float64}},
-                            holes::Vector{Vector{Vec2{Float64}}},
-                            amount::Float64)
-    offset_outer = _font_offset_loop(outer, amount)
-    offset_holes = Vector{Vec2{Float64}}[]
-    for hole in holes
-        push!(offset_holes, _font_offset_loop(hole, -amount))
-    end
-    return (outer=offset_outer, holes=offset_holes)
-end
-
+# Bevelled extrusion of one glyph group with three.js ExtrudeGeometry's layer
+# schedule (src/geometries/ExtrudeGeometry.js:380-470): `bevel_segments`
+# layers rise from the original outline at z = -bevel_thickness to the outline
+# grown by `bevel_size` at z = 0 along the quarter-circle profile
+# (z = -thickness*cos(t*pi/2), offset = size*sin(t*pi/2)), the body spans
+# z = 0..depth at the full offset, and the top mirrors the bottom up to
+# z = depth + bevel_thickness. Points move along three.js `getBevelVec`.
 function _font_beveled_extrude_geometry(outer::Vector{Vec2{Float64}},
                                         holes::Vector{Vector{Vec2{Float64}}};
                                         depth::Float64,
@@ -4109,79 +4169,69 @@ function _font_beveled_extrude_geometry(outer::Vector{Vec2{Float64}},
                                         bevel_segments::Int)
     base_outer, base_holes = _font_clean_group(outer, holes)
     length(base_outer) >= 3 || return BufferGeometry()
-    depth > 0.0 || return _font_shape_geometry_with_holes(base_outer, base_holes)
-    actual_thickness = min(bevel_thickness, depth / 2.0)
-    if bevel_size <= 0.0 || actual_thickness <= 0.0
-        return _font_extrude_geometry_with_holes(base_outer, base_holes;
-                                                depth=depth)
+    if bevel_size == 0.0 && bevel_thickness == 0.0
+        return depth > 0.0 ?
+               _font_extrude_geometry_with_holes(base_outer, base_holes; depth=depth) :
+               _font_shape_geometry_with_holes(base_outer, base_holes)
     end
-    layers = NamedTuple{(:outer, :holes),
-                        Tuple{Vector{Vec2{Float64}},Vector{Vector{Vec2{Float64}}}}}[]
+    loops = vcat([base_outer], base_holes)
+    # Outer loops are counter-clockwise and holes clockwise here, the reverse
+    # of three.js, so swapping prev/next keeps each move pointing out of the
+    # solid (as in ExtrudeGeometry's `_extrude_bevel_vectors`).
+    moves = [[_extrude_bevel_vec(loop[i], loop[i == length(loop) ? 1 : i + 1],
+                                 loop[i == 1 ? length(loop) : i - 1])
+              for i in eachindex(loop)] for loop in loops]
     zs = Float64[]
-    for step in 0:bevel_segments
-        t = step / Float64(bevel_segments)
-        push!(layers, _font_offset_group(base_outer, base_holes, bevel_size * t))
-        push!(zs, actual_thickness * t)
+    offsets = Float64[]
+    for b in 0:(bevel_segments - 1)
+        t = b / bevel_segments
+        push!(zs, -bevel_thickness * cos(t * π / 2))
+        push!(offsets, bevel_size * sin(t * π / 2))
     end
-    if depth > 2actual_thickness + 1e-9
-        push!(layers, _font_offset_group(base_outer, base_holes, bevel_size))
-        push!(zs, depth - actual_thickness)
-    end
-    for step in (bevel_segments - 1):-1:0
-        t = step / Float64(bevel_segments)
-        push!(layers, _font_offset_group(base_outer, base_holes, bevel_size * t))
-        push!(zs, depth - actual_thickness * t)
+    push!(zs, 0.0, depth)
+    push!(offsets, bevel_size, bevel_size)
+    for b in (bevel_segments - 1):-1:0
+        t = b / bevel_segments
+        push!(zs, depth + bevel_thickness * cos(t * π / 2))
+        push!(offsets, bevel_size * sin(t * π / 2))
     end
 
     positions = Float64[]
     normals = Float64[]
     uvs = Float64[]
     indices = Int[]
+    # Both lids lie on the original outline (offset 0), so one triangulation
+    # serves the bottom and the top.
+    points, tris = _font_triangulate_group(base_outer, base_holes)
     bottom = Int[]
     top = Int[]
-    bottom_points, bottom_tris = _font_triangulate_group(layers[1].outer,
-                                                         layers[1].holes)
-    top_points, top_tris = _font_triangulate_group(layers[end].outer,
-                                                   layers[end].holes)
-    for p in bottom_points
+    for p in points
         push!(bottom, _font_push_geo_vertex!(positions, normals, uvs, p, zs[1],
                                              Vec3(0.0, 0.0, -1.0)))
     end
-    for p in top_points
+    for p in points
         push!(top, _font_push_geo_vertex!(positions, normals, uvs, p, zs[end],
                                           Vec3(0.0, 0.0, 1.0)))
     end
-    for (a, b, c) in bottom_tris
+    for (a, b, c) in tris
         push!(indices, bottom[a], bottom[c], bottom[b])
     end
-    for (a, b, c) in top_tris
+    for (a, b, c) in tris
         push!(indices, top[a], top[b], top[c])
     end
-    for ri in 1:(length(layers) - 1)
-        lo = layers[ri]
-        hi = layers[ri + 1]
-        _font_push_ring_sides!(positions, normals, uvs, indices,
-                               lo.outer, hi.outer, zs[ri], zs[ri + 1])
-        for i in eachindex(lo.holes)
+    ring(k, layer) = [loops[k][i] + moves[k][i] * offsets[layer]
+                      for i in eachindex(loops[k])]
+    for layer in 1:(length(zs) - 1)
+        # A zero-depth body joins two identical rings; it has no side area.
+        zs[layer] == zs[layer + 1] && offsets[layer] == offsets[layer + 1] && continue
+        for k in eachindex(loops)
             _font_push_ring_sides!(positions, normals, uvs, indices,
-                                   lo.holes[i], hi.holes[i], zs[ri],
-                                   zs[ri + 1])
+                                   ring(k, layer), ring(k, layer + 1),
+                                   zs[layer], zs[layer + 1])
         end
     end
     return BufferGeometry(positions, normals, uvs, indices,
                           length(positions) ÷ 3, length(indices) ÷ 3)
-end
-
-function _font_beveled_extrude_geometry(shape::Vector{Vec2{Float64}};
-                                        depth::Float64,
-                                        bevel_size::Float64,
-                                        bevel_thickness::Float64,
-                                        bevel_segments::Int)
-    return _font_beveled_extrude_geometry(shape, Vector{Vec2{Float64}}[];
-                                          depth=depth,
-                                          bevel_size=bevel_size,
-                                          bevel_thickness=bevel_thickness,
-                                          bevel_segments=bevel_segments)
 end
 
 """
@@ -4190,9 +4240,11 @@ end
                  bevel_thickness=bevel_size, bevel_segments=1)
 
 Build a flat or extruded `BufferGeometry` from loaded typeface JSON outlines.
-Glyph contours are grouped into outer loops and simple holes before
-triangulation. With beveling enabled, closed contour groups are offset into
-bevel rings and extruded with chamfered side bands.
+Glyph contours are grouped into outer loops and holes by the nonzero rule
+before triangulation. With beveling enabled the bevel follows three.js
+`ExtrudeGeometry`: the lids keep the glyph outline at `z = -bevel_thickness`
+and `z = depth + bevel_thickness`, and `bevel_segments` rings per side grow the
+outline by up to `bevel_size` towards the body, which spans `z = 0` to `depth`.
 """
 function TextGeometry(font::FontData, text::AbstractString;
                       size::Real=1.0, curve_segments::Integer=8,
@@ -5123,60 +5175,143 @@ function _svg_unit_interval(raw::AbstractString, key::String)
     return value
 end
 
+# CSS color keywords, as three.js Color.NAMES (src/math/Color.js:6-30); 148 entries.
+const _SVG_COLOR_KEYWORDS = Dict{String,UInt32}(
+    "aliceblue" => 0xF0F8FF, "antiquewhite" => 0xFAEBD7, "aqua" => 0x00FFFF,
+    "aquamarine" => 0x7FFFD4, "azure" => 0xF0FFFF, "beige" => 0xF5F5DC,
+    "bisque" => 0xFFE4C4, "black" => 0x000000, "blanchedalmond" => 0xFFEBCD,
+    "blue" => 0x0000FF, "blueviolet" => 0x8A2BE2, "brown" => 0xA52A2A,
+    "burlywood" => 0xDEB887, "cadetblue" => 0x5F9EA0, "chartreuse" => 0x7FFF00,
+    "chocolate" => 0xD2691E, "coral" => 0xFF7F50, "cornflowerblue" => 0x6495ED,
+    "cornsilk" => 0xFFF8DC, "crimson" => 0xDC143C, "cyan" => 0x00FFFF,
+    "darkblue" => 0x00008B, "darkcyan" => 0x008B8B, "darkgoldenrod" => 0xB8860B,
+    "darkgray" => 0xA9A9A9, "darkgreen" => 0x006400, "darkgrey" => 0xA9A9A9,
+    "darkkhaki" => 0xBDB76B, "darkmagenta" => 0x8B008B,
+    "darkolivegreen" => 0x556B2F, "darkorange" => 0xFF8C00,
+    "darkorchid" => 0x9932CC, "darkred" => 0x8B0000, "darksalmon" => 0xE9967A,
+    "darkseagreen" => 0x8FBC8F, "darkslateblue" => 0x483D8B,
+    "darkslategray" => 0x2F4F4F, "darkslategrey" => 0x2F4F4F,
+    "darkturquoise" => 0x00CED1, "darkviolet" => 0x9400D3, "deeppink" => 0xFF1493,
+    "deepskyblue" => 0x00BFFF, "dimgray" => 0x696969, "dimgrey" => 0x696969,
+    "dodgerblue" => 0x1E90FF, "firebrick" => 0xB22222, "floralwhite" => 0xFFFAF0,
+    "forestgreen" => 0x228B22, "fuchsia" => 0xFF00FF, "gainsboro" => 0xDCDCDC,
+    "ghostwhite" => 0xF8F8FF, "gold" => 0xFFD700, "goldenrod" => 0xDAA520,
+    "gray" => 0x808080, "green" => 0x008000, "greenyellow" => 0xADFF2F,
+    "grey" => 0x808080, "honeydew" => 0xF0FFF0, "hotpink" => 0xFF69B4,
+    "indianred" => 0xCD5C5C, "indigo" => 0x4B0082, "ivory" => 0xFFFFF0,
+    "khaki" => 0xF0E68C, "lavender" => 0xE6E6FA, "lavenderblush" => 0xFFF0F5,
+    "lawngreen" => 0x7CFC00, "lemonchiffon" => 0xFFFACD, "lightblue" => 0xADD8E6,
+    "lightcoral" => 0xF08080, "lightcyan" => 0xE0FFFF,
+    "lightgoldenrodyellow" => 0xFAFAD2, "lightgray" => 0xD3D3D3,
+    "lightgreen" => 0x90EE90, "lightgrey" => 0xD3D3D3, "lightpink" => 0xFFB6C1,
+    "lightsalmon" => 0xFFA07A, "lightseagreen" => 0x20B2AA,
+    "lightskyblue" => 0x87CEFA, "lightslategray" => 0x778899,
+    "lightslategrey" => 0x778899, "lightsteelblue" => 0xB0C4DE,
+    "lightyellow" => 0xFFFFE0, "lime" => 0x00FF00, "limegreen" => 0x32CD32,
+    "linen" => 0xFAF0E6, "magenta" => 0xFF00FF, "maroon" => 0x800000,
+    "mediumaquamarine" => 0x66CDAA, "mediumblue" => 0x0000CD,
+    "mediumorchid" => 0xBA55D3, "mediumpurple" => 0x9370DB,
+    "mediumseagreen" => 0x3CB371, "mediumslateblue" => 0x7B68EE,
+    "mediumspringgreen" => 0x00FA9A, "mediumturquoise" => 0x48D1CC,
+    "mediumvioletred" => 0xC71585, "midnightblue" => 0x191970,
+    "mintcream" => 0xF5FFFA, "mistyrose" => 0xFFE4E1, "moccasin" => 0xFFE4B5,
+    "navajowhite" => 0xFFDEAD, "navy" => 0x000080, "oldlace" => 0xFDF5E6,
+    "olive" => 0x808000, "olivedrab" => 0x6B8E23, "orange" => 0xFFA500,
+    "orangered" => 0xFF4500, "orchid" => 0xDA70D6, "palegoldenrod" => 0xEEE8AA,
+    "palegreen" => 0x98FB98, "paleturquoise" => 0xAFEEEE,
+    "palevioletred" => 0xDB7093, "papayawhip" => 0xFFEFD5, "peachpuff" => 0xFFDAB9,
+    "peru" => 0xCD853F, "pink" => 0xFFC0CB, "plum" => 0xDDA0DD,
+    "powderblue" => 0xB0E0E6, "purple" => 0x800080, "rebeccapurple" => 0x663399,
+    "red" => 0xFF0000, "rosybrown" => 0xBC8F8F, "royalblue" => 0x4169E1,
+    "saddlebrown" => 0x8B4513, "salmon" => 0xFA8072, "sandybrown" => 0xF4A460,
+    "seagreen" => 0x2E8B57, "seashell" => 0xFFF5EE, "sienna" => 0xA0522D,
+    "silver" => 0xC0C0C0, "skyblue" => 0x87CEEB, "slateblue" => 0x6A5ACD,
+    "slategray" => 0x708090, "slategrey" => 0x708090, "snow" => 0xFFFAFA,
+    "springgreen" => 0x00FF7F, "steelblue" => 0x4682B4, "tan" => 0xD2B48C,
+    "teal" => 0x008080, "thistle" => 0xD8BFD8, "tomato" => 0xFF6347,
+    "turquoise" => 0x40E0D0, "violet" => 0xEE82EE, "wheat" => 0xF5DEB3,
+    "white" => 0xFFFFFF, "whitesmoke" => 0xF5F5F5, "yellow" => 0xFFFF00,
+    "yellowgreen" => 0x9ACD32
+)
+
+_svg_hex_color(hex::UInt32) =
+    Color3(Float64((hex >> 16) & 0xff) / 255, Float64((hex >> 8) & 0xff) / 255,
+           Float64(hex & 0xff) / 255)
+
+function _svg_color_number(part::AbstractString, raw::AbstractString)
+    value = tryparse(Float64, part)
+    value === nothing && error("unsupported SVG color $raw")
+    isfinite(value) || error("SVG color channel must be finite")
+    return value
+end
+
+function _svg_color_percent(part::AbstractString, raw::AbstractString)
+    endswith(part, "%") || error("unsupported SVG color $raw")
+    return _svg_color_number(part[1:prevind(part, lastindex(part))], raw) / 100
+end
+
+# three.js Color.setHSL (src/math/Color.js:248-272) with its hue2rgb helper.
+function _svg_hsl_color(h::Float64, s::Float64, l::Float64)
+    h = mod(h, 1.0)
+    s = clamp(s, 0.0, 1.0)
+    l = clamp(l, 0.0, 1.0)
+    s == 0.0 && return Color3(l, l, l)
+    p = l <= 0.5 ? l * (1 + s) : l + s - l * s
+    q = 2 * l - p
+    function hue(t)
+        t < 0 && (t += 1)
+        t > 1 && (t -= 1)
+        t < 1 / 6 && return q + (p - q) * 6 * t
+        t < 1 / 2 && return p
+        t < 2 / 3 && return q + (p - q) * 6 * (2 / 3 - t)
+        return q
+    end
+    return Color3(hue(h + 1 / 3), hue(h), hue(h - 1 / 3))
+end
+
+# Parse an SVG paint color the way three.js Color.setStyle does for SVGLoader
+# (src/math/Color.js:296-440): CSS keywords, #rgb / #rrggbb, rgb()/rgba() with
+# numbers or percentages, and hsl()/hsla(). As in three.js, the alpha of
+# rgba()/hsla() does not change the color; opacity comes from the opacity
+# properties. Channels are kept in sRGB like the hex forms.
 function _svg_color(raw::AbstractString)
     s = lowercase(strip(String(raw)))
     s == "none" && return nothing
     s == "transparent" && return nothing
-    named = Dict(
-        "black" => Color3(0.0, 0.0, 0.0),
-        "white" => Color3(1.0, 1.0, 1.0),
-        "red" => Color3(1.0, 0.0, 0.0),
-        "green" => Color3(0.0, 0.5019607843137255, 0.0),
-        "blue" => Color3(0.0, 0.0, 1.0),
-        "yellow" => Color3(1.0, 1.0, 0.0),
-        "cyan" => Color3(0.0, 1.0, 1.0),
-        "magenta" => Color3(1.0, 0.0, 1.0),
-        "gray" => Color3(0.5019607843137255, 0.5019607843137255, 0.5019607843137255),
-        "grey" => Color3(0.5019607843137255, 0.5019607843137255, 0.5019607843137255),
-    )
-    haskey(named, s) && return named[s]
+    keyword = get(_SVG_COLOR_KEYWORDS, s, nothing)
+    keyword === nothing || return _svg_hex_color(keyword)
     if startswith(s, "#")
         hex = s[2:end]
-        hex_channel(part) = begin
-            value = tryparse(Int, part; base=16)
-            value === nothing && error("unsupported SVG color $raw")
-            value / 255
-        end
+        all(isxdigit, hex) || error("unsupported SVG color $raw")
         if ncodeunits(hex) == 3
-            vals = [hex_channel(string(ch, ch)) for ch in hex]
+            return Color3((parse(Int, string(ch); base=16) / 15 for ch in hex)...)
         elseif ncodeunits(hex) == 6
-            vals = [hex_channel(hex[i:i+1]) for i in (1, 3, 5)]
-        else
-            error("unsupported SVG color $raw")
+            return _svg_hex_color(parse(UInt32, hex; base=16))
         end
-        return Color3(vals[1], vals[2], vals[3])
+        error("unsupported SVG color $raw")
     end
-    m = match(r"^rgb\((.*)\)$", s)
-    if m !== nothing
-        parts = strip.(split(m.captures[1], ','))
-        length(parts) == 3 || error("SVG rgb() color needs three channels")
-        values = Float64[]
-        for part in parts
-            if endswith(part, "%")
-                parsed = tryparse(Float64, part[1:prevind(part, lastindex(part))])
-                parsed === nothing && error("unsupported SVG color $raw")
-                v = parsed / 100
-            else
-                parsed = tryparse(Float64, part)
-                parsed === nothing && error("unsupported SVG color $raw")
-                v = parsed / 255
-            end
-            isfinite(v) || error("SVG rgb() channel must be finite")
-            push!(values, clamp(v, 0.0, 1.0))
+    m = match(r"^(rgba?|hsla?)\((.*)\)$", s)
+    m === nothing && error("unsupported SVG color $raw")
+    model = m.captures[1]
+    parts = strip.(split(m.captures[2], ','))
+    length(parts) == 3 || length(parts) == 4 ||
+        error("SVG $(model)() color needs three channels and an optional alpha")
+    if length(parts) == 4
+        alpha = _svg_color_number(parts[4], raw)
+        0.0 <= alpha <= 1.0 || error("SVG $(model)() alpha must be between 0 and 1")
+    end
+    if startswith(model, "rgb")
+        channels = ntuple(3) do i
+            part = parts[i]
+            v = endswith(part, "%") ? _svg_color_percent(part, raw) :
+                _svg_color_number(part, raw) / 255
+            clamp(v, 0.0, 1.0)
         end
-        return Color3(values[1], values[2], values[3])
+        return Color3(channels...)
     end
-    error("unsupported SVG color $raw")
+    return _svg_hsl_color(_svg_color_number(parts[1], raw) / 360,
+                          _svg_color_percent(parts[2], raw),
+                          _svg_color_percent(parts[3], raw))
 end
 
 function _svg_cascaded_style_attrs(attrs::AbstractDict,
@@ -5266,13 +5401,26 @@ function _svg_display_visibility(parent_display::Bool, parent_visibility::Symbol
     return display_ok, visibility
 end
 
+# Pixels per absolute unit at three.js SVGLoader's default 90 DPI
+# (SVGLoader.js:83, 1527-1622: unitConversion[unit]["in"] * defaultDPI).
+_svg_unit_scale(unit::Nothing) = 1.0
+function _svg_unit_scale(unit::AbstractString)
+    unit == "px" && return 1.0
+    unit == "in" && return 90.0
+    unit == "mm" && return (1 / 25.4) * 90.0
+    unit == "cm" && return (1 / 2.54) * 90.0
+    unit == "pt" && return (1 / 72) * 90.0
+    unit == "pc" && return (1 / 6) * 90.0
+    error("unsupported SVG length unit $unit")
+end
+
 function _svg_length(attrs::AbstractDict, key::String, default::Real=0.0)
     raw = get(attrs, key, nothing)
     raw === nothing && return Float64(default)
-    m = match(r"^\s*([-+]?(?:(?:\d+\.\d*)|(?:\.\d+)|(?:\d+))(?:[eE][-+]?\d+)?)\s*(px)?\s*$",
+    m = match(r"^\s*([-+]?(?:(?:\d+\.\d*)|(?:\.\d+)|(?:\d+))(?:[eE][-+]?\d+)?)\s*(px|mm|cm|in|pt|pc)?\s*$",
               raw)
     m === nothing && error("unsupported SVG length for $key")
-    v = parse(Float64, m.captures[1])
+    v = parse(Float64, m.captures[1]) * _svg_unit_scale(m.captures[2])
     isfinite(v) || error("SVG length for $key must be finite")
     return v
 end
@@ -5468,8 +5616,23 @@ end
 
 function _svg_transform_path(path::SVGPath, t)
     t == _svg_identity_transform() && return path
+    # Stroke lengths are user-space lengths, while the points move to the root
+    # frame. three.js SVGLoader.js:254 scales strokeWidth by
+    # getTransformScale (sqrt|det|, SVGLoader.js:2040-2046); dash lengths
+    # scale the same way.
+    a, b, c, d = t
+    scale = sqrt(abs(a * d - b * c))
+    style = path.style
+    if scale != 1.0
+        style = SVGStyle(style.fill, style.stroke, style.stroke_width * scale,
+                         style.opacity, style.fill_opacity, style.stroke_opacity,
+                         style.stroke_dasharray .* scale,
+                         style.stroke_dashoffset * scale, style.stroke_linecap,
+                         style.stroke_linejoin, style.stroke_miterlimit,
+                         style.fill_rule)
+    end
     return SVGPath(path.tag, [_svg_apply_transform(t, p) for p in path.points],
-                   path.closed, path.style, path.element_id)
+                   path.closed, style, path.element_id)
 end
 
 _svg_style_path(path::SVGPath, style::SVGStyle) =
@@ -6140,7 +6303,7 @@ function _svg_clip_area_loop_pieces(loops::Vector{Vector{Vec2{Float64}}},
                                     fill_rule::Symbol,
                                     context::AbstractString)
     pieces = Vector{Vec2{Float64}}[]
-    for group in _svg_fill_loop_groups(loops, fill_rule)
+    for group in _font_fill_groups(loops, fill_rule)
         if isempty(group.holes) && _svg_is_convex_clip_loop(group.outer)
             push!(pieces, group.outer)
             continue
@@ -6849,41 +7012,6 @@ function _svg_clip_segment_to_loop(a::Vec2{Float64}, b::Vec2{Float64},
     end
     _font_same_point(p0, p1) && return nothing
     return p0, p1
-end
-
-function _svg_clip_open_path_to_loop(path::SVGPath,
-                                     clip_loop::Vector{Vec2{Float64}})
-    fragments = SVGPath[]
-    current = Vec2{Float64}[]
-    function flush_current!()
-        if length(current) >= 2
-            push!(fragments, _svg_path_with_points(path, copy(current), false))
-        end
-        empty!(current)
-        return nothing
-    end
-
-    for i in 1:(length(path.points) - 1)
-        clipped = _svg_clip_segment_to_loop(path.points[i], path.points[i + 1],
-                                            clip_loop)
-        if clipped === nothing
-            flush_current!()
-            continue
-        end
-        a, b = clipped
-        if isempty(current)
-            push!(current, a)
-            push!(current, b)
-        elseif _font_same_point(current[end], a)
-            _svg_push_unique_point!(current, b)
-        else
-            flush_current!()
-            push!(current, a)
-            push!(current, b)
-        end
-    end
-    flush_current!()
-    return fragments
 end
 
 function _svg_lerp_point(a::Vec2{Float64}, b::Vec2{Float64}, t::Float64)
@@ -7633,10 +7761,24 @@ function _svg_transform_from_attrs(attrs::AbstractDict)
     return transform
 end
 
-function _svg_arc_flag(value::Float64, name)
-    value == 0.0 && return false
-    value == 1.0 && return true
-    error("SVG arc $name flag must be 0 or 1")
+const _SVG_NUMBER_TOKEN_RE =
+    r"^[-+]?(?:(?:\d+\.\d*)|(?:\.\d+)|(?:\d+))(?:[eE][-+]?\d+)?$"
+
+# The path grammar makes each arc flag the single character `0` or `1`, so
+# a flag may run straight into the next value ("a1 1 0 0110 10" has flags 0
+# and 1 and endpoint (10, 10)). Consume the flag character and leave any
+# remaining characters of the lexed number as the next token.
+function _svg_take_arc_flag!(tokens::Vector{String}, i::Int, name)
+    i <= length(tokens) && !_svg_is_command(tokens[i]) ||
+        error("SVG path command A is missing numbers")
+    token = tokens[i]
+    flag = token[1]
+    (flag == '0' || flag == '1') || error("SVG arc $name flag must be 0 or 1")
+    ncodeunits(token) == 1 && return flag == '1', i + 1
+    rest = token[2:end]
+    occursin(_SVG_NUMBER_TOKEN_RE, rest) || error("SVG arc $name flag must be 0 or 1")
+    tokens[i] = rest
+    return flag == '1', i
 end
 
 function _svg_arc_parameters(
@@ -7936,8 +8078,8 @@ function _svg_path_points(raw::AbstractString, segments::Int)
                 rx = read_number(cmd)
                 ry = read_number(cmd)
                 rotation = read_number(cmd)
-                large_arc = _svg_arc_flag(read_number(cmd), "large-arc")
-                sweep = _svg_arc_flag(read_number(cmd), "sweep")
+                large_arc, i = _svg_take_arc_flag!(tokens, i, "large-arc")
+                sweep, i = _svg_take_arc_flag!(tokens, i, "sweep")
                 stop = read_point(relative, cmd)
                 append!(active, _svg_arc_points(current, rx, ry, rotation,
                                                 large_arc, sweep, stop,
@@ -7963,41 +8105,114 @@ function _svg_path_points(raw::AbstractString, segments::Int)
     return paths
 end
 
-function _svg_parse(raw::AbstractString; curve_segments::Integer=16,
-                    circle_segments::Integer=32)
-    segments = _svg_curve_segments(curve_segments)
-    circle_n = _svg_circle_segments(circle_segments)
-    root = match(r"(?is)<\s*svg\b([^>]*)>", raw)
-    root === nothing && error("SVG document is missing <svg> root")
-    root_attrs = _svg_attrs(root.captures[1])
-    width, height = _svg_root_size(root_attrs)
-    root_reference_bbox = _svg_root_reference_bbox(root_attrs, width, height)
-    paths = SVGPath[]
-    transform_stack = [_svg_identity_transform()]
-    style_stack = [_SVG_DEFAULT_STYLE]
-    display_stack = [true]
-    visibility_stack = [:visible]
-    clip_stack = [_SVGClipApplication[]]
-    mask_stack = [_SVGClipApplication[]]
-    ancestor_stack = _SVGAncestorStack()
-    sibling_stack = _SVGSiblingStack([_SVGSiblingState()])
-    css_rules = _svg_css_rules(raw)
-    definitions = Dict{String,Vector{SVGPath}}()
-    clip_definitions = Dict{String,_SVGClipDefinition}()
-    mask_definitions = Dict{String,_SVGClipDefinition}()
-    container_definition_stack = Union{Nothing,_SVGContainerDefinition}[nothing]
-    container_paths_stack = [SVGPath[]]
-    next_element_id = 0
+struct _SVGTag
+    closing::Bool
+    name::String
+    attrs::Dict{String,String}
+    self_closing::Bool
+end
 
+_svg_is_container_tag(name::String) =
+    name == "svg" || name == "g" || name == "defs" || name == "clippath" ||
+    name == "mask"
+
+mutable struct _SVGParseState
+    tags::Vector{_SVGTag}
+    # Selector-matching context of every opening tag in document order.
+    contexts::Vector{Union{Nothing,_SVGElementContext}}
+    # Index of the tag that closes each opening tag's element.
+    closers::Vector{Int}
+    ids::Dict{String,Int}
+    css_rules::Vector{_SVGStyleRule}
+    segments::Int
+    circle_n::Int
+    root_reference_bbox::NTuple{4,Float64}
+    clip_definitions::Dict{String,_SVGClipDefinition}
+    mask_definitions::Dict{String,_SVGClipDefinition}
+    next_element_id::Int
+    # Elements currently instantiated by `use`, to reject circular references.
+    active_uses::Vector{Int}
+end
+
+function _svg_tags(raw::AbstractString)
+    tags = _SVGTag[]
     for m in eachmatch(r"(?is)<\s*(/)?\s*(svg|g|defs|clipPath|mask|path|rect|line|circle|ellipse|polygon|polyline|use)\b([^>]*)>",
                        raw)
-        closing = m.captures[1] !== nothing
-        tag = lowercase(m.captures[2])
-        attrs = _svg_attrs(m.captures[3])
-        self_closing = occursin(r"/\s*>$", m.match)
+        push!(tags, _SVGTag(m.captures[1] !== nothing, lowercase(m.captures[2]),
+                            _svg_attrs(m.captures[3]),
+                            occursin(r"/\s*>$", m.match)))
+    end
+    return tags
+end
 
-        if tag == "svg" || tag == "g" || tag == "defs" ||
-           tag == "clippath" || tag == "mask"
+# Selector contexts and element extents depend only on document structure, so
+# they are resolved once; `use` instantiation reuses them, matching CSS
+# selectors against the referenced element's original position in the tree.
+function _svg_tag_structure(tags::Vector{_SVGTag})
+    contexts = Vector{Union{Nothing,_SVGElementContext}}(nothing, length(tags))
+    closers = collect(eachindex(tags))
+    ids = Dict{String,Int}()
+    ancestors = _SVGAncestorStack()
+    siblings = _SVGSiblingStack([_SVGSiblingState()])
+    open_containers = Int[]
+    for (k, tag) in enumerate(tags)
+        container = _svg_is_container_tag(tag.name)
+        if tag.closing
+            container || continue
+            !isempty(open_containers) && (closers[pop!(open_containers)] = k)
+            !isempty(ancestors) && pop!(ancestors)
+            length(siblings) > 1 && pop!(siblings)
+            continue
+        end
+        context = _svg_element_context(tag.name, tag.attrs, ancestors, siblings[end])
+        _svg_record_sibling!(siblings[end], context)
+        contexts[k] = context
+        haskey(tag.attrs, "id") && get!(ids, tag.attrs["id"], k)
+        if container && !tag.self_closing
+            push!(open_containers, k)
+            push!(ancestors, context)
+            push!(siblings, _SVGSiblingState())
+        end
+    end
+    # An unclosed container extends to the end of the document.
+    for k in open_containers
+        closers[k] = length(tags)
+    end
+    return contexts, closers, ids
+end
+
+# Render the tags `first:last` into `out`, starting from the given inherited
+# transform, style, display and visibility. The top-level parse registers
+# clip-path and mask definitions; `use` instantiation re-renders referenced
+# content without registering them again.
+function _svg_parse_range!(state::_SVGParseState, first::Int, last::Int,
+                           out::Vector{SVGPath}, transform0, style0::SVGStyle,
+                           display0::Bool, visibility0::Symbol, register::Bool)
+    segments = state.segments
+    circle_n = state.circle_n
+    css_rules = state.css_rules
+    root_reference_bbox = state.root_reference_bbox
+    clip_definitions = state.clip_definitions
+    mask_definitions = state.mask_definitions
+    paths = out
+    transform_stack = [transform0]
+    style_stack = [style0]
+    display_stack = [display0]
+    visibility_stack = [visibility0]
+    clip_stack = [_SVGClipApplication[]]
+    mask_stack = [_SVGClipApplication[]]
+    container_definition_stack = Union{Nothing,_SVGContainerDefinition}[nothing]
+    container_paths_stack = [SVGPath[]]
+
+    for k in first:last
+        parsed = state.tags[k]
+        closing = parsed.closing
+        tag = parsed.name
+        attrs = parsed.attrs
+        self_closing = parsed.self_closing
+        context = state.contexts[k]
+
+        if _svg_is_container_tag(tag)
             if closing
                 if length(container_paths_stack) > 1
                     collected_paths = pop!(container_paths_stack)
@@ -8035,23 +8250,19 @@ function _svg_parse(raw::AbstractString; curve_segments::Integer=16,
                                                   mask_definitions)
                     end
                     if definition !== nothing && definition.kind === :clip
-                        definition.id !== nothing &&
+                        register && definition.id !== nothing &&
                             (clip_definitions[definition.id] =
                                 _SVGClipDefinition(copy(collected_paths),
                                                    definition.units,
                                                    :luminance))
                     elseif definition !== nothing && definition.kind === :mask
-                        definition.id !== nothing &&
+                        register && definition.id !== nothing &&
                             (mask_definitions[definition.id] =
                                 _SVGClipDefinition(_svg_mask_definition_paths(collected_paths,
                                                                               definition.mask_type),
                                                    definition.units,
                                                    definition.mask_type))
-                    elseif definition !== nothing && !isempty(collected_paths)
-                        definition.id !== nothing &&
-                            (definitions[definition.id] = copy(collected_paths))
-                        append!(container_paths_stack[end], collected_paths)
-                    elseif definition === nothing || definition.kind !== :clip
+                    else
                         append!(container_paths_stack[end], collected_paths)
                     end
                 end
@@ -8061,19 +8272,14 @@ function _svg_parse(raw::AbstractString; curve_segments::Integer=16,
                 length(visibility_stack) > 1 && pop!(visibility_stack)
                 length(clip_stack) > 1 && pop!(clip_stack)
                 length(mask_stack) > 1 && pop!(mask_stack)
-                !isempty(ancestor_stack) && pop!(ancestor_stack)
-                length(sibling_stack) > 1 && pop!(sibling_stack)
             else
-                context = _svg_element_context(tag, attrs, ancestor_stack,
-                                               sibling_stack[end])
-                _svg_record_sibling!(sibling_stack[end], context)
-                if self_closing && tag == "clippath" && haskey(attrs, "id")
+                if register && self_closing && tag == "clippath" && haskey(attrs, "id")
                     clip_definitions[attrs["id"]] =
                         _SVGClipDefinition(SVGPath[],
                                            _svg_clip_path_units(attrs),
                                            :luminance)
                 end
-                if self_closing && tag == "mask" && haskey(attrs, "id")
+                if register && self_closing && tag == "mask" && haskey(attrs, "id")
                     mask_definitions[attrs["id"]] =
                         _SVGClipDefinition(SVGPath[],
                                            _svg_mask_content_units(attrs),
@@ -8140,8 +8346,6 @@ function _svg_parse(raw::AbstractString; curve_segments::Integer=16,
                     push!(visibility_stack, visibility)
                     push!(clip_stack, child_clip_ids)
                     push!(mask_stack, child_mask_ids)
-                    push!(ancestor_stack, context)
-                    push!(sibling_stack, _SVGSiblingState())
                     definition = if tag == "clippath"
                         _SVGContainerDefinition(:clip, get(attrs, "id", nothing),
                                                 _svg_clip_path_units(attrs),
@@ -8169,8 +8373,6 @@ function _svg_parse(raw::AbstractString; curve_segments::Integer=16,
         end
         closing && continue
 
-        context = _svg_element_context(tag, attrs, ancestor_stack,
-                                       sibling_stack[end])
         local_transform = _svg_transform_from_attrs(attrs)
         total_transform = _svg_compose_transform(transform_stack[end],
                                                  local_transform)
@@ -8179,10 +8381,7 @@ function _svg_parse(raw::AbstractString; curve_segments::Integer=16,
         display_ok, visibility =
             _svg_display_visibility(display_stack[end], visibility_stack[end],
                                     attrs, css_rules, tag, context)
-        if tag == "use" && (!display_ok || visibility !== :visible)
-            _svg_record_sibling!(sibling_stack[end], context)
-            continue
-        end
+        tag == "use" && (!display_ok || visibility !== :visible) && continue
         clip_applications = copy(clip_stack[end])
         mask_applications = copy(mask_stack[end])
         local_clip_spec = _svg_clip_spec_from_attrs(attrs, css_rules, tag,
@@ -8201,19 +8400,34 @@ function _svg_parse(raw::AbstractString; curve_segments::Integer=16,
         if tag == "use"
             href_id = _svg_local_href_id(attrs)
             if href_id !== nothing
-                haskey(definitions, href_id) ||
-                    error("SVG use references unknown id $href_id")
+                target = get(state.ids, href_id, 0)
+                target == 0 && error("SVG use references unknown id $href_id")
+                target_tag = state.tags[target].name
+                (target_tag == "clippath" || target_tag == "mask") &&
+                    error("SVG use cannot reference $(target_tag == "mask" ? "mask" : "clipPath") $href_id")
+                (target in state.active_uses || target <= k <= state.closers[target]) &&
+                    error("SVG use creates a circular reference to $href_id")
                 x = _svg_length(attrs, "x", 0.0)
                 y = _svg_length(attrs, "y", 0.0)
                 use_transform = _svg_compose_transform(
                     total_transform, (1.0, 0.0, 0.0, 1.0, x, y))
-                for template in definitions[href_id]
-                    use_style = _svg_style_from_attrs(template.style, attrs,
-                                                      css_rules, tag, context)
-                    push!(raw_paths,
-                          _svg_transform_path(_svg_style_path(template,
-                                                              use_style),
-                                              use_transform))
+                # SVG 1.1 section 5.6 (three.js SVGLoader.js:218-226): the
+                # referenced content is rendered as a child of `use`; it
+                # inherits from `use`, not from its original ancestors, and its
+                # own presentation attributes take precedence. It is rendered
+                # in its own frame and then moved by the `use` transform, so
+                # clip paths and masks on the referenced content move with it.
+                push!(state.active_uses, target)
+                try
+                    _svg_parse_range!(state, target, state.closers[target],
+                                      raw_paths, _svg_identity_transform(),
+                                      style, true, :visible, false)
+                finally
+                    pop!(state.active_uses)
+                end
+                for idx in eachindex(raw_paths)
+                    raw_paths[idx] = _svg_transform_path(raw_paths[idx],
+                                                         use_transform)
                 end
             end
         elseif tag == "path"
@@ -8244,6 +8458,8 @@ function _svg_parse(raw::AbstractString; curve_segments::Integer=16,
             length(points) >= 2 &&
                 push!(raw_paths, SVGPath(Symbol(tag), points, tag == "polygon"))
         end
+        # Instantiated `use` content is already transformed and styled, and
+        # each referenced element keeps its own element id.
         element_paths = tag == "use" ? raw_paths :
                         [_svg_transform_path(_svg_style_path(path, style),
                                              total_transform)
@@ -8256,23 +8472,37 @@ function _svg_parse(raw::AbstractString; curve_segments::Integer=16,
             (element_paths = _svg_apply_mask_paths(element_paths,
                                                    mask_applications,
                                                    mask_definitions))
-        if !isempty(element_paths)
-            next_element_id += 1
-            element_paths = [_svg_element_path(path, next_element_id)
+        if tag != "use" && !isempty(element_paths)
+            state.next_element_id += 1
+            element_paths = [_svg_element_path(path, state.next_element_id)
                              for path in element_paths]
         end
-        if tag != "use" && haskey(attrs, "id") && !isempty(element_paths)
-            definitions[attrs["id"]] = copy(element_paths)
-        end
         append!(container_paths_stack[end], element_paths)
-        if !display_ok || visibility !== :visible
-            _svg_record_sibling!(sibling_stack[end], context)
-            continue
-        end
+        (display_ok && visibility === :visible) || continue
         append!(paths, element_paths)
-        _svg_record_sibling!(sibling_stack[end], context)
     end
+    return out
+end
 
+function _svg_parse(raw::AbstractString; curve_segments::Integer=16,
+                    circle_segments::Integer=32)
+    segments = _svg_curve_segments(curve_segments)
+    circle_n = _svg_circle_segments(circle_segments)
+    root = match(r"(?is)<\s*svg\b([^>]*)>", raw)
+    root === nothing && error("SVG document is missing <svg> root")
+    root_attrs = _svg_attrs(root.captures[1])
+    width, height = _svg_root_size(root_attrs)
+    root_reference_bbox = _svg_root_reference_bbox(root_attrs, width, height)
+    css_rules = _svg_css_rules(raw)
+    tags = _svg_tags(raw)
+    contexts, closers, ids = _svg_tag_structure(tags)
+    state = _SVGParseState(tags, contexts, closers, ids, css_rules, segments,
+                           circle_n, root_reference_bbox,
+                           Dict{String,_SVGClipDefinition}(),
+                           Dict{String,_SVGClipDefinition}(), 0, Int[])
+    paths = _svg_parse_range!(state, 1, length(tags), SVGPath[],
+                              _svg_identity_transform(), _SVG_DEFAULT_STYLE,
+                              true, :visible, true)
     return SVGDocument(width, height, paths)
 end
 
@@ -8302,88 +8532,12 @@ function _svg_element_path_groups(paths::Vector{SVGPath})
     return [buckets[key] for key in order]
 end
 
-function _svg_fill_loop_groups(loops::Vector{Vector{Vec2{Float64}}},
-                               fill_rule::Symbol)
-    fill_rule === :nonzero || fill_rule === :evenodd ||
-        error("unsupported SVG fill-rule $(fill_rule)")
-    clean = [_font_loop_points(loop) for loop in loops]
-    clean = [loop for loop in clean
-             if length(loop) >= 3 && abs(_font_polygon_area(loop)) > 1e-12]
-    groups = NamedTuple{(:outer, :holes),
-                        Tuple{Vector{Vec2{Float64}},Vector{Vector{Vec2{Float64}}}}}[]
-    isempty(clean) && return groups
-
-    areas = abs.(_font_polygon_area.(clean))
-    signs = [_font_polygon_area(loop) >= 0.0 ? 1 : -1 for loop in clean]
-    direct_parent = fill(0, length(clean))
-    for i in eachindex(clean)
-        p = clean[i][1]
-        best = 0
-        best_area = Inf
-        for j in eachindex(clean)
-            i == j && continue
-            areas[j] > areas[i] || continue
-            if _font_point_in_loop(p, clean[j]) && areas[j] < best_area
-                best = j
-                best_area = areas[j]
-            end
-        end
-        direct_parent[i] = best
-    end
-
-    depths = zeros(Int, length(clean))
-    ancestor_winding = zeros(Int, length(clean))
-    for i in eachindex(clean)
-        parent = direct_parent[i]
-        while parent != 0
-            depths[i] += 1
-            ancestor_winding[i] += signs[parent]
-            parent = direct_parent[parent]
-        end
-    end
-
-    is_outer = falses(length(clean))
-    is_hole = falses(length(clean))
-    for i in eachindex(clean)
-        if fill_rule === :evenodd
-            outside_filled = isodd(depths[i])
-            inside_filled = !outside_filled
-        else
-            outside_filled = ancestor_winding[i] != 0
-            inside_filled = ancestor_winding[i] + signs[i] != 0
-        end
-        is_outer[i] = !outside_filled && inside_filled
-        is_hole[i] = outside_filled && !inside_filled
-    end
-
-    outer_group = Dict{Int,Int}()
-    for i in eachindex(clean)
-        is_outer[i] || continue
-        holes = Vector{Vec2{Float64}}[]
-        push!(groups, (outer=_font_orient_loop(clean[i], true), holes=holes))
-        outer_group[i] = length(groups)
-    end
-    for i in eachindex(clean)
-        is_hole[i] || continue
-        parent = direct_parent[i]
-        while parent != 0
-            group_idx = get(outer_group, parent, 0)
-            if group_idx != 0
-                push!(groups[group_idx].holes, _font_orient_loop(clean[i], false))
-                break
-            end
-            parent = direct_parent[parent]
-        end
-    end
-    return groups
-end
-
 function _svg_fill_geometries(paths::Vector{SVGPath})
     closed = [path for path in paths if path.closed && length(path.points) >= 3]
     isempty(closed) && return BufferGeometry[]
     fill_rule = closed[1].style.fill_rule
     geos = BufferGeometry[]
-    for group in _svg_fill_loop_groups([path.points for path in closed], fill_rule)
+    for group in _font_fill_groups([path.points for path in closed], fill_rule)
         geo = _font_shape_geometry_with_holes(group.outer, group.holes)
         geo.n_faces > 0 && push!(geos, geo)
     end

@@ -11,8 +11,14 @@ using Diff3D
         end
         return area
     end
+    # Typeface contours fill by the nonzero rule (three.js r186 Font.generateShapes
+    # -> ShapePath.toShapes, src/extras/core/ShapePath.js:217-305), so nested
+    # contours alternate in winding to cut holes and refill islands. Oracle for
+    # these alternating squares: one 100-area outer with a 64 hole plus a
+    # 36-area island with a 16 hole, filled area 56.
     loops = [[Vec2(low, low), Vec2(high, low), Vec2(high, high), Vec2(low, high)]
              for (low, high) in ((0.0, 10.0), (1.0, 9.0), (2.0, 8.0), (3.0, 7.0))]
+    loops = [iseven(i) ? reverse(loop) : loop for (i, loop) in enumerate(loops)]
     for order in ((1, 2, 3, 4), (4, 2, 1, 3)), reverse_winding in (false, true)
         ordered = [reverse_winding ? reverse(loops[i]) : loops[i] for i in order]
         outline = join((join(("$(j == 1 ? "m" : "l") $(p.x) $(p.y)"
