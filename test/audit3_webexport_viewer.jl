@@ -7,12 +7,16 @@ using Test, Diff3D
 
 _audit3_viewer_html() = Diff3D._webgl_html("{\"cases\":[]}", "audit3")
 
-# The one-line top-level viewer function `name`, as emitted.
+# The top-level viewer function `name`, as emitted: its one line, or through the line that
+# closes it at the viewer's two-space indentation.
 function _audit3_viewer_function(html::AbstractString, name::AbstractString)
-    for line in eachsplit(html, '\n')
-        startswith(line, "  function $name(") && return String(line)
-    end
-    error("viewer function $name not found")
+    lines = split(html, '\n')
+    first = findfirst(line -> startswith(line, "  function $name("), lines)
+    first === nothing && error("viewer function $name not found")
+    endswith(rstrip(lines[first]), "}") && return String(lines[first])
+    last = findnext(==("  }"), lines, first + 1)
+    last === nothing && error("viewer function $name is not closed")
+    return join(lines[first:last], "\n")
 end
 
 # Runs `body` (JavaScript printing JSON) under node after the given viewer functions, or
@@ -92,4 +96,21 @@ end
     end
     @test occursin("varying vec2 vShadowZW;", pdfsh)
     @test !occursin("vShadowDepth", html)
+end
+
+@testset "viewer morph bounding sphere grows its box in three.js order" begin
+    # BufferGeometry.computeBoundingSphere (BufferGeometry.js:749-756) offsets the max corner
+    # from the box the min corner already expanded. The old viewer offset both corners from
+    # the base box, so a morph moving every vertex up (+2 in y) left the sort centre at y=1.
+    html = _audit3_viewer_html()
+    source = _audit3_viewer_function(html, "geometrySphere")
+    @test !occursin("const lo=[min[0]+dmin[0]", source)
+    @test occursin("expand(min[0]+dmin[0],min[1]+dmin[1],min[2]+dmin[2]); expand(max[0]+dmax[0],max[1]+dmax[1],max[2]+dmax[2]);", source)
+    sphere = _audit3_node_json(html, ("geometrySphere",),
+        "console.log(JSON.stringify(geometrySphere({basePositions:[0,0,0,1,0,0],morphTargets:[[0.5,2,0,0.5,2,0]]})));")
+    if sphere !== nothing
+        # three.js r186 oracle (node): center (0.75, 2, 0), radius 2.1360009363293826.
+        @test Float64.(sphere["center"]) == [0.75, 2.0, 0.0]
+        @test sphere["radius"] ≈ 2.1360009363293826 rtol=1e-15
+    end
 end

@@ -4916,12 +4916,14 @@ function _web_write_webgl_html(io::IO, data_json::String, title::String;
   }
   // BufferGeometry.computeBoundingSphere (:718-800): the centre is the centre of the position box
   // grown by each relative morph target's box, and the radius reaches every displaced vertex.
+  // The box grows in three.js's order (:749-756): the max corner is offset from the box the min
+  // corner already expanded.
   function geometrySphere(o){
     const p=o.basePositions, n=Math.floor(p.length/3), min=[Infinity,Infinity,Infinity], max=[-Infinity,-Infinity,-Infinity], expand=(x,y,z)=>{ min[0]=Math.min(min[0],x); min[1]=Math.min(min[1],y); min[2]=Math.min(min[2],z); max[0]=Math.max(max[0],x); max[1]=Math.max(max[1],y); max[2]=Math.max(max[2],z); };
     for(let i=0;i<n;i++) expand(p[3*i],p[3*i+1],p[3*i+2]);
     if(n===0) return {center:[0,0,0],radius:0};
     const targets=(o.morphTargets||[]).filter(d=>d&&d.length>=3);
-    for(const d of targets){ const dmin=[Infinity,Infinity,Infinity], dmax=[-Infinity,-Infinity,-Infinity]; for(let i=0;i+2<d.length;i+=3) for(let k=0;k<3;k++){ dmin[k]=Math.min(dmin[k],d[i+k]); dmax[k]=Math.max(dmax[k],d[i+k]); } const lo=[min[0]+dmin[0],min[1]+dmin[1],min[2]+dmin[2]], hi=[max[0]+dmax[0],max[1]+dmax[1],max[2]+dmax[2]]; expand(lo[0],lo[1],lo[2]); expand(hi[0],hi[1],hi[2]); }
+    for(const d of targets){ const dmin=[Infinity,Infinity,Infinity], dmax=[-Infinity,-Infinity,-Infinity]; for(let i=0;i+2<d.length;i+=3) for(let k=0;k<3;k++){ dmin[k]=Math.min(dmin[k],d[i+k]); dmax[k]=Math.max(dmax[k],d[i+k]); } expand(min[0]+dmin[0],min[1]+dmin[1],min[2]+dmin[2]); expand(max[0]+dmax[0],max[1]+dmax[1],max[2]+dmax[2]); }
     const center=[(min[0]+max[0])*.5,(min[1]+max[1])*.5,(min[2]+max[2])*.5];
     let radiusSq=0;
     for(let i=0;i<n;i++){ radiusSq=Math.max(radiusSq,(p[3*i]-center[0])**2+(p[3*i+1]-center[1])**2+(p[3*i+2]-center[2])**2); for(const d of targets) if(3*i+2<d.length) radiusSq=Math.max(radiusSq,(p[3*i]+d[3*i]-center[0])**2+(p[3*i+1]+d[3*i+1]-center[1])**2+(p[3*i+2]+d[3*i+2]-center[2])**2); }
