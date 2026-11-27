@@ -60,6 +60,200 @@ function srgb_encode(img::AbstractArray)
     return out
 end
 
+# ------------- three.js tone mapping operators (tonemapping_pars_fragment) -------------
+# Literal ports of three.js r186
+# src/renderers/shaders/ShaderChunk/tonemapping_pars_fragment.glsl.js. GLSL
+# `mat3(c0, c1, c2)` takes columns, so each product below sums column-scaled
+# components. Scalars stay generic for ForwardDiff and `ADVar` inputs.
+
+@inline _tm_saturate(x) = min(max(x, 0.0), 1.0)
+
+@inline _tm_mat3(c0::NTuple{3,Float64}, c1::NTuple{3,Float64},
+                 c2::NTuple{3,Float64}, r, g, b) =
+    (c0[1] * r + c1[1] * g + c2[1] * b,
+     c0[2] * r + c1[2] * g + c2[2] * b,
+     c0[3] * r + c1[3] * g + c2[3] * b)
+
+# LinearToneMapping, line 9.
+@inline _tm_linear(r, g, b, e) =
+    (_tm_saturate(e * r), _tm_saturate(e * g), _tm_saturate(e * b))
+
+# ReinhardToneMapping, line 16.
+@inline function _tm_reinhard(r, g, b, e)
+    r, g, b = r * e, g * e, b * e
+    return (_tm_saturate(r / (1.0 + r)), _tm_saturate(g / (1.0 + g)),
+            _tm_saturate(b / (1.0 + b)))
+end
+
+# CineonToneMapping, line 24.
+@inline function _tm_cineon_channel(x, e)
+    x = max(0.0, x * e - 0.004)
+    return ((x * (6.2 * x + 0.5)) / (x * (6.2 * x + 1.7) + 0.06))^2.2
+end
+@inline _tm_cineon(r, g, b, e) =
+    (_tm_cineon_channel(r, e), _tm_cineon_channel(g, e), _tm_cineon_channel(b, e))
+
+# RRTAndODTFit, line 34.
+@inline _tm_rrt_odt(v) =
+    (v * (v + 0.0245786) - 0.000090537) / (v * (0.983729 * v + 0.4329510) + 0.238081)
+
+# ACESFilmicToneMapping, line 45 (including three.js's 1/0.6 exposure scale).
+@inline function _tm_aces_filmic(r, g, b, e)
+    s = e / 0.6
+    r, g, b = _tm_mat3((0.59719, 0.07600, 0.02840),
+                       (0.35458, 0.90834, 0.13383),
+                       (0.04823, 0.01566, 0.83777), r * s, g * s, b * s)
+    r, g, b = _tm_rrt_odt(r), _tm_rrt_odt(g), _tm_rrt_odt(b)
+    r, g, b = _tm_mat3((1.60475, -0.10208, -0.00327),
+                       (-0.53108, 1.10813, -0.07276),
+                       (-0.07367, -0.00605, 1.07602), r, g, b)
+    return (_tm_saturate(r), _tm_saturate(g), _tm_saturate(b))
+end
+
+# agxDefaultContrastApprox, line 92.
+@inline function _tm_agx_contrast(x)
+    x2 = x * x
+    x4 = x2 * x2
+    return 15.5 * x4 * x2 - 40.14 * x4 * x + 31.96 * x4 - 6.868 * x2 * x +
+           0.4298 * x2 + 0.1191 * x - 0.00232
+end
+
+@inline function _tm_agx_encode(x)
+    # Log2 encoding between AgxMinEv = -12.47393 and AgxMaxEv = 4.026069.
+    x = (log2(max(x, 1e-10)) - -12.47393) / (4.026069 - -12.47393)
+    return _tm_agx_contrast(min(max(x, 0.0), 1.0))
+end
+
+# AgXToneMapping, line 112.
+@inline function _tm_agx(r, g, b, e)
+    r, g, b = _tm_mat3((0.6274, 0.0691, 0.0164), (0.3293, 0.9195, 0.0880),
+                       (0.0433, 0.0113, 0.8956), r * e, g * e, b * e)
+    r, g, b = _tm_mat3((0.856627153315983, 0.137318972929847, 0.11189821299995),
+                       (0.0951212405381588, 0.761241990602591, 0.0767994186031903),
+                       (0.0482516061458583, 0.101439036467562, 0.811302368396859),
+                       r, g, b)
+    r, g, b = _tm_agx_encode(r), _tm_agx_encode(g), _tm_agx_encode(b)
+    r, g, b = _tm_mat3((1.1271005818144368, -0.1413297634984383, -0.14132976349843826),
+                       (-0.11060664309660323, 1.157823702216272, -0.11060664309660294),
+                       (-0.016493938717834573, -0.016493938717834257, 1.2519364065950405),
+                       r, g, b)
+    r, g, b = max(0.0, r)^2.2, max(0.0, g)^2.2, max(0.0, b)^2.2
+    r, g, b = _tm_mat3((1.6605, -0.1246, -0.0182), (-0.5876, 1.1329, -0.1006),
+                       (-0.0728, -0.0083, 1.1187), r, g, b)
+    return (_tm_saturate(r), _tm_saturate(g), _tm_saturate(b))
+end
+
+# NeutralToneMapping, line 174.
+@inline function _tm_neutral(r, g, b, e)
+    start_compression = 0.8 - 0.04
+    desaturation = 0.15
+    r, g, b = r * e, g * e, b * e
+    x = min(r, min(g, b))
+    offset = x < 0.08 ? x - 6.25 * x * x : 0.04
+    r, g, b = r - offset, g - offset, b - offset
+    peak = max(r, max(g, b))
+    peak < start_compression && return (r, g, b)
+    d = 1.0 - start_compression
+    new_peak = 1.0 - d * d / (peak + d - start_compression)
+    scale = new_peak / peak
+    r, g, b = r * scale, g * scale, b * scale
+    w = 1.0 - 1.0 / (desaturation * (peak - new_peak) + 1.0)
+    # GLSL mix(x, y, a) = x * (1 - a) + y * a.
+    return (r * (1.0 - w) + new_peak * w, g * (1.0 - w) + new_peak * w,
+            b * (1.0 - w) + new_peak * w)
+end
+
+@inline function _tone_map_rgb(mode::Symbol, r, g, b, exposure)
+    mode === :linear && return _tm_linear(r, g, b, exposure)
+    mode === :reinhard && return _tm_reinhard(r, g, b, exposure)
+    mode === :cineon && return _tm_cineon(r, g, b, exposure)
+    mode === :aces_filmic && return _tm_aces_filmic(r, g, b, exposure)
+    mode === :agx && return _tm_agx(r, g, b, exposure)
+    mode === :neutral && return _tm_neutral(r, g, b, exposure)
+    return (r, g, b)   # :none (three.js NoToneMapping)
+end
+
+const _TONE_MAPPING_MODES = (:none, :linear, :reinhard, :cineon, :aces_filmic, :agx, :neutral)
+
+function _validated_tone_mapping(mode::Symbol, exposure::Real, label::AbstractString)
+    mode in _TONE_MAPPING_MODES || throw(ArgumentError(
+        "$label tone mapping must be one of $(join(_TONE_MAPPING_MODES, ", ")); got :$mode"))
+    exposure isa Bool && throw(ArgumentError("$label exposure must be a finite real number"))
+    isfinite(exposure) || throw(ArgumentError("$label exposure must be finite"))
+    return nothing
+end
+
+"""
+    tone_map(img, mode::Symbol; exposure=1.0)
+    tone_map(color::Color3, mode::Symbol; exposure=1.0)
+
+Apply a three.js tone mapping operator to a linear-light H×W×3 image (or one
+colour) and return a new image (or `Color3`). `mode` selects the r186 shader
+function of the same name in `tonemapping_pars_fragment`:
+
+| `mode` | three.js constant |
+|---|---|
+| `:none` | `NoToneMapping` (copy) |
+| `:linear` | `LinearToneMapping` |
+| `:reinhard` | `ReinhardToneMapping` |
+| `:cineon` | `CineonToneMapping` |
+| `:aces_filmic` | `ACESFilmicToneMapping` |
+| `:agx` | `AgXToneMapping` |
+| `:neutral` | `NeutralToneMapping` |
+
+`exposure` is `renderer.toneMappingExposure` and must be finite. ACES Filmic,
+AgX, and Neutral mix the colour channels, so the input must have three channels.
+The operators are the shader formulas evaluated in the input's precision; they
+are generic, so ForwardDiff duals and `ADVar` values propagate through them.
+[`tone_map_aces`](@ref) remains the separate Narkowicz ACES fit.
+"""
+function tone_map(img::AbstractArray{<:Real}, mode::Symbol; exposure::Real=1.0)
+    _validated_tone_mapping(mode, exposure, "tone_map")
+    H, W = _rgb_image_size(img, "tone_map")
+    T = promote_type(eltype(img), typeof(exposure), Float64)
+    out = Array{T}(undef, H, W, 3)
+    @inbounds for j in 1:W, i in 1:H
+        r, g, b = _tone_map_rgb(mode, img[i, j, 1], img[i, j, 2], img[i, j, 3], exposure)
+        out[i, j, 1] = r; out[i, j, 2] = g; out[i, j, 3] = b
+    end
+    return out
+end
+
+function tone_map(color::Color3, mode::Symbol; exposure::Real=1.0)
+    _validated_tone_mapping(mode, exposure, "tone_map")
+    r, g, b = _tone_map_rgb(mode, color.r, color.g, color.b, exposure)
+    T = promote_type(typeof(r), typeof(g), typeof(b))
+    return Color3{T}(r, g, b)
+end
+
+"""
+    output_pass(; tone_mapping=:none, exposure=1.0, output_color_space=:srgb)
+
+[`EffectComposer`](@ref) pass equivalent to three.js `OutputPass`
+(`examples/jsm/shaders/OutputShader.js`): apply [`tone_map`](@ref) with
+`tone_mapping` and `exposure`, then, for `output_color_space=:srgb`, the sRGB
+transfer function [`linear_to_srgb`](@ref) per channel. `:linear` output skips
+the transfer. Like the shader, the pass does not clamp values that the selected
+operator leaves outside `[0, 1]`; [`render_to_rgb8`](@ref) clamps on
+quantization. Returns an `img -> img` closure producing a new H×W×3 array.
+"""
+function output_pass(; tone_mapping::Symbol=:none, exposure::Real=1.0,
+                     output_color_space::Symbol=:srgb)
+    _validated_tone_mapping(tone_mapping, exposure, "output_pass")
+    (output_color_space === :srgb || output_color_space === :linear) ||
+        throw(ArgumentError("output_pass output_color_space must be :srgb or :linear"))
+    srgb = output_color_space === :srgb
+    return function (img::AbstractArray)
+        out = tone_map(img, tone_mapping; exposure=exposure)
+        if srgb
+            @inbounds for i in eachindex(out)
+                out[i] = linear_to_srgb(out[i])
+            end
+        end
+        return out
+    end
+end
+
 # ========================== Supersample (MSAA) ==========================
 
 """Box-average downsample an H·ss × W·ss image to H × W."""
@@ -253,6 +447,8 @@ mutable struct RenderCache
     colors::Vector{Color3{Float64}}
     stamp::Matrix{Int}
     primitive_stamp::Matrix{Int}
+    wire_stamp::Matrix{Int}
+    wire_stamp_id::Int
     wire_edges::Set{Tuple{Int,Int}}
     sprite_state::_SpriteRenderState
     primitive_flags::_RenderPrimitiveFlags
@@ -281,6 +477,7 @@ function RenderCache()
                 Vector{Vec4{Float64}}(undef, 3), cl,
                 Vector{Float64}(undef, 8), Vector{Float64}(undef, 8), Vector{Float64}(undef, 8),
                 Color3{Float64}[], zeros(Int, 0, 0), zeros(Int, 0, 0),
+                zeros(Int, 0, 0), 0,
                 Set{Tuple{Int,Int}}(),
                 _SpriteRenderState(nothing, 0), _RenderPrimitiveFlags(),
                 Vector{ShadeVtx}(undef, 3), scl, Vector{Float64}(undef, 8), nothing,
@@ -776,11 +973,23 @@ function _render_cache_primitive_stamp!(cache::RenderCache, H::Int, W::Int)
     return cache.primitive_stamp
 end
 
-# Collect into a reused vector (clears then refills), avoiding per-frame allocation.
-function _collect_into!(out::Vector, root, pred)
-    empty!(out)
-    traverse(root, o -> pred(o) && push!(out, o))
-    return out
+# Wireframe edge stamps take ids from a per-cache counter that only grows, so a
+# wireframe never matches an id written by an earlier one and the matrix needs
+# no per-draw clear. It is cleared only when resized or before the counter
+# could overflow.
+function _render_cache_wire_stamp!(cache::RenderCache, H::Int, W::Int, edges::Int)
+    if size(cache.wire_stamp) != (H, W)
+        cache.wire_stamp = zeros(Int, H, W)
+        cache.wire_stamp_id = 0
+    elseif cache.wire_stamp_id > typemax(Int) - edges
+        fill!(cache.wire_stamp, 0)
+        cache.wire_stamp_id = 0
+    end
+    # Reserve the whole id range up front, so a draw that throws part-way
+    # cannot leave ids that a later wireframe would reuse.
+    first_id = cache.wire_stamp_id
+    cache.wire_stamp_id = first_id + edges
+    return cache.wire_stamp, first_id
 end
 
 function _collect_meshes_into!(out::Vector{Mesh}, root::AbstractObject3D)
@@ -1007,26 +1216,6 @@ function _collect_instanced_worlds_into!(out::Vector{InstancedMesh},
         push!(worlds, compute_world_matrix(obj))
     end
     return out
-end
-
-function _collect_instanced_worlds_visit!(out::Vector{InstancedMesh},
-                                          worlds::Vector{Mat4{Float64}},
-                                          obj::AbstractObject3D,
-                                          parent_world::Mat4{Float64})
-    is_visible(obj) || return nothing
-    children = get_children(obj)
-    if !(obj isa InstancedMesh) && isempty(children)
-        return nothing
-    end
-    world = parent_world * compute_local_matrix(obj)
-    if obj isa InstancedMesh
-        push!(out, obj)
-        push!(worlds, world)
-    end
-    @inbounds for child in children
-        _collect_instanced_worlds_visit!(out, worlds, child, world)
-    end
-    return nothing
 end
 
 function _collect_instanced_into_visit!(out::Vector{InstancedMesh}, obj::AbstractObject3D)
@@ -2082,12 +2271,12 @@ function _render_wireframe_mesh_cached!(rt::RenderTarget, geo::BufferGeometry, m
     alpha = _primitive_blend_alpha(mat)
     depth_test = material_depth_test(mat)
     depth_write = material_depth_write(mat)
-    stamp = cache === nothing ? zeros(Int, rt.height, rt.width) :
-            _render_cache_primitive_stamp!(cache, rt.height, rt.width)
+    face_range = _draw_face_range(geo)
+    stamp, stamp_id = cache === nothing ? (zeros(Int, rt.height, rt.width), 0) :
+        _render_cache_wire_stamp!(cache, rt.height, rt.width, 3 * length(face_range))
     seen = cache === nothing ? Set{Tuple{Int,Int}}() : cache.wire_edges
     empty!(seen)
-    stamp_id = 0
-    for fi in _draw_face_range(geo)
+    for fi in face_range
         first_entry = 3fi - 2
         i1 = _draw_vertex_index(geo, first_entry)
         i2 = _draw_vertex_index(geo, first_entry + 1)
@@ -2105,15 +2294,6 @@ function _render_wireframe_mesh_cached!(rt::RenderTarget, geo::BufferGeometry, m
         end
     end
     return nothing
-end
-
-function _render_wireframe_mesh!(rt::RenderTarget, geo::BufferGeometry, mat::AbstractMaterial,
-                                 world::Mat4, proj::Mat4, view::Mat4, near;
-                                 xlo::Int=1, xhi::Int=rt.width,
-                                 ylo::Int=1, yhi::Int=rt.height,
-                                 cache::Union{Nothing,RenderCache}=nothing)
-    _render_wireframe_mesh_cached!(rt, geo, mat, world, proj, view, near,
-                                   xlo, xhi, ylo, yhi, cache)
 end
 
 function _render_wireframe_mesh_from_mesh!(rt::RenderTarget, mesh::Mesh, world::Mat4,
@@ -2866,35 +3046,6 @@ function _gaussian_kernel(radius::Integer)
     return k
 end
 
-# Separable Gaussian blur of an H×W×3 image with the given radius. Edges are
-# handled by clamping the sample index (replicate border). Uses one scratch
-# buffer for the horizontal pass, then writes the vertical pass into `out`.
-function _blur_separable(img::AbstractArray, radius::Int)
-    H, W = _rgb_image_size(img, "blur")
-    r = max(radius, 0)
-    r == 0 && return Float64.(img)
-    k = _gaussian_kernel(r)
-    tmp = Array{Float64}(undef, H, W, 3)
-    out = Array{Float64}(undef, H, W, 3)
-    @inbounds for c in 1:3, j in 1:W, i in 1:H           # horizontal
-        acc = 0.0
-        for t in -r:r
-            jj = clamp(j + t, 1, W)
-            acc += k[t + r + 1] * img[i, jj, c]
-        end
-        tmp[i, j, c] = acc
-    end
-    @inbounds for c in 1:3, j in 1:W, i in 1:H           # vertical
-        acc = 0.0
-        for t in -r:r
-            ii = clamp(i + t, 1, H)
-            acc += k[t + r + 1] * tmp[ii, j, c]
-        end
-        out[i, j, c] = acc
-    end
-    return out
-end
-
 """
     bloom_pass(; threshold=0.8, intensity=0.6, radius=2)
 
@@ -3291,7 +3442,8 @@ function _render_tiled_band!(rt::RenderTarget, meshes::Vector{Mesh},
                              lights,
                              camera_position::Vec3, proj::Mat4, view::Mat4,
                              near, ortho_dir, thread_caches::Vector{RenderCache},
-                             cache_idx::Int, ylo::Int, yhi::Int)
+                             cache_idx::Int, ylo::Int, yhi::Int,
+                             wireframe_items::Vector{_TransparentRenderItem})
     ylo > yhi && return nothing
     thread_cache = thread_caches[cache_idx]
     tri = thread_cache.tri
@@ -3304,12 +3456,7 @@ function _render_tiled_band!(rt::RenderTarget, meshes::Vector{Mesh},
     for i in eachindex(meshes)
         mesh = meshes[i]
         mat = _mesh_material(mesh)
-        if material_wireframe(mat)
-            _render_wireframe_mesh_from_mesh!(rt, mesh, mesh_worlds[i],
-                                              proj, view, near, 1, rt.width,
-                                              ylo, yhi, thread_cache)
-            continue
-        end
+        material_wireframe(mat) && continue
         (is_transparent_material(mat) || !_mesh_is_flat(mesh, :flat)) && continue
         _rasterize_flat_mesh_pooled_from_mesh!(rt, mesh, mesh_worlds[i],
                                                lights, proj, view, near, camera_position,
@@ -3325,16 +3472,9 @@ function _render_tiled_band!(rt::RenderTarget, meshes::Vector{Mesh},
         is_transparent_material(mat) && continue
         base = instanced_worlds[instanced_slot]
         if material_wireframe(mat)
-            @inbounds for instance_index in eachindex(im.instance_matrices)
-                instance_material = _cached_instanced_material_at(
-                    instanced_material_states, instanced_slot,
-                    instance_index, mat)
-                world = base * im.instance_matrices[instance_index]
-                _render_wireframe_mesh_cached!(
-                    rt, _instanced_geometry(im), instance_material,
-                    world, proj, view, near, 1, rt.width, ylo, yhi,
-                    thread_cache)
-            end
+            _render_tiled_instanced_wireframes!(
+                rt, im, instanced_slot, base, instanced_material_states,
+                proj, view, near, ylo, yhi, thread_cache, 0)
             continue
         end
         _rasterize_tiled_instanced_geo_flat_pooled_from_instanced!(
@@ -3345,7 +3485,123 @@ function _render_tiled_band!(rt::RenderTarget, meshes::Vector{Mesh},
     end
     _render_pooled_smooth_meshes!(rt, meshes, mesh_worlds, lights, proj, view, near,
                                   camera_position, ortho_dir, thread_cache, ylo, yhi)
+    # Same order as `render!`: opaque mesh wireframes after the smooth pass,
+    # then blended wireframes back to front.
+    for i in eachindex(meshes)
+        mesh = meshes[i]
+        mat = _mesh_material(mesh)
+        (material_wireframe(mat) && !_primitive_transparent(mat)) || continue
+        _render_wireframe_mesh_from_mesh!(rt, mesh, mesh_worlds[i],
+                                          proj, view, near, 1, rt.width,
+                                          ylo, yhi, thread_cache)
+    end
+    for item in wireframe_items
+        if item.kind == _TRANSPARENT_WIREFRAME_ITEM
+            _render_wireframe_mesh_from_mesh!(rt, meshes[item.object_index],
+                                              mesh_worlds[item.object_index],
+                                              proj, view, near, 1, rt.width,
+                                              ylo, yhi, thread_cache)
+        else
+            _render_tiled_instanced_wireframes!(
+                rt, instanced[item.object_index], item.object_index,
+                instanced_worlds[item.object_index], instanced_material_states,
+                proj, view, near, ylo, yhi, thread_cache, item.instance_index)
+        end
+    end
     return nothing
+end
+
+# Function barrier for instanced wireframes: resolve the concrete material type
+# once, then draw every instance (`instance == 0`) or one instance.
+function _render_tiled_instanced_wireframes_material!(
+        rt::RenderTarget, im::InstancedMesh, ::M, instanced_slot::Int, base::Mat4,
+        instanced_material_states, proj::Mat4, view::Mat4, near, ylo::Int,
+        yhi::Int, cache::RenderCache, instance::Int) where {M<:AbstractMaterial}
+    materials = instanced_material_states[instanced_slot].materials::Vector{M}
+    geo = _instanced_geometry(im)
+    matrices = im.instance_matrices
+    range = instance == 0 ? eachindex(matrices) : (instance:instance)
+    @inbounds for instance_index in range
+        _render_wireframe_mesh_cached!(rt, geo, materials[instance_index],
+                                       base * matrices[instance_index], proj, view,
+                                       near, 1, rt.width, ylo, yhi, cache)
+    end
+    return nothing
+end
+
+function _render_tiled_instanced_wireframes!(
+        rt::RenderTarget, im::InstancedMesh, instanced_slot::Int, base::Mat4,
+        instanced_material_states, proj::Mat4, view::Mat4, near, ylo::Int,
+        yhi::Int, cache::RenderCache, instance::Int)
+    mat = im.material
+    if mat isa MeshBasicMaterial
+        _render_tiled_instanced_wireframes_material!(
+            rt, im, mat, instanced_slot, base, instanced_material_states, proj,
+            view, near, ylo, yhi, cache, instance)
+    elseif mat isa MeshLambertMaterial
+        _render_tiled_instanced_wireframes_material!(
+            rt, im, mat, instanced_slot, base, instanced_material_states, proj,
+            view, near, ylo, yhi, cache, instance)
+    elseif mat isa MeshPhongMaterial
+        _render_tiled_instanced_wireframes_material!(
+            rt, im, mat, instanced_slot, base, instanced_material_states, proj,
+            view, near, ylo, yhi, cache, instance)
+    elseif mat isa MeshStandardMaterial
+        _render_tiled_instanced_wireframes_material!(
+            rt, im, mat, instanced_slot, base, instanced_material_states, proj,
+            view, near, ylo, yhi, cache, instance)
+    elseif mat isa MeshPhysicalMaterial
+        _render_tiled_instanced_wireframes_material!(
+            rt, im, mat, instanced_slot, base, instanced_material_states, proj,
+            view, near, ylo, yhi, cache, instance)
+    else
+        _render_tiled_instanced_wireframes_material!(
+            rt, im, _instanced_material(im), instanced_slot, base,
+            instanced_material_states, proj, view, near, ylo, yhi, cache, instance)
+    end
+    return nothing
+end
+
+# Blended wireframes, pushed in `render!`'s order (instances, then meshes) and
+# sorted back to front by the same routine. Items outside the view frustum are
+# dropped as `render!` drops them by default (`frustum_cull=true`): the sort is
+# not stable, so a list with extra offscreen items could order equal-depth
+# visible wireframes differently.
+function _tiled_transparent_wireframe_items!(items::Vector{_TransparentRenderItem},
+                                             meshes::Vector{Mesh},
+                                             mesh_worlds::Vector{Mat4{Float64}},
+                                             instanced::Vector{InstancedMesh},
+                                             instanced_worlds::Vector{Mat4{Float64}},
+                                             view::Mat4, frustum::Frustum,
+                                             bounds_cache::Tuple{Vector{BufferGeometry},
+                                                                 Vector{BoundingSphere{Float64}}})
+    empty!(items)
+    @inbounds for (instanced_slot, im) in pairs(instanced)
+        _instanced_triangle_drawable(im) || continue
+        mat = _instanced_material(im)
+        (material_wireframe(mat) && _primitive_transparent(mat)) || continue
+        base = instanced_worlds[instanced_slot]
+        geo = _instanced_geometry(im)
+        for instance_index in eachindex(im.instance_matrices)
+            world = base * im.instance_matrices[instance_index]
+            _mesh_in_frustum(frustum, geo, world, bounds_cache) || continue
+            push!(items, _TransparentRenderItem(
+                _mesh_view_depth_world(world, view),
+                _TRANSPARENT_INSTANCED_WIREFRAME_ITEM, instanced_slot, instance_index))
+        end
+    end
+    @inbounds for index in eachindex(meshes)
+        mesh = meshes[index]
+        mat = _mesh_material(mesh)
+        (material_wireframe(mat) && _primitive_transparent(mat)) || continue
+        _mesh_in_frustum(frustum, _mesh_geometry(mesh), mesh_worlds[index],
+                         bounds_cache) || continue
+        push!(items, _TransparentRenderItem(
+            _mesh_view_depth_world(mesh_worlds[index], view),
+            _TRANSPARENT_WIREFRAME_ITEM, index, 0))
+    end
+    isempty(items) || _sort_transparent_items!(items)
+    return items
 end
 
 """
@@ -3431,10 +3687,14 @@ function render_tiled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
         _validate_instanced_mesh(im, "render_tiled!")
         (_visible_in_tree(im) && _instanced_triangle_drawable(im)) || continue
         mat = _instanced_material(im)
-        is_transparent_material(mat) && continue
+        (is_transparent_material(mat) && !material_wireframe(mat)) && continue
         _instanced_materials!(instanced_material_states, instanced_slot, im,
                               mat, im.instance_colors)
     end
+    wireframe_items = _tiled_transparent_wireframe_items!(
+        shared_cache.transparent_items, meshes, mesh_worlds, instanced,
+        instanced_worlds, view, frustum_from_matrix(proj * view),
+        (shared_cache.bound_geometries, shared_cache.bounds))
     band = cld(H, active_tiles)
     if thread_count == 1
         for t in 1:active_tiles
@@ -3444,7 +3704,8 @@ function render_tiled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
             _render_tiled_band!(rt, meshes, mesh_worlds, instanced, instanced_worlds,
                                 instanced_material_states,
                                 lights, camera_position, proj, view,
-                                near, ortho_dir, thread_caches, cache_idx, ylo, yhi)
+                                near, ortho_dir, thread_caches, cache_idx, ylo, yhi,
+                                wireframe_items)
         end
     else
         # Each iteration owns a cache even if a shader yields and its task migrates.
@@ -3460,7 +3721,8 @@ function render_tiled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
                 _render_tiled_band!(rt, meshes, mesh_worlds, instanced, instanced_worlds,
                                     instanced_material_states,
                                     lights, camera_position, proj, view,
-                                    near, ortho_dir, thread_caches, cache_idx, ylo, yhi)
+                                    near, ortho_dir, thread_caches, cache_idx, ylo, yhi,
+                                    wireframe_items)
             end
         end
     end
