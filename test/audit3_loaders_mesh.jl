@@ -193,6 +193,17 @@ end
     # The solid name runs to the end of its line, even when it is a keyword.
     named = load_stl(_audit3_file(replace(base, "solid s\n" => "solid vertex 1 2\n"), ".stl"))
     @test named.positions == ref.positions
+    named = load_stl(_audit3_file(replace(base, "solid s\n" => "solid my facet\n"), ".stl"))
+    @test named.positions == ref.positions
+    # STLLoader.js matches facets anywhere in the solid text, so a file written
+    # on one line loads; three.js r186 gives these positions and normals.
+    oneline = "solid x facet normal 0 0 1 outer loop vertex 0 0 0 vertex 1 0 0 " *
+              "vertex 0 1 0 endloop endfacet facet normal 0 0 -1 outer loop " *
+              "vertex 0 0 0 vertex 0 1 0 vertex 1 0 0 endloop endfacet endsolid x"
+    geo = load_stl(_audit3_file(oneline, ".stl"))
+    @test geo.n_faces == 2
+    @test geo.positions == [0.0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0]
+    @test geo.normals == vcat(repeat([0.0, 0, 1], 3), repeat([0.0, 0, -1], 3))
     @test_throws "ASCII STL facet must be followed by normal" load_stl(
         _audit3_file(replace(base, "facet normal" => "facet"), ".stl"))
     @test_throws "ASCII STL vertex requires 3 coordinates" load_stl(

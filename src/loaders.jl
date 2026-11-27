@@ -623,11 +623,32 @@ end
     return value, p
 end
 
+# Skip the name after `solid`/`endsolid`: the rest of its line (STLLoader.js
+# patternName /solid\s(.+)/). STLLoader.js finds facets anywhere in the solid
+# text, so a file written on one line continues at its first `facet normal`.
+# Returns the offset of the line break, of that `facet`, or n + 1.
+function _stl_skip_solid_name(bytes::AbstractVector{UInt8}, p::Int, n::Int)
+    while true
+        while p <= n && _ply_ascii_space(bytes[p]) &&
+              bytes[p] != UInt8('\n') && bytes[p] != UInt8('\r')
+            p += 1
+        end
+        (p > n || bytes[p] == UInt8('\n') || bytes[p] == UInt8('\r')) && return p
+        first, last, next = _ply_next_ascii_token(bytes, p, n)
+        if _stl_token_is(bytes, first, last, "facet")
+            f2, l2, _ = _ply_next_ascii_token(bytes, next, n)
+            f2 != 0 && _stl_token_is(bytes, f2, l2, "normal") && return p
+        end
+        p = next
+    end
+end
+
 # ASCII STL is parsed as a stream of whitespace-separated tokens, like the
 # regular expressions in three.js STLLoader.js parseASCII (`facet`, `normal`
 # and `vertex` followed by `\s+` and numbers): any mix of spaces, tabs, CR, LF
 # or CRLF separates tokens, and a record may span lines. The text after
-# `solid`/`endsolid` up to the end of that line is the solid name.
+# `solid`/`endsolid` up to the end of that line is the solid name, unless a
+# `facet normal` record starts on that line.
 function _load_stl_ascii(path::String)
     text = read(path, String)
     bytes = codeunits(text)
@@ -671,9 +692,7 @@ function _load_stl_ascii(path::String)
             vertices_in_facet = 0
         elseif _stl_token_is(bytes, first, last, "solid") ||
                _stl_token_is(bytes, first, last, "endsolid")
-            while p <= n && bytes[p] != UInt8('\n') && bytes[p] != UInt8('\r')
-                p += 1
-            end
+            p = _stl_skip_solid_name(bytes, p, n)
         end
     end
     !in_facet || error("ASCII STL facet is missing endfacet")
