@@ -256,3 +256,86 @@ end
         <svg><rect id="notclip" width="5" height="5"/>
         <rect width="10" height="10" clip-path="url(#notclip)"/></svg>""")
 end
+
+@testset "SVG symbol renders only through use, as a nested viewport" begin
+    # SVG 1.1 section 5.5: "'symbol' elements are never rendered directly";
+    # SVG 2 sections 5.5/5.6.2 and 8.2: the use instantiates the symbol as a
+    # viewport sized by the use width/height (else the symbol's, else 100%),
+    # mapped from the symbol viewBox with preserveAspectRatio, and clipped by
+    # the UA style sheet's overflow: hidden. Expected boxes follow the 8.2
+    # viewBox-to-viewport algorithm. (three.js SVGLoader has no symbol case,
+    # so it would render symbol children in place and ignore the viewBox.)
+    doc = _audit3b_svg("""
+        <svg width="100" height="100">
+          <symbol id="s" viewBox="0 0 10 10"><rect width="10" height="10" stroke="red"/></symbol>
+          <symbol id="slice" viewBox="0 0 10 10" preserveAspectRatio="xMinYMin slice">
+            <rect width="10" height="10"/>
+          </symbol>
+          <symbol id="none" viewBox="0 0 10 10" preserveAspectRatio="none">
+            <rect width="10" height="10"/>
+          </symbol>
+          <use href="#s" width="20" height="20"/>
+          <use href="#s" x="50" width="40" height="20"/>
+          <use href="#slice" y="50" width="40" height="20"/>
+          <use href="#none" y="80" width="40" height="20"/>
+        </svg>""")
+    groups = Diff3D._svg_element_path_groups(doc.paths)
+    @test length(groups) == 4
+    @test _audit3b_close(_audit3b_bbox(groups[1]), (0.0, 0.0, 20.0, 20.0))
+    # Stroke widths scale with the viewBox transform like any user length.
+    @test groups[1][1].style.stroke_width ≈ 2.0
+    # xMidYMid meet: scale 2, centered horizontally in 40 -> offset 10.
+    @test _audit3b_close(_audit3b_bbox(groups[2]), (60.0, 0.0, 80.0, 20.0))
+    # slice: scale 4, content 0..40 x 0..40 clipped to the 40x20 viewport.
+    @test _audit3b_close(_audit3b_bbox(groups[3]), (0.0, 50.0, 40.0, 70.0))
+    # none: non-uniform scale (4, 2).
+    @test _audit3b_close(_audit3b_bbox(groups[4]), (0.0, 80.0, 40.0, 100.0))
+
+    defaults = _audit3b_svg("""
+        <svg width="100" height="50">
+          <symbol id="s" viewBox="0 0 10 10"><rect width="10" height="10"/></symbol>
+          <symbol id="t" x="5" y="6" width="4" height="4" overflow="visible">
+            <rect width="10" height="2"/>
+          </symbol>
+          <symbol id="z"><rect width="10" height="2"/></symbol>
+          <use href="#s"/>
+          <use href="#t" x="1" y="1"/>
+          <use href="#z" width="0"/>
+        </svg>""")
+    dgroups = Diff3D._svg_element_path_groups(defaults.paths)
+    @test length(dgroups) == 2
+    # 100% x 100% of the 100x50 root viewport, meet -> scale 5, centered.
+    @test _audit3b_close(_audit3b_bbox(dgroups[1]), (25.0, 0.0, 75.0, 50.0))
+    # No viewBox: translate by symbol x/y and use x/y; overflow visible keeps
+    # the content outside the 4x4 viewport.
+    @test _audit3b_close(_audit3b_bbox(dgroups[2]), (6.0, 7.0, 16.0, 9.0))
+    @test_throws "preserveAspectRatio" _audit3b_svg("""
+        <svg width="10" height="10"><symbol id="s" viewBox="0 0 1 1" preserveAspectRatio="center"/>
+        <use href="#s"/></svg>""")
+end
+
+@testset "SVG percentage lengths resolve against the root viewport" begin
+    # SVG 1.1 section 7.10: percentages of x-lengths refer to the viewport
+    # width, y-lengths to its height, others to sqrt((w^2 + h^2) / 2); the
+    # viewport of the root user space is the viewBox when one is given.
+    doc = _audit3b_svg("""
+        <svg width="100%" height="50%" viewBox="0 0 200 100">
+          <rect x="10%" y="10%" width="50%" height="50%" stroke-width="1%" stroke="red"/>
+          <circle cx="50%" cy="50%" r="10%"/>
+        </svg>"""; circle_segments=4)
+    # A root percentage is a fraction of the viewBox size.
+    @test (doc.width, doc.height) == (200.0, 50.0)
+    @test _audit3b_close(_audit3b_bbox(doc.paths[1:1]), (20.0, 10.0, 120.0, 60.0))
+    diag = sqrt((200.0^2 + 100.0^2) / 2)
+    @test doc.paths[1].style.stroke_width ≈ 0.01 * diag
+    @test _audit3b_close(_audit3b_bbox(doc.paths[2:2]),
+                         (100.0 - 0.1 * diag, 50.0 - 0.1 * diag,
+                          100.0 + 0.1 * diag, 50.0 + 0.1 * diag))
+    # Without a viewBox the root viewport is width x height.
+    sized = _audit3b_svg("""<svg width="40" height="20"><rect width="50%" height="50%"/></svg>""")
+    @test _audit3b_close(_audit3b_bbox(sized.paths), (0.0, 0.0, 20.0, 10.0))
+    # A percentage root size without a viewBox is unknown, like an absent one.
+    @test _audit3b_svg("""<svg width="100%" height="100%"/>""").width == 0.0
+    @test_throws "needs a root viewport size" _audit3b_svg(
+        """<svg width="100%"><rect width="50%" height="1"/></svg>""")
+end

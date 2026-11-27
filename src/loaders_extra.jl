@@ -5365,13 +5365,15 @@ end
 function _svg_style_from_attrs(parent::SVGStyle, attrs::AbstractDict,
                                css_rules::Vector{_SVGStyleRule}=_SVGStyleRule[],
                                tag::String="",
-                               context::Union{Nothing,_SVGElementContext}=nothing)
+                               context::Union{Nothing,_SVGElementContext}=nothing;
+                               viewport::Union{Nothing,NTuple{2,Float64}}=nothing)
     local_attrs = _svg_cascaded_style_attrs(attrs, css_rules, tag, context,
                                             _SVG_STYLE_KEYS)
     fill = haskey(local_attrs, "fill") ? _svg_color(local_attrs["fill"]) : parent.fill
     stroke = haskey(local_attrs, "stroke") ? _svg_color(local_attrs["stroke"]) : parent.stroke
     stroke_width = haskey(local_attrs, "stroke-width") ?
-                   _svg_length(local_attrs, "stroke-width") : parent.stroke_width
+                   _svg_length(local_attrs, "stroke-width"; viewport) :
+                   parent.stroke_width
     opacity = haskey(local_attrs, "opacity") ?
               _svg_unit_interval(local_attrs["opacity"], "opacity") : parent.opacity
     fill_opacity = haskey(local_attrs, "fill-opacity") ?
@@ -5384,7 +5386,7 @@ function _svg_style_from_attrs(parent::SVGStyle, attrs::AbstractDict,
                 _svg_dasharray(local_attrs["stroke-dasharray"]) :
                 copy(parent.stroke_dasharray)
     dashoffset = haskey(local_attrs, "stroke-dashoffset") ?
-                 _svg_length(local_attrs, "stroke-dashoffset") :
+                 _svg_length(local_attrs, "stroke-dashoffset"; viewport) :
                  parent.stroke_dashoffset
     linecap = haskey(local_attrs, "stroke-linecap") ?
               _svg_linecap(local_attrs["stroke-linecap"]) :
@@ -5442,13 +5444,38 @@ function _svg_unit_scale(unit::AbstractString)
     error("unsupported SVG length unit $unit")
 end
 
-function _svg_length(attrs::AbstractDict, key::String, default::Real=0.0)
+const _SVG_X_LENGTH_KEYS = ("x", "x1", "x2", "cx", "width", "rx")
+const _SVG_Y_LENGTH_KEYS = ("y", "y1", "y2", "cy", "height", "ry")
+
+# Reference length of a percentage (SVG 1.1 section 7.10): the viewport width
+# for horizontal lengths, its height for vertical ones, and
+# sqrt((w^2 + h^2) / 2) for the others (r, stroke-width, stroke-dashoffset).
+function _svg_percent_reference(key::String, viewport::NTuple{2,Float64})
+    w, h = viewport
+    key in _SVG_X_LENGTH_KEYS && return w
+    key in _SVG_Y_LENGTH_KEYS && return h
+    return sqrt((w * w + h * h) / 2)
+end
+
+# `viewport` is the size of the user coordinate system that percentages refer
+# to; without one a percentage is an error.
+function _svg_length(attrs::AbstractDict, key::String, default::Real=0.0;
+                     viewport::Union{Nothing,NTuple{2,Float64}}=nothing)
     raw = get(attrs, key, nothing)
     raw === nothing && return Float64(default)
-    m = match(r"^\s*([-+]?(?:(?:\d+\.\d*)|(?:\.\d+)|(?:\d+))(?:[eE][-+]?\d+)?)\s*(px|mm|cm|in|pt|pc)?\s*$",
+    m = match(r"^\s*([-+]?(?:(?:\d+\.\d*)|(?:\.\d+)|(?:\d+))(?:[eE][-+]?\d+)?)\s*(px|mm|cm|in|pt|pc|%)?\s*$",
               raw)
     m === nothing && error("unsupported SVG length for $key")
-    v = parse(Float64, m.captures[1]) * _svg_unit_scale(m.captures[2])
+    if m.captures[2] == "%"
+        viewport === nothing &&
+            error("SVG percentage length for $key is not supported here")
+        reference = _svg_percent_reference(key, viewport)
+        reference > 0.0 ||
+            error("SVG percentage length for $key needs a root viewport size (width/height or viewBox)")
+        v = parse(Float64, m.captures[1]) / 100 * reference
+    else
+        v = parse(Float64, m.captures[1]) * _svg_unit_scale(m.captures[2])
+    end
     isfinite(v) || error("SVG length for $key must be finite")
     return v
 end
@@ -5505,11 +5532,22 @@ function _svg_root_size(root_attrs::AbstractDict)
     view_numbers = view_box === nothing ? Float64[] : _svg_numbers(view_box)
     (!isempty(view_numbers) && length(view_numbers) != 4) &&
         error("SVG viewBox must contain four numbers")
-    width = haskey(root_attrs, "width") ? _svg_length(root_attrs, "width") :
-            (length(view_numbers) == 4 ? view_numbers[3] : 0.0)
-    height = haskey(root_attrs, "height") ? _svg_length(root_attrs, "height") :
-             (length(view_numbers) == 4 ? view_numbers[4] : 0.0)
-    return width, height
+    view_size = length(view_numbers) == 4 ? (view_numbers[3], view_numbers[4]) : nothing
+    return _svg_root_dimension(root_attrs, "width", view_size, 1),
+           _svg_root_dimension(root_attrs, "height", view_size, 2)
+end
+
+# A root percentage refers to the embedding viewport, which a standalone file
+# does not have; the viewBox gives the document's own size, so 100% is the
+# viewBox size. Without a viewBox the size stays unknown (0), as when the
+# attribute is absent.
+function _svg_root_dimension(root_attrs::AbstractDict, key::String,
+                             view_size::Union{Nothing,NTuple{2,Float64}}, axis::Int)
+    raw = get(root_attrs, key, nothing)
+    if raw === nothing || (view_size === nothing && endswith(strip(raw), "%"))
+        return view_size === nothing ? 0.0 : view_size[axis]
+    end
+    return _svg_length(root_attrs, key; viewport=view_size)
 end
 
 function _svg_root_reference_bbox(root_attrs::AbstractDict, width::Float64,
@@ -5550,19 +5588,20 @@ function _svg_points(raw::AbstractString)
     return points
 end
 
-function _svg_rect(attrs::AbstractDict, segments::Int)
-    x = _svg_length(attrs, "x", 0.0)
-    y = _svg_length(attrs, "y", 0.0)
-    w = _svg_length(attrs, "width", 0.0)
-    h = _svg_length(attrs, "height", 0.0)
+function _svg_rect(attrs::AbstractDict, segments::Int,
+                   viewport::Union{Nothing,NTuple{2,Float64}}=nothing)
+    x = _svg_length(attrs, "x", 0.0; viewport)
+    y = _svg_length(attrs, "y", 0.0; viewport)
+    w = _svg_length(attrs, "width", 0.0; viewport)
+    h = _svg_length(attrs, "height", 0.0; viewport)
     w < 0.0 && error("SVG rect width must be non-negative")
     h < 0.0 && error("SVG rect height must be non-negative")
     (w == 0.0 || h == 0.0) && return nothing
     has_rx = haskey(attrs, "rx")
     has_ry = haskey(attrs, "ry")
-    rx = has_rx ? _svg_length(attrs, "rx") :
-         (has_ry ? _svg_length(attrs, "ry") : 0.0)
-    ry = has_ry ? _svg_length(attrs, "ry") : rx
+    rx = has_rx ? _svg_length(attrs, "rx"; viewport) :
+         (has_ry ? _svg_length(attrs, "ry"; viewport) : 0.0)
+    ry = has_ry ? _svg_length(attrs, "ry"; viewport) : rx
     rx < 0.0 && error("SVG rect radius must be non-negative")
     ry < 0.0 && error("SVG rect radius must be non-negative")
     rx = min(rx, w / 2.0)
@@ -5604,11 +5643,12 @@ function _svg_rect(attrs::AbstractDict, segments::Int)
                            Vec2(x + w, y + h), Vec2(x, y + h)], true)
 end
 
-function _svg_line(attrs::AbstractDict)
-    x1 = _svg_length(attrs, "x1", 0.0)
-    y1 = _svg_length(attrs, "y1", 0.0)
-    x2 = _svg_length(attrs, "x2", 0.0)
-    y2 = _svg_length(attrs, "y2", 0.0)
+function _svg_line(attrs::AbstractDict,
+                   viewport::Union{Nothing,NTuple{2,Float64}}=nothing)
+    x1 = _svg_length(attrs, "x1", 0.0; viewport)
+    y1 = _svg_length(attrs, "y1", 0.0; viewport)
+    x2 = _svg_length(attrs, "x2", 0.0; viewport)
+    y2 = _svg_length(attrs, "y2", 0.0; viewport)
     a = Vec2(x1, y1)
     b = Vec2(x2, y2)
     a == b && return nothing
@@ -8233,6 +8273,81 @@ function _svg_path_points(raw::AbstractString, segments::Int)
     return paths
 end
 
+# preserveAspectRatio (SVG 1.1 section 7.8): alignment per axis
+# (:min/:mid/:max, or :none for non-uniform scaling) and :meet or :slice.
+function _svg_preserve_aspect_ratio(raw::Union{Nothing,AbstractString})
+    raw === nothing && return :mid, :mid, :meet
+    tokens = split(strip(String(raw)))
+    !isempty(tokens) && tokens[1] == "defer" && (tokens = tokens[2:end])
+    (1 <= length(tokens) <= 2) || error("unsupported SVG preserveAspectRatio $raw")
+    align = tokens[1]
+    mode = length(tokens) == 2 ? tokens[2] : "meet"
+    (mode == "meet" || mode == "slice") ||
+        error("unsupported SVG preserveAspectRatio $raw")
+    align == "none" && return :none, :none, :meet
+    m = match(r"^x(Min|Mid|Max)Y(Min|Mid|Max)$", align)
+    m === nothing && error("unsupported SVG preserveAspectRatio $raw")
+    axis(name) = name == "Min" ? :min : name == "Mid" ? :mid : :max
+    return axis(m.captures[1]), axis(m.captures[2]), Symbol(mode)
+end
+
+# The viewBox-to-viewport transform of SVG 2 section 8.2 for the viewport
+# (ex, ey, ew, eh); a plain translation without a viewBox.
+function _svg_viewbox_transform(attrs::AbstractDict, ex::Float64, ey::Float64,
+                                ew::Float64, eh::Float64)
+    raw = get(attrs, "viewbox", nothing)
+    raw === nothing && return (1.0, 0.0, 0.0, 1.0, ex, ey)
+    values = _svg_numbers(raw)
+    length(values) == 4 || error("SVG viewBox must contain four numbers")
+    vx, vy, vw, vh = values
+    (vw > 0.0 && vh > 0.0) || error("SVG viewBox width/height must be positive")
+    align_x, align_y, mode = _svg_preserve_aspect_ratio(get(attrs, "preserveaspectratio", nothing))
+    sx = ew / vw
+    sy = eh / vh
+    if align_x !== :none
+        sx = sy = mode === :slice ? max(sx, sy) : min(sx, sy)
+    end
+    tx = ex - vx * sx
+    ty = ey - vy * sy
+    align_x === :mid && (tx += (ew - vw * sx) / 2)
+    align_x === :max && (tx += ew - vw * sx)
+    align_y === :mid && (ty += (eh - vh * sy) / 2)
+    align_y === :max && (ty += eh - vh * sy)
+    return (sx, 0.0, 0.0, sy, tx, ty)
+end
+
+# Viewport box and content transform of a symbol instantiated by `use`: the
+# symbol becomes a nested viewport whose width/height come from the `use`,
+# then from the symbol, and default to 100% (SVG 2 sections 5.5 and 5.6.2).
+# A zero width or height disables rendering (`nothing`).
+function _svg_symbol_viewport(use_attrs::AbstractDict, symbol_attrs::AbstractDict,
+                              viewport::NTuple{2,Float64})
+    dimension(key, axis) =
+        haskey(use_attrs, key) ? _svg_length(use_attrs, key; viewport) :
+        haskey(symbol_attrs, key) ? _svg_length(symbol_attrs, key; viewport) :
+        viewport[axis]
+    w = dimension("width", 1)
+    h = dimension("height", 2)
+    (w < 0.0 || h < 0.0) && error("SVG symbol viewport width/height must be non-negative")
+    (w > 0.0 && h > 0.0) || return nothing, _svg_identity_transform()
+    x = _svg_length(symbol_attrs, "x", 0.0; viewport)
+    y = _svg_length(symbol_attrs, "y", 0.0; viewport)
+    return (x, y, x + w, y + h), _svg_viewbox_transform(symbol_attrs, x, y, w, h)
+end
+
+# The user-agent style sheet gives symbol `overflow: hidden` (SVG 2 section
+# 5.5 and appendix D), clipping its content to the viewport.
+function _svg_symbol_clips_overflow(attrs::AbstractDict,
+                                    css_rules::Vector{_SVGStyleRule},
+                                    context::Union{Nothing,_SVGElementContext})
+    local_attrs = _svg_cascaded_style_attrs(attrs, css_rules, "symbol", context,
+                                            ("overflow",))
+    value = lowercase(strip(get(local_attrs, "overflow", "hidden")))
+    (value == "hidden" || value == "scroll" || value == "clip") && return true
+    (value == "visible" || value == "auto") && return false
+    error("unsupported SVG overflow $value")
+end
+
 struct _SVGTag
     closing::Bool
     name::String
@@ -8242,7 +8357,7 @@ end
 
 _svg_is_container_tag(name::String) =
     name == "svg" || name == "g" || name == "defs" || name == "clippath" ||
-    name == "mask"
+    name == "mask" || name == "symbol"
 
 mutable struct _SVGParseState
     tags::Vector{_SVGTag}
@@ -8257,6 +8372,8 @@ mutable struct _SVGParseState
     segments::Int
     circle_n::Int
     root_reference_bbox::NTuple{4,Float64}
+    # Size of the root user coordinate system, for percentage lengths.
+    viewport::NTuple{2,Float64}
     clip_definitions::Dict{String,_SVGClipDefinition}
     mask_definitions::Dict{String,_SVGClipDefinition}
     next_element_id::Int
@@ -8268,7 +8385,7 @@ end
 
 function _svg_tags(raw::AbstractString)
     tags = _SVGTag[]
-    for m in eachmatch(r"(?is)<\s*(/)?\s*(svg|g|defs|clipPath|mask|path|rect|line|circle|ellipse|polygon|polyline|use)\b([^>]*)>",
+    for m in eachmatch(r"(?is)<\s*(/)?\s*(svg|g|defs|clipPath|mask|symbol|path|rect|line|circle|ellipse|polygon|polyline|use)\b([^>]*)>",
                        raw)
         push!(tags, _SVGTag(m.captures[1] !== nothing, lowercase(m.captures[2]),
                             _svg_attrs(m.captures[3]),
@@ -8328,7 +8445,7 @@ function _svg_inherited_style(state::_SVGParseState, k::Int)
     for a in Iterators.reverse(chain)
         tag = state.tags[a]
         style = _svg_style_from_attrs(style, tag.attrs, state.css_rules, tag.name,
-                                      state.contexts[a])
+                                      state.contexts[a]; viewport=state.viewport)
     end
     return style
 end
@@ -8378,6 +8495,7 @@ function _svg_parse_range!(state::_SVGParseState, first::Int, last::Int,
                            display0::Bool, visibility0::Symbol)
     segments = state.segments
     circle_n = state.circle_n
+    viewport = state.viewport
     css_rules = state.css_rules
     root_reference_bbox = state.root_reference_bbox
     clip_definitions = state.clip_definitions
@@ -8463,7 +8581,8 @@ function _svg_parse_range!(state::_SVGParseState, first::Int, last::Int,
                 length(clip_stack) > 1 && pop!(clip_stack)
                 length(mask_stack) > 1 && pop!(mask_stack)
             else
-                if (tag == "clippath" || tag == "mask") && k != first
+                # A symbol renders only through `use` (SVG 1.1 section 5.5).
+                if (tag == "clippath" || tag == "mask" || tag == "symbol") && k != first
                     k = state.closers[k]
                     continue
                 end
@@ -8499,7 +8618,9 @@ function _svg_parse_range!(state::_SVGParseState, first::Int, last::Int,
                     child_mask_ids = copy(mask_stack[end])
                     local_bbox_clip = nothing
                     local_bbox_mask = nothing
-                    container_transform =
+                    # symbol has no transform attribute (SVG 1.1 section
+                    # 5.5); `use` places it through its viewport instead.
+                    container_transform = tag == "symbol" ? transform_stack[end] :
                         _svg_compose_transform(transform_stack[end],
                                                _svg_transform_from_attrs(attrs))
                     if local_clip_spec !== nothing
@@ -8540,7 +8661,7 @@ function _svg_parse_range!(state::_SVGParseState, first::Int, last::Int,
                     push!(transform_stack, container_transform)
                     push!(style_stack,
                           _svg_style_from_attrs(style_stack[end], attrs, css_rules,
-                                                tag, context))
+                                                tag, context; viewport))
                     push!(display_stack, display_ok)
                     push!(visibility_stack, visibility)
                     push!(clip_stack, child_clip_ids)
@@ -8576,7 +8697,7 @@ function _svg_parse_range!(state::_SVGParseState, first::Int, last::Int,
         total_transform = _svg_compose_transform(transform_stack[end],
                                                  local_transform)
         style = _svg_style_from_attrs(style_stack[end], attrs, css_rules, tag,
-                                      context)
+                                      context; viewport)
         display_ok, visibility =
             _svg_display_visibility(display_stack[end], visibility_stack[end],
                                     attrs, css_rules, tag, context)
@@ -8585,8 +8706,9 @@ function _svg_parse_range!(state::_SVGParseState, first::Int, last::Int,
         # (SVG 1.1 section 5.6; SVG 2 section 5.6.2).
         user_transform = tag == "use" ?
             _svg_compose_transform(total_transform,
-                                   (1.0, 0.0, 0.0, 1.0, _svg_length(attrs, "x", 0.0),
-                                    _svg_length(attrs, "y", 0.0))) :
+                                   (1.0, 0.0, 0.0, 1.0,
+                                    _svg_length(attrs, "x", 0.0; viewport),
+                                    _svg_length(attrs, "y", 0.0; viewport))) :
             total_transform
         clip_applications = copy(clip_stack[end])
         mask_applications = copy(mask_stack[end])
@@ -8624,13 +8746,37 @@ function _svg_parse_range!(state::_SVGParseState, first::Int, last::Int,
                 # own presentation attributes take precedence. It is rendered
                 # in its own frame and then moved by the `use` transform, so
                 # clip paths and masks on the referenced content move with it.
-                push!(state.active_uses, target)
-                try
-                    _svg_parse_range!(state, target, state.closers[target],
-                                      raw_paths, _svg_identity_transform(),
-                                      style, true, :visible)
-                finally
-                    pop!(state.active_uses)
+                viewport_box = nothing
+                content_transform = _svg_identity_transform()
+                if target_tag == "symbol"
+                    viewport_box, content_transform =
+                        _svg_symbol_viewport(attrs, state.tags[target].attrs, viewport)
+                end
+                if viewport_box !== nothing || target_tag != "symbol"
+                    push!(state.active_uses, target)
+                    try
+                        _svg_parse_range!(state, target, state.closers[target],
+                                          raw_paths, content_transform,
+                                          style, true, :visible)
+                    finally
+                        pop!(state.active_uses)
+                    end
+                end
+                if viewport_box !== nothing &&
+                   _svg_symbol_clips_overflow(state.tags[target].attrs, css_rules,
+                                              state.contexts[target])
+                    x0, y0, x1, y1 = viewport_box
+                    viewport_loop = [Vec2(x0, y0), Vec2(x1, y0), Vec2(x1, y1), Vec2(x0, y1)]
+                    clipped_paths = SVGPath[]
+                    for path in raw_paths
+                        if all(p -> x0 <= p.x <= x1 && y0 <= p.y <= y1, path.points)
+                            push!(clipped_paths, path)
+                        else
+                            append!(clipped_paths,
+                                    _svg_clip_path_to_loops(path, [viewport_loop]))
+                        end
+                    end
+                    raw_paths = clipped_paths
                 end
                 for idx in eachindex(raw_paths)
                     raw_paths[idx] = _svg_transform_path(raw_paths[idx],
@@ -8641,22 +8787,22 @@ function _svg_parse_range!(state::_SVGParseState, first::Int, last::Int,
             d = get(attrs, "d", nothing)
             d !== nothing && append!(raw_paths, _svg_path_points(d, segments))
         elseif tag == "rect"
-            rect = _svg_rect(attrs, segments)
+            rect = _svg_rect(attrs, segments, viewport)
             rect !== nothing && push!(raw_paths, rect)
         elseif tag == "line"
-            line = _svg_line(attrs)
+            line = _svg_line(attrs, viewport)
             line !== nothing && push!(raw_paths, line)
         elseif tag == "circle"
-            cx = _svg_length(attrs, "cx", 0.0)
-            cy = _svg_length(attrs, "cy", 0.0)
-            r = _svg_length(attrs, "r", 0.0)
+            cx = _svg_length(attrs, "cx", 0.0; viewport)
+            cy = _svg_length(attrs, "cy", 0.0; viewport)
+            r = _svg_length(attrs, "r", 0.0; viewport)
             points = _svg_ellipse_points(cx, cy, r, r, circle_n)
             !isempty(points) && push!(raw_paths, SVGPath(:circle, points, true))
         elseif tag == "ellipse"
-            cx = _svg_length(attrs, "cx", 0.0)
-            cy = _svg_length(attrs, "cy", 0.0)
-            rx = _svg_length(attrs, "rx", 0.0)
-            ry = _svg_length(attrs, "ry", 0.0)
+            cx = _svg_length(attrs, "cx", 0.0; viewport)
+            cy = _svg_length(attrs, "cy", 0.0; viewport)
+            rx = _svg_length(attrs, "rx", 0.0; viewport)
+            ry = _svg_length(attrs, "ry", 0.0; viewport)
             points = _svg_ellipse_points(cx, cy, rx, ry, circle_n)
             !isempty(points) && push!(raw_paths, SVGPath(:ellipse, points, true))
         elseif tag == "polygon" || tag == "polyline"
@@ -8703,8 +8849,10 @@ function _svg_parse(raw::AbstractString; curve_segments::Integer=16,
     css_rules = _svg_css_rules(raw)
     tags = _svg_tags(raw)
     contexts, closers, parents, ids = _svg_tag_structure(tags)
+    viewport = (root_reference_bbox[3] - root_reference_bbox[1],
+                root_reference_bbox[4] - root_reference_bbox[2])
     state = _SVGParseState(tags, contexts, closers, parents, ids, css_rules,
-                           segments, circle_n, root_reference_bbox,
+                           segments, circle_n, root_reference_bbox, viewport,
                            Dict{String,_SVGClipDefinition}(),
                            Dict{String,_SVGClipDefinition}(), 0, Int[], Int[])
     paths = _svg_parse_range!(state, 1, length(tags), SVGPath[],
