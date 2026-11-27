@@ -279,4 +279,72 @@ export
     bloom_pass, fxaa_pass, outline_pass, ssao_pass, bokeh_pass,
     load_glb, load_glb_asset, load_ply
 
+# ========================== Exports added in 1.2 ==========================
+export
+    # Lights
+    light_probe_from_cube_texture,
+
+    # Geometry
+    apply_matrix4!, apply_quaternion!, rotate_geometry_x!, rotate_geometry_y!,
+    rotate_geometry_z!, translate_geometry!, scale_geometry!, look_at_geometry!,
+    center_geometry!, to_non_indexed, normalize_normals!, set_from_points!,
+    delete_attribute!, estimate_bytes_used, merge_groups!, to_triangles_draw_mode!,
+    to_creased_normals, ParametricFunctions, RoundedBoxGeometry, BoxLineGeometry,
+    DecalGeometry, Curve, LineCurve, LineCurve3, QuadraticBezierCurve,
+    QuadraticBezierCurve3, CubicBezierCurve, CubicBezierCurve3, EllipseCurve,
+    ArcCurve, SplineCurve, CurvePath, Path, Shape, ShapePath, get_point,
+    get_point_at, get_points, get_spaced_points, get_length, get_lengths,
+    get_u_to_t_mapping, get_tangent, get_tangent_at, compute_frenet_frames,
+    close_path!, move_to!, line_to!, quadratic_curve_to!, bezier_curve_to!,
+    spline_thru!, arc!, absarc!, ellipse!, absellipse!, get_points_holes,
+    extract_points, to_shapes,
+
+    # Cameras
+    CameraView, set_view_offset!, clear_view_offset!, get_film_width,
+    get_film_height, get_focal_length, set_focal_length!, get_effective_fov,
+    get_view_bounds, get_view_size, vec3_project, vec3_unproject,
+
+    # Scene graph
+    look_at!, rotate_on_axis!, rotate_on_world_axis!, rotate_x!, rotate_y!,
+    rotate_z!, translate_on_axis!, translate_x!, translate_y!, translate_z!,
+    local_to_world, world_to_local, get_world_position, get_world_quaternion,
+    get_world_scale, get_world_direction, traverse_visible, traverse_ancestors,
+    get_object_by_property, get_object_by_name, get_object_by_id, attach!,
+    remove_from_parent!, clear_children!,
+
+    # Math
+    vec3_distance_squared, vec3_manhattan_distance, vec3_angle_to,
+    vec3_project_on_vector, vec3_project_on_plane, vec3_reflect, vec3_clamp_length,
+    vec3_apply_axis_angle, vec3_apply_euler, vec3_min, vec3_max, vec3_clamp,
+    mat4_max_scale_on_axis, mat4_get_position, mat4_get_scale, mat4_get_column,
+    mat4_set_position, mat4_make_basis, mat4_extract_basis, mat4_extract_rotation,
+    mat4_make_rotation_axis, mat4_make_shear, mat3_from_mat4, mat3_determinant,
+    mat3_transpose, mat3_inverse, mat3_normal_matrix, mat3_set_uv_transform,
+    mat3_transform_vec3, sphere_is_empty, sphere_contains_point,
+    sphere_distance_to_point, sphere_intersects_sphere, sphere_intersects_plane,
+    sphere_intersects_box, sphere_clamp_point, sphere_bounding_box,
+    sphere_apply_matrix4, sphere_expand_by_point, sphere_union, box3_clamp_point,
+    box3_distance_to_point, box3_bounding_sphere, box3_intersects_sphere,
+    box3_intersects_plane, plane_from_normal_and_coplanar_point,
+    plane_from_coplanar_points, plane_normalize, plane_project_point,
+    plane_coplanar_point, plane_intersect_line, plane_intersects_line,
+    plane_intersects_box, plane_intersects_sphere, plane_apply_matrix4, ray_at,
+    ray_closest_point_to_point, ray_distance_sq_to_point, ray_distance_to_point,
+    ray_distance_sq_to_segment, ray_intersect_sphere, ray_intersects_sphere,
+    ray_distance_to_plane, ray_intersect_plane, ray_intersects_plane,
+    ray_intersect_box, ray_intersects_box, ray_apply_matrix4, triangle_plane,
+    triangle_is_front_facing, triangle_closest_point_to_point, map_linear,
+    inverse_lerp, damp, pingpong, smoothstep, smootherstep,
+
+    # Controls / Animation
+    clock_start!, clock_stop!, FrameTimer, timer_update!, timer_reset!, timer_delta,
+    timer_elapsed, mixer_reset!, mixer_stop!, mixer_play!, mixer_is_running,
+    mixer_is_scheduled, mixer_set_loop!, track_shift!, track_scale!, track_trim,
+    track_optimize, track_validate, clip_reset_duration, clip_trim, clip_optimize,
+    clip_validate, clip_find_by_name, clip_subclip, clip_from_morph_target_sequence,
+    clips_from_morph_target_sequences,
+
+    # Loaders
+    load_obj_scene, save_gltf
+
 end # module Diff3D

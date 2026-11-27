@@ -136,6 +136,34 @@ const cross=(a,b)=>[a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0
 const norm=a=>{ const l=Math.hypot(a[0],a[1],a[2])||1; return [a[0]/l,a[1]/l,a[2]/l]; };
 """
 
+# Endings of an action played from its start to scaled time `x` in frame steps, as
+# Diff3D._update_action_time! sets them through three.js AnimationAction._setEndings
+# (AnimationAction.js:882-917): the first loop starts with zero slope and ends with it only for
+# zero repetitions; a wrap into the last pending loop gives zero slope at the end reached last
+# (the clip end forward, its start backward); every other seam wraps around. Once and pingpong
+# use zero slope at both ends.
+function _audit3b_action_endings(x, d, loop, reps)
+    (loop === :repeat && d > 0) || return :zero_slope, :zero_slope
+    slope(flag) = flag ? :zero_slope : :wrap_around
+    if x >= 0
+        k = floor(x / d)
+        return slope(k == 0), slope(k == 0 ? reps == 0 : reps >= 0 && reps - k == 1)
+    end
+    count = ceil(-x / d) - 1      # the first wrap below zero is free
+    return slope(reps >= 0 && reps - count == 1), :wrap_around
+end
+
+# A track's value at clip time `ct`; a smooth track is evaluated like the action's
+# CubicInterpolant on entering an interval (Diff3D._mixer_track_value).
+function _audit3b_track_value(tr, ct, ending_start, ending_end)
+    if tr isa Union{KeyframeTrack,NumberKeyframeTrack} && tr.interpolation === :cubic
+        ct < tr.times[1] && return tr.values[1]
+        ct >= tr.times[end] && return tr.values[end]
+        return Diff3D._cubic_interpolant_sample(tr.times, tr.values, ct, ending_start, ending_end)
+    end
+    return Diff3D._track_value(tr, ct)
+end
+
 @testset "viewer animation sampling matches Julia's mixer on random tracks" begin
     html = _audit3b_viewer_html()
     @test occursin("const ct=clipTime(clip,t), ends=cubicEndings(clip,t);", html)
@@ -186,14 +214,18 @@ const norm=a=>{ const l=Math.hypot(a[0],a[1],a[2])||1; return [a[0]/l,a[1]/l,a[2
                   [(8rnd() - 4) * d for _ in 1:12])
         append!(samples, ts)
         push!(counts, length(ts))
-        mixer = AnimationMixer(clip)
         for T in ts
             x = T * clip.time_scale
-            mixer.sample_time = Diff3D._animation_loop_time(x, d, clip.loop, clip.repetitions,
-                                                            clip.clamp_when_finished)
-            mixer.ending_start, mixer.ending_end =
-                Diff3D._animation_cubic_endings(x, d, clip.loop, clip.repetitions)
-            push!(expected, [flat(Diff3D._mixer_track_value(tr, mixer)) for tr in clip.tracks])
+            ct = Diff3D._animation_loop_time(x, d, clip.loop, clip.repetitions,
+                                             clip.clamp_when_finished)
+            # An action that finished unclamped is disabled and writes nothing (clipTime
+            # returns null), so the exported pose stays.
+            if ct === nothing
+                push!(expected, Vector{Float64}[])
+                continue
+            end
+            es, ee = _audit3b_action_endings(x, d, clip.loop, clip.repetitions)
+            push!(expected, [flat(_audit3b_track_value(tr, ct, es, ee)) for tr in clip.tracks])
         end
     end
     clips_json = "[" * join((Diff3D._web_clip_json(c) for c in clips), ",") * "]"
@@ -202,13 +234,13 @@ const norm=a=>{ const l=Math.hypot(a[0],a[1],a[2])||1; return [a[0]/l,a[1]/l,a[2
                     if occursin("  const $n=", html)), "\n")
     names = filter(n -> occursin("  function $n(", html),
                    ["hermite3", "catmull3", "hermiteN", "catmullN", "cubicInterpolant", "slerp",
-                    "sampleTrack", "floorMod", "clipTime", "cubicEndings"])
+                    "sampleTrack", "clipTime", "cubicEndings"])
     body = """
     const clips=$clips_json, samples=[$(join(repr.(samples), ","))], counts=[$(join(counts, ","))];
     const out=[]; let s=0;
     clips.forEach((clip,ci)=>{ for(let k=0;k<counts[ci];k++){ const t=samples[s++];
       const ct=clipTime(clip,t), ends=typeof cubicEndings==="function"?cubicEndings(clip,t):undefined;
-      out.push(clip.tracks.map(tr=>sampleTrack(tr,ct,ends))); } });
+      out.push(ct===null?[]:clip.tracks.map(tr=>sampleTrack(tr,ct,ends))); } });
     console.log(JSON.stringify(out));
     """
     r = _audit3b_node_json(html, names, body; prelude)
@@ -219,6 +251,8 @@ const norm=a=>{ const l=Math.hypot(a[0],a[1],a[2])||1; return [a[0]/l,a[1]/l,a[2
         @test length(r) == length(expected)
         worst = 0.0
         bad = zeros(Int, 8)   # mismatched samples per track kind, in the order built above
+        @test all(length(got) == length(want) for (got, want) in zip(r, expected))
+        @test count(isempty, expected) > 0     # some clips finish unclamped
         for (got, want) in zip(r, expected), (k, (g, w)) in enumerate(zip(got, want))
             err = maximum(abs.(Float64.(g) .- w))
             worst = max(worst, err)
