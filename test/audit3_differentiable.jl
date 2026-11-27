@@ -178,8 +178,9 @@ end
     end
     expected = ForwardDiff.gradient(twice, p)
     @test normwise(reverse_gradient(q -> twice(q; workspace), p), expected) < 1e-9
-    image = reverse_value_gradient(q -> sum(audit3_render(q, count, width, height;
-                                                          workspace)), p)
+    value, _ = reverse_value_gradient(q -> sum(audit3_render(q, count, width, height;
+                                                             workspace)), p)
+    @test value ≈ sum(audit3_render(p, count, width, height)) rtol=1e-12
     @test workspace.image isa Array{ADVar,3}
     # A reverse pass nested in another records onto its own tape.
     single(q) = sum(audit3_render(q, count, width, height) .* weights)
@@ -266,4 +267,54 @@ end
         # three vertices recorded about two hundred.
         eye[3] == 3.0 && @test recorded[] <= 3 * width * height + 80 * length(faces)
     end
+end
+
+@testset "Fused reverse rules under adversarial objectives" begin
+    width, height = 12, 10
+    p, faces, colors, vp = audit3_sphere((0.4, 0.6, 3.0))
+    render = vertex_render_fn(faces, colors, vp, width, height; sigma=0.7, gamma=0.2)
+    # The objective is a fused output leaf itself, and image elements are
+    # reused by later nonlinear operations.
+    pixel(q) = render(q)[5, 6, 2]
+    @test normwise(reverse_gradient(pixel, p), ForwardDiff.gradient(pixel, p)) < 1e-9
+    reuse(q) = (image = render(q);
+                sum(abs2, image) + image[1, 1, 1] * image[10, 12, 3] + sum(sqrt.(image .+ 1)))
+    @test normwise(reverse_gradient(reuse, p), ForwardDiff.gradient(reuse, p)) < 1e-9
+    # Fused losses against Float32 and Int targets keep the generic promotion.
+    target = render(p .* 1.01)
+    for loss in (loss_mse, loss_l1), converted in (Float32.(target), round.(Int, 4 .* target))
+        objective(q) = loss(render(q), converted)
+        value, gradient = reverse_value_gradient(objective, p)
+        @test value == loss(render(p), converted)
+        @test normwise(gradient, ForwardDiff.gradient(objective, p)) < 1e-9
+    end
+    # An error after a fused render releases its pullbacks with the tape.
+    @test_throws ErrorException reverse_gradient(q -> (sum(render(q)); error("stop")), p)
+    state = Diff3D._ad_tape_state()
+    @test isempty(state.stack) && isempty(state.pullbacks)
+    @test normwise(reverse_gradient(pixel, p), ForwardDiff.gradient(pixel, p)) < 1e-9
+    # Relative-depth mode with gamma and sigma as parameters.
+    function relative(q)
+        T = eltype(q)
+        n = length(q) - 2
+        vertices = [Vec3(q[3i - 2], q[3i - 1], q[3i]) for i in 1:(n ÷ 3)]
+        config = SoftRasterizerConfig(sigma=q[end - 1], gamma=q[end], eps=T(1e-6))
+        face_colors = [Color3(T(c.r), T(c.g), T(c.b)) for c in colors]
+        sum(soft_render(vertices, faces, face_colors, Mat4{T}(vp.e), 11, 9, config) .^ 2)
+    end
+    for gamma in (1e-310, 1e-4)
+        q = vcat(p, 0.6, gamma)
+        forward = ForwardDiff.gradient(relative, q)
+        reverse = reverse_gradient(relative, q)
+        @test all(isfinite, forward) && all(isfinite, reverse)
+        @test normwise(reverse, forward) < 1e-9
+    end
+    # Concurrent passes keep task-local tapes and pullback lists apart.
+    scales = 1 .+ 0.01 .* (1:8)
+    serial = [reverse_gradient(q -> sum(render(q)), p .* s) for s in scales]
+    concurrent = Vector{Vector{Float64}}(undef, length(scales))
+    Threads.@threads for k in eachindex(scales)
+        concurrent[k] = reverse_gradient(q -> sum(render(q)), p .* scales[k])
+    end
+    @test concurrent == serial
 end
