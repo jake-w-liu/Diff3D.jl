@@ -1340,12 +1340,13 @@ function SphereGeometry(; radius=1.0, width_segments=32, height_segments=16,
         # sweeps outside [0, pi] fold back onto the sphere and a negative
         # radius mirrors only y. The same operations make a pole ring exactly
         # zero, so pole vertices coincide as in three.js. A radius whose square
-        # overflows uses the equivalent |radius| * |sin(theta)|.
+        # overflows or leaves the normal range (three.js gets NaN, or a sphere
+        # collapsed onto the y axis) uses the equivalent |radius| * |sin(theta)|.
         cosθ = cos(θ)
         y = radius * cosθ
-        ring_radius_sq = radius * radius - y * y
-        ring_radius = isfinite(ring_radius_sq) ? sqrt(ring_radius_sq) :
-                      abs(radius) * abs(sin(θ))
+        radius_sq = radius * radius
+        ring_radius = isfinite(radius_sq) && radius_sq >= floatmin(Float64) ?
+                      sqrt(radius_sq - y * y) : abs(radius) * abs(sin(θ))
         # three.js centers each pole vertex's u between its ring neighbours.
         u_offset = j == 0 && theta_start == 0 ? 0.5 / width_segments :
                    j == height_segments && bottom_pole ? -0.5 / width_segments : 0.0

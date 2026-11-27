@@ -89,6 +89,14 @@ end
     huge = SphereGeometry(radius=1e200, width_segments=3, height_segments=2)
     @test all(isfinite, huge.positions) && all(isfinite, huge.normals)
     @test huge.positions[3 * 5 - 2] ≈ -1e200 rtol=1e-15     # equator vertex, phi = 0
+    # A radius whose square underflows keeps the sphere's shape too (three.js
+    # gets radius^2 - y^2 == 0 there and collapses every ring onto the y axis).
+    unit = SphereGeometry(radius=1.0, width_segments=8, height_segments=6)
+    for radius in (1e-300, 1e-170, 1e-160)
+        tiny = SphereGeometry(radius=radius, width_segments=8, height_segments=6)
+        @test _approx(tiny.positions ./ radius, unit.positions; atol=1e-15)
+        @test _approx(tiny.normals, unit.normals; atol=1e-15)
+    end
 end
 
 @testset "apply_matrix4! matches BufferGeometry.applyMatrix4" begin
