@@ -114,3 +114,42 @@ end
         @test sphere["radius"] ≈ 2.1360009363293826 rtol=1e-15
     end
 end
+
+# A scalar GLSL function of the viewer's fragment shader as JavaScript: float locals become
+# `let`, and max/min/pow/clamp keep their GLSL meaning for scalars.
+function _audit3_glsl_scalar_js(html::AbstractString, name::AbstractString)
+    m = match(Regex("float $name\\(([^)]*)\\)(\\{.*?return [^;]+; \\})"), html)
+    m === nothing && error("GLSL function $name not found")
+    params = join((last(split(strip(p))) for p in split(m.captures[1], ',')), ",")
+    body = replace(m.captures[2], r"\bfloat\s+" => "let ")
+    return "function $name($params){ const max=Math.max,min=Math.min,pow=Math.pow," *
+           "clamp=(x,a,b)=>Math.min(Math.max(x,a),b); " * body[2:end] * "\n"
+end
+
+@testset "viewer light distance attenuation matches three.js getDistanceAttenuation" begin
+    # lights_pars_begin.glsl.js:56-71: 1/max(d^decay, 0.01), times (saturate(1-(d/cutoff)^4))^2
+    # for a cutoff. The old viewer used an uncapped 1/d^decay and the window 1-(d/cutoff)^2:
+    # at d=9, cutoff 10, decay 2 it lit 0.00235 where three.js and Julia light 0.00146.
+    html = _audit3_viewer_html()
+    @test occursin("float attenuation(float dist,float maxDist,float decay){ float a=1.0/max(pow(max(dist,0.0001),decay),0.01); if(maxDist>0.0){ float r=dist/maxDist; float w=clamp(1.0-r*r*r*r,0.0,1.0); a*=w*w; } return a; }", html)
+    grid = vec([(d, cutoff, decay) for d in (1e-3, 0.05, 0.3, 1.0, 2.0, 4.5, 9.0, 12.0),
+                cutoff in (0.0, 1.0, 5.0, 10.0), decay in (0.0, 1.0, 2.0, 3.5)])
+    node = Sys.which("node")
+    if node !== nothing
+        js = _audit3_glsl_scalar_js(html, "attenuation") *
+             "console.log(JSON.stringify([" *
+             join(("attenuation($(repr(d)),$(repr(c)),$(repr(k)))" for (d, c, k) in grid), ",") * "]));"
+        path = tempname() * ".js"
+        values = try
+            write(path, js)
+            Diff3D._json_parse(read(`$node $path`, String))
+        finally
+            rm(path; force=true)
+        end
+        expected = [Diff3D._distance_attenuation(d, c, k) for (d, c, k) in grid]
+        @test all(isapprox.(Float64.(values), expected; rtol=1e-14))
+        # Hand-checked three.js values: capped near the light, Frostbite window at d=9.
+        @test Diff3D._distance_attenuation(1e-3, 0.0, 2.0) == 100.0
+        @test Diff3D._distance_attenuation(9.0, 10.0, 2.0) ≈ (1 / 81) * (1 - 0.9^4)^2
+    end
+end

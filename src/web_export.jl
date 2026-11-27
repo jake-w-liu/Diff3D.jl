@@ -4424,7 +4424,9 @@ function _web_write_webgl_html(io::IO, data_json::String, title::String;
   vec2 uvFor(mat3 m, int set){ return set==1?txUv(m,vUv2):txUv(m,vUv); }
   vec3 srgbToLinear(vec3 c){ return mix(c/12.92,pow((c+vec3(0.055))/1.055,vec3(2.4)),step(vec3(0.04045),c)); }
   vec4 colorTex(sampler2D tex, vec2 uv, int colorSpace){ vec4 c=texture2D(tex,uv); if(colorSpace==1) c.rgb=srgbToLinear(c.rgb); return c; }
-  float attenuation(float dist,float maxDist,float decay){ float d=max(dist,0.0001); float a=1.0/pow(d,max(decay,0.0001)); if(maxDist>0.0){ float w=max(1.0-(d/maxDist)*(d/maxDist),0.0); a*=w; } return a; }
+  // three.js getDistanceAttenuation (lights_pars_begin.glsl.js:56-71), as Julia's _distance_attenuation:
+  // falloff capped at 100x and the window (1-(d/cutoff)^4)^2.
+  float attenuation(float dist,float maxDist,float decay){ float a=1.0/max(pow(max(dist,0.0001),decay),0.01); if(maxDist>0.0){ float r=dist/maxDist; float w=clamp(1.0-r*r*r*r,0.0,1.0); a*=w*w; } return a; }
   float spotCone(float theta,float outerCos,float innerCos){ if(innerCos<=outerCos+0.00001) return theta>=outerCos?1.0:0.0; return smoothstep(outerCos,innerCos,theta); }
   bool clipped(vec3 p){ for(int i=0;i<MAX_CLIP;i++){ if(i>=uClipCount) break; vec4 pl=uClipPlane[i]; if(dot(pl.xyz,p)+pl.w<0.0) return true; } return false; }
   float fogFactor(float d){ if(uFogType==1) return smoothstep(uFogNear,uFogFar,d); if(uFogType==2){ if(uFogDensity==0.0) return 0.0; float opticalDepth=max(d,0.0)*uFogDensity; return 1.0-exp(-opticalDepth*opticalDepth); } return 0.0; }
