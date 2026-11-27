@@ -339,3 +339,47 @@ end
     @test_throws "needs a root viewport size" _audit3b_svg(
         """<svg width="100%"><rect width="50%" height="1"/></svg>""")
 end
+
+function _audit3b_covers(geo, p)
+    for f in 1:geo.n_faces
+        i, j, k = get_face(geo, f)
+        a, b, c = get_vertex(geo, i), get_vertex(geo, j), get_vertex(geo, k)
+        d1 = (b.x - a.x) * (p[2] - a.y) - (b.y - a.y) * (p[1] - a.x)
+        d2 = (c.x - b.x) * (p[2] - b.y) - (c.y - b.y) * (p[1] - b.x)
+        d3 = (a.x - c.x) * (p[2] - c.y) - (a.y - c.y) * (p[1] - c.x)
+        ((d1 < 0 || d2 < 0 || d3 < 0) && (d1 > 0 || d2 > 0 || d3 > 0)) || return true
+    end
+    return false
+end
+
+@testset "SVG miter joins cover the whole corner of closed rect strokes" begin
+    # three.js r186 SVGLoader.parse + pointsToStroke oracle for
+    # <rect x="20" y="20" width="10" height="10" stroke-width="2">: the stroke
+    # covers the square ring 19..31 minus 21..29, including every corner
+    # square (the rect's points end on the start point, so pointsToStroke
+    # joins the closing corner too, SVGLoader.js:2366). Diff3D closes the
+    # rect and joins all four corners; the miter join used to leave the
+    # triangle p-outer1-outer2 of each corner uncovered (sampled coverage
+    # mismatch 180 of 14641 grid points against the oracle, 0 after).
+    doc = _audit3b_svg("""
+        <svg width="100" height="100">
+          <rect x="20" y="20" width="10" height="10" fill="none" stroke="red" stroke-width="2"/>
+        </svg>""")
+    @test doc.paths[1].closed
+    geo = svg_stroke_meshes(doc)[1].geometry
+    for corner in ((20.0, 20.0), (30.0, 20.0), (30.0, 30.0), (20.0, 30.0))
+        sx = corner[1] < 25 ? -1.0 : 1.0
+        sy = corner[2] < 25 ? -1.0 : 1.0
+        # Points of the corner's outer unit square on both sides of its
+        # diagonal, and inside the ring next to the corner.
+        for (u, v) in ((0.25, 0.5), (0.5, 0.25), (0.9, 0.9), (0.1, 0.1), (-0.5, 0.5))
+            @test _audit3b_covers(geo, (corner[1] + sx * u, corner[2] + sy * v))
+        end
+    end
+    @test !_audit3b_covers(geo, (25.0, 25.0))
+    @test !_audit3b_covers(geo, (31.5, 25.0))
+    direct = points_to_stroke_geometry([Vec2(0.0, 0.0), Vec2(10.0, 0.0), Vec2(10.0, 10.0)];
+                                       stroke_width=2.0)
+    @test _audit3b_covers(direct, (10.25, -0.5))
+    @test _audit3b_covers(direct, (10.9, -0.9))
+end

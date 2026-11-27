@@ -9654,8 +9654,12 @@ end
                2.0, -1.0, 0.0, 2.0, 1.0, 0.0]
         @test stroke_meshes[1].geometry.indices == [1, 2, 3, 1, 3, 4]
         @test stroke_meshes[2].material.color == Color3(1.0, 0.0, 0.0)
-        @test stroke_meshes[2].geometry.n_vertices == 21
-        @test stroke_meshes[2].geometry.n_faces == 9
+        # Three segment quads plus three miter joins; each miter join now
+        # also covers its p-outer1-outer2 triangle (4 vertices, 2 faces
+        # instead of 3/1), which the quads leave uncovered; the three.js
+        # pointsToStroke oracle covers it (audit3b_svg_loader.jl).
+        @test stroke_meshes[2].geometry.n_vertices == 24
+        @test stroke_meshes[2].geometry.n_faces == 12
         @test length(svg_stroke_meshes(stroke_mesh_path)) == 2
         direct_stroke = points_to_stroke_geometry([Vec2(0.0, 0.0), Vec2(2.0, 0.0)];
                                                   stroke_width=2.0)
@@ -9775,8 +9779,10 @@ end
         @test length(stroke_join_meshes) == 3
         @test stroke_join_meshes[1].geometry.n_vertices == 11
         @test stroke_join_meshes[1].geometry.n_faces == 5
-        @test stroke_join_meshes[2].geometry.n_vertices == 11
-        @test stroke_join_meshes[2].geometry.n_faces == 5
+        # The miter join covers p-outer1-miter-outer2 (audit3b_svg_loader.jl;
+        # was 11/5 with the p-outer1-outer2 triangle missing).
+        @test stroke_join_meshes[2].geometry.n_vertices == 12
+        @test stroke_join_meshes[2].geometry.n_faces == 6
         @test stroke_join_meshes[3].geometry.n_vertices == 16
         @test stroke_join_meshes[3].geometry.n_faces == 10
         miter_positions = stroke_join_meshes[2].geometry.positions

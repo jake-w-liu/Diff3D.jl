@@ -9195,10 +9195,15 @@ function _svg_add_miter_join!(positions::Vector{Float64},
         _svg_add_bevel_join!(positions, normals, uvs, indices, p, outer1, outer2)
         return nothing
     end
+    # The join covers the quadrilateral p-outer1-miter-outer2: the segment
+    # quads end on the normals through p, so the triangle p-outer1-outer2
+    # belongs to the join as much as the miter tip does. three.js
+    # pointsToStroke (SVGLoader.js:2537-2600) covers that whole region.
+    center = _svg_push_stroke_vertex!(positions, normals, uvs, p, 0.5, 0.5)
     a = _svg_push_stroke_vertex!(positions, normals, uvs, outer1, 0.0, 0.0)
     m = _svg_push_stroke_vertex!(positions, normals, uvs, miter, 0.5, 1.0)
     b = _svg_push_stroke_vertex!(positions, normals, uvs, outer2, 1.0, 0.0)
-    push!(indices, a, m, b)
+    push!(indices, center, a, m, center, m, b)
     return nothing
 end
 
