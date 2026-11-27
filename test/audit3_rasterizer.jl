@@ -309,6 +309,40 @@ end
     end
 end
 
+@testset "Cached InstancedMesh frames do not allocate per instance" begin
+    # The instanced material is stored untyped; the per-instance draw loop
+    # must dispatch on it once per InstancedMesh, not once per instance.
+    for shading in (:flat, :smooth), mirrored in (false, true)
+        frame_bytes = Int[]
+        for count in (1, 40)
+            scene = Scene()
+            add!(scene, AmbientLight(intensity=0.5))
+            mesh = InstancedMesh(SphereGeometry(radius=0.1, width_segments=8, height_segments=6),
+                                 MeshLambertMaterial(color=Color3(0.8, 0.5, 0.2)), count)
+            for index in 1:count
+                mesh.instance_matrices[index] = mat4_translation(
+                    0.3 * (index % 7) - 0.9, 0.3 * (index ÷ 7) - 0.9, -0.01 * index)
+            end
+            mirrored && (mesh.scale = Vec3(-1.0, 1.0, 1.0))
+            add!(scene, mesh)
+            camera = audit3_front_camera()
+            target = RenderTarget(48, 48)
+            cache = RenderCache()
+            render!(target, scene, camera; shading=shading, cache=cache)
+            @test any(>(0.0), target.color)
+            if Base.JLOptions().opt_level > 0
+                audit3_cached_frame_allocations(target, scene, camera, cache, shading)
+                push!(frame_bytes, audit3_cached_frame_allocations(
+                    target, scene, camera, cache, shading))
+            end
+        end
+        if Base.JLOptions().opt_level > 0
+            @test frame_bytes[2] <= frame_bytes[1] + 256
+            @test frame_bytes[2] <= 2048
+        end
+    end
+end
+
 @testset "Transparent double-sided meshes draw back faces before front faces" begin
     # WebGLRenderer.js:2165-2175 renders a transparent DoubleSide material as a
     # BackSide pass followed by a FrontSide pass. With depth_write=true (the

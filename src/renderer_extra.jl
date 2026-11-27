@@ -438,7 +438,8 @@ function _rasterize_flat_mesh_cached!(rt::RenderTarget, geo::BufferGeometry,
     mesh_shadow_fn = shadow_fn === nothing ? nothing : (mesh.receive_shadow ? shadow_fn : nothing)
     mesh_clipping_planes = _combined_clipping_planes(clipping_planes,
                                                      material_clipping_planes(mat))
-    _rasterize_geo_flat!(rt, geo, world, mat, lights, proj, view, near, cam_pos,
+    _rasterize_geo_flat!(rt, geo, world, _world_mirrors_faces(world), mat, lights,
+                         proj, view, near, cam_pos,
                          tri, clipped, sx, sy, sz; alpha=alpha, stamp=stamp,
                          stamp_id=stamp_id, shadow_fn=mesh_shadow_fn, xlo=xlo, xhi=xhi,
                          ylo=ylo, yhi=yhi, colorbuf=colorbuf,
@@ -1055,20 +1056,21 @@ function _rasterize_geo_flat_pooled!(rt::RenderTarget, geo::BufferGeometry, worl
                                      flat_attr_clipped=nothing,
                                      flat_iw=nothing,
                                      mirrored::Union{Nothing,Bool}=nothing)
+    face_flip = mirrored === nothing ? _world_mirrors_faces(world_mat) : mirrored::Bool
     if _has_render_fog(rt.view_state) || _render_pooled_uses_fragment_alpha(geo, mat)
         inv_log_far = rt.view_state === nothing ? 0.0 : rt.view_state.inv_log_far
-        return _rasterize_geo_flat!(rt, geo, world_mat, mat, lights, proj, view, near, cam_pos,
+        return _rasterize_geo_flat!(rt, geo, world_mat, face_flip, mat, lights, proj, view,
+                                    near, cam_pos,
                                     tri, clipped, sx, sy, sz; colorbuf=colorbuf,
                                     log_depth=!iszero(inv_log_far), inv_log_far=inv_log_far,
                                     xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
                                     ortho_dir=ortho_dir,
                                     flat_attr_tri=flat_attr_tri,
                                     flat_attr_clipped=flat_attr_clipped,
-                                    flat_iw=flat_iw, mirrored=mirrored)
+                                    flat_iw=flat_iw)
     end
 
     side = material_side(mat)
-    face_flip = mirrored === nothing ? _world_mirrors_faces(world_mat) : mirrored::Bool
     depth_test = material_depth_test(mat)
     depth_write = material_depth_write(mat)
     has_normals = length(geo.normals) >= geo.n_vertices * 3

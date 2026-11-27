@@ -1453,6 +1453,40 @@ function _render_smooth!(rt::RenderTarget, meshes, lights, proj, view, near, cam
     return rt
 end
 
+# Smooth-shaded opaque InstancedMesh draws. A function barrier: the instanced
+# material is stored untyped, so specializing here dispatches once per object
+# rather than once per instance (each dynamic call boxed its arguments).
+function _render_instanced_mesh_smooth!(rt::RenderTarget, geo, mat::M,
+                                        instance_colors::Vector{Color3{Float64}},
+                                        instance_matrices::Vector{Mat4{Float64}},
+                                        base::Mat4, instanced_slot::Int, lights,
+                                        proj::Mat4, view::Mat4, near, cam_pos::Vec3,
+                                        shadow_fn, tri::Vector{ShadeVtx},
+                                        clipped::Vector{ShadeVtx}, sx, sy, sz,
+                                        iw::Vector{Float64}, clipping_planes,
+                                        xlo::Int, xhi::Int, ylo::Int, yhi::Int,
+                                        log_depth::Bool, inv_log_far, ortho_dir,
+                                        cache, frustum, bounds_cache) where {M<:AbstractMaterial}
+    mirrored = _world_mirrors_faces(base)
+    @inbounds for instance_index in eachindex(instance_matrices)
+        world = base * instance_matrices[instance_index]
+        if frustum !== nothing
+            _mesh_in_frustum(frustum, geo, world, bounds_cache) || continue
+        end
+        instance_material = cache === nothing ?
+            _with_vertex_color(mat, instance_colors[instance_index]) :
+            _cached_instanced_material_at(cache.instanced_materials, instanced_slot,
+                                          instance_index, mat)
+        _render_smooth_geometry!(rt, geo, instance_material, world, lights,
+                                 proj, view, near, cam_pos, shadow_fn,
+                                 tri, clipped, sx, sy, sz, iw,
+                                 clipping_planes, xlo, xhi, ylo, yhi,
+                                 log_depth, inv_log_far, ortho_dir, nothing, 0;
+                                 mirrored=mirrored)
+    end
+    return nothing
+end
+
 function _render_instanced_mesh_flat!(rt::RenderTarget, geo, mat, instance_materials,
                                       instance_colors::Vector{Color3{Float64}},
                                       instance_matrices::Vector{Mat4{Float64}},
@@ -1496,7 +1530,7 @@ function _render_instanced_mesh_flat!(rt::RenderTarget, geo, mat, instance_mater
                                         flat_attr_clipped=flat_attr_clipped,
                                         flat_iw=flat_iw, mirrored=mirrored)
         else
-            _rasterize_geo_flat!(rt, geo, world, instance_material,
+            _rasterize_geo_flat!(rt, geo, world, mirrored, instance_material,
                                  lights, proj, view, near, cam_pos, tri, clipped, sx, sy, sz;
                                  shadow_fn=shadow_fn, clipping_planes=mesh_clipping_planes,
                                  colorbuf=colorbuf,
@@ -1505,7 +1539,7 @@ function _render_instanced_mesh_flat!(rt::RenderTarget, geo, mat, instance_mater
                                  ortho_dir=ortho_dir,
                                  flat_attr_tri=flat_attr_tri,
                                  flat_attr_clipped=flat_attr_clipped,
-                                 flat_iw=flat_iw, mirrored=mirrored)
+                                 flat_iw=flat_iw)
         end
     end
     return nothing
@@ -1845,29 +1879,14 @@ function _render_camera!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
                                                    instanced_slot, im, mat,
                                                    im.instance_colors)
         if shading === :smooth && !material_wireframe(mat)
-            @inbounds for instance_index in eachindex(im.instance_matrices)
-                world = base * im.instance_matrices[instance_index]
-                if frustum !== nothing
-                    _mesh_in_frustum(
-                        frustum, geo, world, bounds_cache) || continue
-                end
-                instance_material = cache === nothing ?
-                    _with_vertex_color(
-                        mat, im.instance_colors[instance_index]) :
-                    _cached_instanced_material_at(
-                        cache.instanced_materials, instanced_slot,
-                        instance_index, mat)
-                _render_smooth_geometry!(
-                    rt, geo, instance_material, world, lights,
-                    proj, view, near, camera_position, mesh_shadow_fn,
-                    smooth_instance_tri::Vector{ShadeVtx},
-                    smooth_instance_clipped::Vector{ShadeVtx},
-                    sx, sy, sz,
-                    smooth_instance_iw::Vector{Float64},
-                    clipping_planes, xlo, xhi, ylo, yhi,
-                    log_depth, inv_log_far, ortho_dir, nothing, 0;
-                    mirrored=_world_mirrors_faces(base))
-            end
+            _render_instanced_mesh_smooth!(
+                rt, geo, mat, im.instance_colors, im.instance_matrices, base,
+                instanced_slot, lights, proj, view, near, camera_position,
+                mesh_shadow_fn, smooth_instance_tri::Vector{ShadeVtx},
+                smooth_instance_clipped::Vector{ShadeVtx}, sx, sy, sz,
+                smooth_instance_iw::Vector{Float64}, clipping_planes,
+                xlo, xhi, ylo, yhi, log_depth, inv_log_far, ortho_dir,
+                cache, frustum, bounds_cache)
             continue
         end
         _render_instanced_mesh_flat!(rt, geo, mat, instance_materials, im.instance_colors,
@@ -2092,7 +2111,9 @@ function _render_camera!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
                             instanced_worlds[instanced_slot]))
                 else
                     _rasterize_geo_flat!(
-                        rt, geo, world, instance_material, lights, proj, view,
+                        rt, geo, world,
+                        _world_mirrors_faces(instanced_worlds[instanced_slot]),
+                        instance_material, lights, proj, view,
                         near, camera_position, tri, clipped, sx, sy, sz;
                         alpha=Float64(material_opacity(instance_material)),
                         stamp=stamp, stamp_id=sid,
@@ -2106,9 +2127,7 @@ function _render_camera!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
                                       cache.smooth_tri,
                         flat_attr_clipped=cache === nothing ? nothing :
                                          cache.smooth_clipped,
-                        flat_iw=cache === nothing ? nothing : cache.smooth_iw,
-                        mirrored=_world_mirrors_faces(
-                            instanced_worlds[instanced_slot]))
+                        flat_iw=cache === nothing ? nothing : cache.smooth_iw)
                 end
             elseif item.kind == _TRANSPARENT_WIREFRAME_ITEM
                 mesh = wireframe_meshes[item.object_index]
@@ -2562,7 +2581,20 @@ end
 
 # Rasterize one geometry (flat shading) at a given world transform, reusing the
 # caller's scratch buffers. Shared by the mesh loop and the InstancedMesh loop.
-function _rasterize_geo_flat!(rt::RenderTarget, geo, world_mat::Mat4, mat,
+# The front-face flip follows `world_mat` unless the caller passes the flip of
+# the object matrix (an InstancedMesh, whose instance matrices do not flip
+# faces in three.js). The flip is positional because a seventeenth keyword
+# stops Julia 1.10 inlining the keyword sorter; a Union-typed `clipping_planes`
+# keyword is then not split and every call dispatches dynamically and
+# allocates. Hot callers use the form with the flip for the same reason.
+@inline _rasterize_geo_flat!(rt::RenderTarget, geo, world_mat::Mat4, mat,
+                             lights, proj::Mat4, view::Mat4, near, cam_pos::Vec3,
+                             tri, clipped, sx, sy, sz; kwargs...) =
+    _rasterize_geo_flat!(rt, geo, world_mat, _world_mirrors_faces(world_mat), mat,
+                         lights, proj, view, near, cam_pos, tri, clipped, sx, sy, sz;
+                         kwargs...)
+
+function _rasterize_geo_flat!(rt::RenderTarget, geo, world_mat::Mat4, face_flip::Bool, mat,
                               lights, proj::Mat4, view::Mat4, near, cam_pos::Vec3,
                               tri, clipped, sx, sy, sz;
                               alpha::Real=1.0, stamp=nothing, stamp_id::Int=0, shadow_fn=nothing,
@@ -2573,9 +2605,7 @@ function _rasterize_geo_flat!(rt::RenderTarget, geo, world_mat::Mat4, mat,
                               ortho_dir=nothing,
                               flat_attr_tri=nothing,
                               flat_attr_clipped=nothing,
-                              flat_iw=nothing,
-                              mirrored::Union{Nothing,Bool}=nothing)
-    face_flip = mirrored === nothing ? _world_mirrors_faces(world_mat) : mirrored::Bool
+                              flat_iw=nothing)
     W, H = rt.width, rt.height
     modelview = view * world_mat
     blend = material_transparent(mat) || alpha < 1.0
