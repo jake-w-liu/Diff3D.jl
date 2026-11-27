@@ -1763,6 +1763,23 @@ function _resolved_animation_property(target::AbstractObject3D,
     throw(ArgumentError("animation target has no property path: $requested"))
 end
 
+# 1-based index of the morph target called `name`, looked up like three.js
+# PropertyBinding.bind (morphTargetDictionary, before any numeric reading of
+# the index): on the target, else on the first descendant that names it, as
+# morph tracks bound to a parent drive its descendants. With duplicate names
+# the last one wins, as in Mesh.updateMorphTargets.
+function _morph_target_name_index(obj, name::AbstractString)
+    if hasproperty(obj, :morph_target_names)
+        index = findlast(==(name), getproperty(obj, :morph_target_names))
+        index === nothing || return index
+    end
+    for child in get_children(obj)
+        index = _morph_target_name_index(child, name)
+        index === nothing || return index
+    end
+    return nothing
+end
+
 function _parse_animation_property_path(target::AbstractObject3D,
                                         path::AbstractString)
     p = startswith(path, ".") ? path[2:end] : String(path)
@@ -1772,8 +1789,13 @@ function _parse_animation_property_path(target::AbstractObject3D,
     isempty(p) && throw(ArgumentError("animation material property path must not be empty"))
     bracket = match(r"^(.+)\[([^\]]+)\]$", p)
     if bracket !== nothing
-        return _resolved_animation_property(target, bracket.captures[1], material_path),
-               _animation_component_index(bracket.captures[2])
+        property = _resolved_animation_property(target, bracket.captures[1], material_path)
+        index = bracket.captures[2]
+        if property === :morph_target_influences
+            named = _morph_target_name_index(target, index)
+            named === nothing || return property, named
+        end
+        return property, _animation_component_index(index)
     end
     dot = match(r"^(.+)\.([A-Za-z])$", p)
     if dot !== nothing
@@ -2021,11 +2043,6 @@ CubicSplineMorphWeightsKeyframeTrack(target::AbstractObject3D,
                                              "CubicSplineMorphWeightsKeyframeTrack"),
                                          times, values, in_tangents, out_tangents)
 
-# Catmull-Rom spline tangent: derivative estimated from the neighbouring
-# keyframes, clamped at the endpoints (matches three.js CubicInterpolant on a
-# uniform-Catmull-Rom basis). Works for Real and Vec3 values.
-@inline _cr_sub(a::Real, b::Real) = a - b
-@inline _cr_sub(a::Vec3, b::Vec3) = a - b
 @inline _cr_scale(a::Real, s) = a * s
 @inline _cr_scale(a::Vec3, s) = a * s
 @inline _cr_add(a::Real, b::Real) = a + b
@@ -2044,47 +2061,94 @@ CubicSplineMorphWeightsKeyframeTrack(target::AbstractObject3D,
             _cr_add(_cr_scale(p2, h01), _cr_scale(m2, h11)))
 end
 
+# three.js CubicInterpolant (InterpolateSmooth) (src/math/interpolants/
+# CubicInterpolant.js: intervalChanged_ picks the neighbours and weights,
+# interpolate_ evaluates the polynomials in the same operation order). The
+# endings are :zero_curvature (the interpolant default), :zero_slope or
+# :wrap_around. Inputs are already validated; `t` is not NaN. `lo` is the key
+# at or before `t` (three.js `i1 - 1`), so a query on a key evaluates the
+# interval that starts there.
+function _cubic_interpolant_sample(times::AbstractVector, values::AbstractVector, t,
+                                   ending_start::Symbol=:zero_curvature,
+                                   ending_end::Symbol=:zero_curvature)
+    n = length(times)
+    t <= times[1] && return values[1]
+    t >= times[n] && return values[n]
+    lo = searchsortedlast(times, t)
+    hi = lo + 1
+    t0 = times[lo]
+    t1 = times[hi]
+    iprev, tprev = if lo > 1
+        lo - 1, times[lo - 1]
+    elseif ending_start === :zero_slope         # f'(t0) = 0
+        hi, 2 * t0 - t1
+    elseif ending_start === :wrap_around        # continue from the other end
+        n - 1, t0 + times[n - 1] - times[n]
+    else                                        # f''(t0) = 0
+        hi, t1
+    end
+    inext, tnext = if hi < n
+        hi + 1, times[hi + 1]
+    elseif ending_end === :zero_slope           # f'(tN) = 0
+        hi, 2 * t1 - t0
+    elseif ending_end === :wrap_around
+        2, t1 + times[2] - times[1]
+    else                                        # f''(tN) = 0
+        lo, t0
+    end
+    half_dt = (t1 - t0) / 2
+    wp = half_dt / (t0 - tprev)
+    wn = half_dt / (tnext - t1)
+    p = (t - t0) / (t1 - t0)
+    pp = p * p
+    ppp = pp * p
+    half = oftype(wp, 0.5)
+    three_halves = oftype(wp, 1.5)
+    sp = -wp * ppp + 2 * wp * pp - wp * p
+    s0 = (1 + wp) * ppp + (-three_halves - 2 * wp) * pp + (-half + wp) * p + 1
+    s1 = (-1 - wn) * ppp + (three_halves + wn) * pp + half * p
+    sn = wn * ppp - wn * pp
+    return _cr_add(_cr_add(_cr_add(_cr_scale(values[iprev], sp),
+                                   _cr_scale(values[lo], s0)),
+                           _cr_scale(values[hi], s1)),
+                   _cr_scale(values[inext], sn))
+end
+
 """
     interpolate_catmull_rom(times, values, t)
 
-Catmull-Rom spline sample of `values` at sorted `times`, evaluated at `t`,
-clamped to the endpoints. Tangents use the centripetal/uniform Catmull-Rom rule
-on possibly non-uniform `times`; endpoint tangents are one-sided. `values` may be
-reals or `Vec3`.
+Smooth cubic sample of `values` at strictly increasing `times`, evaluated at
+`t` and clamped to the endpoints. This is three.js `CubicInterpolant`
+(`InterpolateSmooth`) with its default zero-curvature endings: interior
+tangents average the slopes of the two adjacent intervals, which reduces to
+uniform Catmull-Rom on evenly spaced keys. `values` may be reals or `Vec3`.
 """
 function interpolate_catmull_rom(times::AbstractVector, values::AbstractVector, t)
-    n = _validate_interpolant_inputs("interpolate_catmull_rom", times, values)
+    _validate_interpolant_inputs("interpolate_catmull_rom", times, values)
     # A NaN time passes both endpoint checks (all NaN comparisons are false) and
-    # then indexes one past the end via searchsortedfirst; reject it cleanly, as
+    # then indexes one past the end via searchsortedlast; reject it cleanly, as
     # interpolate_linear does, instead of leaking a BoundsError.
     isnan(t) && throw(ArgumentError("interpolate_catmull_rom: query time t must not be NaN"))
+    return _cubic_interpolant_sample(times, values, t)
+end
+
+# interpolate_linear (math.jl) without its per-call O(n) validation of the
+# key times: tracks validate their keys once at construction, and callers
+# reject a NaN `t`. Same interval choice and lerp, so results are identical.
+function _linear_track_sample(times::AbstractVector, values::AbstractVector, t)
+    n = length(times)
     t <= times[1] && return values[1]
     t >= times[n] && return values[n]
-    n == 1 && return values[1]
     hi = searchsortedfirst(times, t)
     lo = hi - 1
-    h = times[hi] - times[lo]
-    α = (t - times[lo]) / h
-    p1 = values[lo]; p2 = values[hi]
-    # One-sided tangents at the ends, central tangents in the interior, scaled by
-    # the local interval h so the Hermite basis matches the parameter spacing.
-    if lo > 1
-        m1 = _cr_scale(_cr_sub(values[hi], values[lo-1]), h / (times[hi] - times[lo-1]))
-    else
-        m1 = _cr_sub(values[hi], values[lo])           # forward difference
-    end
-    if hi < n
-        m2 = _cr_scale(_cr_sub(values[hi+1], values[lo]), h / (times[hi+1] - times[lo]))
-    else
-        m2 = _cr_sub(values[hi], values[lo])           # backward difference
-    end
-    return _hermite(p1, p2, m1, m2, α)
+    α = (t - times[lo]) / (times[hi] - times[lo])
+    return _lerp_value(values[lo], values[hi], α)
 end
 
 # Sample a single track value at absolute time `t` according to its mode.
 function _track_value(tr::KeyframeTrack, t)
     if tr.interpolation === :cubic
-        return interpolate_catmull_rom(tr.times, tr.values, t)
+        return _cubic_interpolant_sample(tr.times, tr.values, t)
     elseif tr.interpolation === :step
         n = length(tr.times)
         n == 0 && error("cannot sample an empty KeyframeTrack")
@@ -2092,13 +2156,13 @@ function _track_value(tr::KeyframeTrack, t)
         t >= tr.times[n] && return tr.values[n]
         return tr.values[searchsortedlast(tr.times, t)]
     else
-        return interpolate_linear(tr.times, tr.values, t)
+        return _linear_track_sample(tr.times, tr.values, t)
     end
 end
 
 function _track_value(tr::NumberKeyframeTrack, t)
     if tr.interpolation === :cubic
-        return interpolate_catmull_rom(tr.times, tr.values, t)
+        return _cubic_interpolant_sample(tr.times, tr.values, t)
     elseif tr.interpolation === :step
         n = length(tr.times)
         n == 0 && error("cannot sample an empty NumberKeyframeTrack")
@@ -2106,7 +2170,7 @@ function _track_value(tr::NumberKeyframeTrack, t)
         t >= tr.times[n] && return tr.values[n]
         return tr.values[searchsortedlast(tr.times, t)]
     else
-        return interpolate_linear(tr.times, tr.values, t)
+        return _linear_track_sample(tr.times, tr.values, t)
     end
 end
 
@@ -2145,10 +2209,13 @@ function _track_value(tr::CubicSplineQuaternionKeyframeTrack, t)
     times = tr.times
     n = length(times)
     n == 0 && error("cannot sample an empty CubicSplineQuaternionKeyframeTrack")
-    t <= times[1] && return tr.values[1]
+    # three.js GLTFCubicSplineQuaternionInterpolant copies the raw key only
+    # outside the keyed range; at the first key Interpolant.evaluate still
+    # interpolates (p = 0) and the result is normalized.
+    t < times[1] && return tr.values[1]
     t >= times[n] && return tr.values[n]
-    hi = searchsortedfirst(times, t)
-    lo = hi - 1
+    lo = searchsortedlast(times, t)
+    hi = lo + 1
     h = times[hi] - times[lo]
     α = (t - times[lo]) / h
     return _quat_hermite(tr.values[lo], tr.values[hi],
@@ -2163,12 +2230,13 @@ function _track_value(tr::QuaternionKeyframeTrack, t)
     n == 0 && error("cannot sample an empty QuaternionKeyframeTrack")
     t <= times[1] && return values[1]
     t >= times[n] && return values[n]
-    hi = searchsortedfirst(times, t)
-    lo = hi - 1
-    # STEP holds the value of the keyframe AT or before t; at an exact interior
-    # keyframe time searchsortedfirst lands on that key, so use searchsortedlast
-    # (the previous-keyframe `lo` above is correct only for the slerp interval).
-    tr.interpolation === :step && return values[searchsortedlast(times, t)]
+    # Both modes use the interval starting at the key at or before t, like
+    # three.js Interpolant.evaluate. On an interior key slerp then runs with
+    # alpha = 0 and returns that key itself, not its negation from the
+    # previous key's hemisphere (QuaternionLinearInterpolant.interpolate_).
+    lo = searchsortedlast(times, t)
+    tr.interpolation === :step && return values[lo]
+    hi = lo + 1
     α = (t - times[lo]) / (times[hi] - times[lo])
     return quat_slerp(values[lo], values[hi], α)
 end
@@ -2353,8 +2421,12 @@ function AnimationClip(name::String, tracks::AbstractVector{<:AbstractKeyframeTr
                        repetitions::Integer=-1,
                        clamp_when_finished::Bool=false,
                        time_scale::Real=1.0)
-    duration = isempty(tracks) ? 0.0 :
-        maximum(isempty(t.times) ? 0.0 : maximum(t.times) for t in tracks)
+    # three.js AnimationClip.resetDuration starts from 0, so tracks that end
+    # before time zero give a zero-length clip instead of a negative one.
+    duration = 0.0
+    for track in tracks
+        isempty(track.times) || (duration = max(duration, last(track.times)))
+    end
     AnimationClip(name, duration, tracks; loop=loop, repetitions=repetitions,
                   clamp_when_finished=clamp_when_finished, time_scale=time_scale)
 end
@@ -2366,7 +2438,17 @@ mutable struct AnimationMixer
     repetitions::Int
     clamp_when_finished::Bool
     time_scale::Float64
+    # Internal: clip-local time of the update being applied. Track writers
+    # read it from the mixer, so dispatching on a track's target type passes
+    # only heap references and the per-frame update does not box the time.
+    sample_time::Float64
+    # Internal: cubic-track endings for that update (see _animation_cubic_endings).
+    ending_start::Symbol
+    ending_end::Symbol
 end
+AnimationMixer(clip, time, loop, repetitions, clamp_when_finished, time_scale) =
+    AnimationMixer(clip, time, loop, repetitions, clamp_when_finished, time_scale, 0.0,
+                   :zero_slope, :zero_slope)
 function AnimationMixer(clip::AnimationClip; loop::Union{Symbol,Nothing}=nothing,
                         repetitions::Union{Integer,Nothing}=nothing,
                         clamp_when_finished::Union{Bool,Nothing}=nothing,
@@ -2419,6 +2501,31 @@ function _animation_loop_time(t::Real, duration::Real, loop::Symbol,
     return mod(x, d)
 end
 
+# Endings of :cubic tracks while the clip plays at unscaled time `time`, as
+# three.js AnimationAction._setEndings sets them (AnimationAction.js:742-917,
+# zeroSlopeAtStart/End at their default true): zero slope for :once and
+# :pingpong; for :repeat zero slope only at the clip start of the first loop
+# and the clip end of the last one (entered when one repetition is pending),
+# and wrap-around across every loop seam. Playing backward from zero, the
+# first wrap below zero leaves loop count 0 and only the start of the final
+# loop gets zero slope. three.js keeps a cached interval's weights until the
+# sample leaves it, so a track whose interval spans a loop seam (two keys)
+# can still use the previous loop's endings there; this follows the endings
+# of the loop being sampled.
+function _animation_cubic_endings(time::Float64, duration::Float64, loop::Symbol,
+                                  repetitions::Int)
+    (loop === :repeat && duration > 0.0) || return :zero_slope, :zero_slope
+    if time >= 0.0
+        k = floor(time / duration)
+        start = k == 0.0 ? :zero_slope : :wrap_around
+        last = repetitions == 0 || (repetitions >= 2 && k == repetitions - 1)
+        return start, last ? :zero_slope : :wrap_around
+    end
+    j = ceil(-time / duration) - 1.0
+    start = repetitions >= 1 && j == repetitions - 1 ? :zero_slope : :wrap_around
+    return start, :wrap_around
+end
+
 # Write an interpolated value to a track target. Quaternion samples targeting the
 # `:rotation` field are converted to an `Euler` so the typed field accepts them.
 _write_track_value!(target, property::Symbol, v) = setproperty!(target, property, v)
@@ -2461,7 +2568,39 @@ function _with_component(v::Color3, component::Int, x::Real)
     throw(ArgumentError("Color3 animation component must be r/g/b"))
 end
 
+struct _UnhandledField end
+
+# `_replace_field_value` unrolled over the fields of `x` whose declared type
+# is exactly the replacement type (`value`, or `value >= 0.5` for a `Bool`
+# field and a real value), so the rebuild is a statically typed positional
+# constructor call. Any other field name returns `_UnhandledField()`.
+@generated function _replace_typed_field(x, property::Symbol, value)
+    names = fieldnames(x)
+    types = fieldtypes(x)
+    replacement(i) = types[i] === Bool && value <: Real && value !== Bool ?
+        :(value >= 0.5) : :value
+    handled(i) = types[i] === value || (types[i] === Bool && value <: Real)
+    checks = [:(if property === $(QuoteNode(names[i]))
+                    matched = true
+                    unchanged = isequal($(replacement(i)), getfield(x, $i))
+                end) for i in eachindex(names) if handled(i)]
+    isempty(checks) && return :(_UnhandledField())
+    args = [handled(i) ?
+            :(property === $(QuoteNode(names[i])) ? $(replacement(i)) : getfield(x, $i)) :
+            :(getfield(x, $i)) for i in eachindex(names)]
+    return quote
+        matched = false
+        unchanged = false
+        $(checks...)
+        matched || return _UnhandledField()
+        unchanged && return x
+        return $x($(args...))
+    end
+end
+
 function _replace_field_value(x, property::Symbol, value)
+    typed = _replace_typed_field(x, property, value)
+    typed isa _UnhandledField || return typed
     hasproperty(x, property) || return nothing
     current = getproperty(x, property)
     replacement = current isa Bool && value isa Real ? value >= 0.5 : value
@@ -2520,42 +2659,86 @@ end
 _material_animation_property(property::Symbol) =
     property === :material_rotation ? :rotation : property
 
+# `target.material` is untyped; the helpers below take it as an argument so
+# the material work is specialized on the concrete material type.
 function _write_material_track_value!(target, property::Symbol, value)
     hasproperty(target, :material) || return false
-    mat = getproperty(target, :material)
-    property = _material_animation_property(property)
+    return _write_material_value!(target, getproperty(target, :material),
+                                  _material_animation_property(property), value)
+end
+
+function _write_material_value!(target, mat, property::Symbol, value)
     _material_noop_update(mat, property, value) && return true
+    return _write_material_replacement!(target, mat, property, value)
+end
+
+function _write_material_replacement!(target, mat, property::Symbol, value)
     newmat = _replace_field_value(mat, property, value)
     newmat === nothing && return false
     setproperty!(target, :material, newmat)
     return true
 end
 
+# The current value of the component-addressable field `property` of `x`
+# with one component replaced, or `_UnhandledField()` when `property` names
+# no field of a type `_with_component` accepts.
+@generated function _with_typed_field_component(x, property::Symbol, component::Int,
+                                               value::Real)
+    names = fieldnames(x)
+    types = fieldtypes(x)
+    branches = [:(property === $(QuoteNode(names[i])) &&
+                  return _with_component(getfield(x, $i), component, value))
+                for i in eachindex(names)
+                if types[i] <: Union{Vec2, Vec3, Euler, Quaternion, Color3} &&
+                   isconcretetype(types[i])]
+    return Expr(:block, branches..., :(return _UnhandledField()))
+end
+
 function _write_material_track_value!(target, property::Symbol, component::Int, value::Real)
     hasproperty(target, :material) || return false
-    mat = getproperty(target, :material)
-    property = _material_animation_property(property)
+    return _write_material_component!(target, getproperty(target, :material),
+                                      _material_animation_property(property),
+                                      component, value)
+end
+
+function _write_material_component!(target, mat, property::Symbol, component::Int,
+                                    value::Real)
     _material_component_noop_update(mat, property, component, value) && return true
     hasproperty(mat, property) || return false
-    current = getproperty(mat, property)
-    newmat = _replace_field_value(mat, property, _with_component(current, component, value))
-    newmat === nothing && return false
-    setproperty!(target, :material, newmat)
-    return true
+    replacement = _with_typed_field_component(mat, property, component, value)
+    replacement isa _UnhandledField &&
+        return _write_material_replacement!(
+            target, mat, property,
+            _with_component(getproperty(mat, property), component, value))
+    return _write_material_replacement!(target, mat, property, replacement)
 end
 
-function _split_texture_track_property(property::Symbol)
-    return get(_TEXTURE_ANIMATION_TRACK_PROPERTIES, property, nothing)
+# Field `name` of a material, unrolled over its non-isbits fields (where
+# texture slots live) so a runtime name does not box the material.
+@generated function _material_slot(mat, name::Symbol)
+    branches = [:(name === $(QuoteNode(field)) && return getfield(mat, $(QuoteNode(field))))
+                for (field, type) in zip(fieldnames(mat), fieldtypes(mat))
+                if !isbitstype(type)]
+    return Expr(:block, branches..., :(return getproperty(mat, name)))
 end
 
-function _material_texture_for_track(target, property::Symbol)
+_material_texture_slot(mat, field::Symbol) =
+    hasproperty(mat, field) ? _material_slot(mat, field) : _UnhandledField()
+
+# The texture addressed by a texture-transform track property such as
+# :map_offset, with its texture property; `nothing` when `property` is not a
+# texture property or the target's material has no such slot.
+@inline _split_texture_track_property(property::Symbol) =
+    haskey(_TEXTURE_ANIMATION_TRACK_PROPERTIES, property) ?
+        _TEXTURE_ANIMATION_TRACK_PROPERTIES[property] : nothing
+
+@inline function _material_texture_for_track(target, property::Symbol)
     split = _split_texture_track_property(property)
     split === nothing && return nothing
     hasproperty(target, :material) || return nothing
     field, texture_property = split
-    mat = getproperty(target, :material)
-    hasproperty(mat, field) || return nothing
-    tex = getproperty(mat, field)
+    tex = _material_texture_slot(getproperty(target, :material), field)
+    tex isa _UnhandledField && return nothing
     tex isa Texture || throw(ArgumentError("material.$field is not a Texture"))
     return tex, texture_property
 end
@@ -2563,6 +2746,31 @@ end
 function _refresh_texture_track_matrix!(tex::Texture)
     tex.matrix_auto_update && texture_update_matrix!(tex)
     return tex
+end
+
+# Constant-name access to the Vec2 texture transforms (offset/repeat/center
+# are the only Vec2 entries of _TEXTURE_ANIMATION_TRACK_PROPERTIES).
+@noinline _throw_texture_vec2(texture_property::Symbol) =
+    throw(ArgumentError("texture $texture_property is not a Vec2 animation property"))
+
+@inline function _set_texture_vec2!(tex::Texture, texture_property::Symbol, value::Vec2)
+    if texture_property === :offset
+        tex.offset = value
+    elseif texture_property === :repeat
+        tex.repeat = value
+    elseif texture_property === :center
+        tex.center = value
+    else
+        _throw_texture_vec2(texture_property)
+    end
+    return tex
+end
+
+@inline function _texture_vec2(tex::Texture, texture_property::Symbol)
+    texture_property === :offset && return tex.offset
+    texture_property === :repeat && return tex.repeat
+    texture_property === :center && return tex.center
+    _throw_texture_vec2(texture_property)
 end
 
 function _write_texture_track_value!(target, property::Symbol, component::Int, value::Real)
@@ -2576,8 +2784,8 @@ function _write_texture_track_value!(target, property::Symbol, component::Int, v
         component == 0 || throw(ArgumentError("texture rotation is a scalar animation property"))
         tex.rotation = Float64(value)
     else
-        current = getproperty(tex, texture_property)
-        setproperty!(tex, texture_property, _with_component(current, component, value))
+        current = _texture_vec2(tex, texture_property)
+        _set_texture_vec2!(tex, texture_property, _with_component(current, component, value))
     end
     _refresh_texture_track_matrix!(tex)
     return true
@@ -2603,7 +2811,7 @@ function _write_texture_track_value!(target, property::Symbol, value::Vec3)
     resolved === nothing && return false
     tex, texture_property = resolved
     if texture_property in (:offset, :repeat, :center)
-        setproperty!(tex, texture_property, Vec2(value.x, value.y))
+        _set_texture_vec2!(tex, texture_property, Vec2(value.x, value.y))
     elseif texture_property === :rotation
         tex.rotation = value.x
     elseif texture_property === :matrix_auto_update
@@ -2615,33 +2823,52 @@ function _write_texture_track_value!(target, property::Symbol, value::Vec3)
     return true
 end
 
-function _write_morph_component_tree!(obj, property::Symbol, component::Int,
-                                      value::Float64)
-    wrote = false
-    if hasproperty(obj, property)
-        values = getproperty(obj, property)
-        1 <= component <= length(values) ||
-            throw(ArgumentError("morph influence component $(component - 1) is out of range"))
-        values[component] = value
-        wrote = true
-    end
-    for child in get_children(obj)
-        wrote |= _write_morph_component_tree!(child, property, component, value)
-    end
-    return wrote
+function _write_morph_component_value!(values::AbstractVector, component::Int,
+                                       value::Float64)
+    1 <= component <= length(values) ||
+        throw(ArgumentError("morph influence component $(component - 1) is out of range"))
+    values[component] = value
+    return values
 end
 
-function _write_morph_component!(target, property::Symbol, component::Int, v::Real)
-    wrote = _write_morph_component_tree!(target, property, component, Float64(v))
-    wrote || throw(ArgumentError("target does not expose morph target influences"))
-    return target
+# Stores into the target type's `Vec3{Float64}`/`Color3{Float64}` fields,
+# and component stores into its vector-like fields, unrolled with constant
+# field names: the generic runtime-Symbol getproperty/setproperty! path boxes
+# the value on every frame. Each returns false for any other property.
+@generated function _set_vec3_track_field!(target, property::Symbol, v::Vec3)
+    stmts = Any[]
+    for (name, type) in zip(fieldnames(target), fieldtypes(target))
+        value = type === Vec3{Float64} ? :v :
+                type === Color3{Float64} ? :(Color3(v.x, v.y, v.z)) : nothing
+        value === nothing && continue
+        push!(stmts, :(property === $(QuoteNode(name)) &&
+                       (setproperty!(target, $(QuoteNode(name)), $value); return true)))
+    end
+    return Expr(:block, stmts..., :(return false))
 end
+
+@generated function _set_component_track_field!(target, property::Symbol,
+                                                component::Int, v::Real)
+    stmts = Any[]
+    for (name, type) in zip(fieldnames(target), fieldtypes(target))
+        type in (Vec2{Float64}, Vec3{Float64}, Euler{Float64}, Color3{Float64}) || continue
+        field = QuoteNode(name)
+        push!(stmts, :(property === $field &&
+                       (setproperty!(target, $field,
+                                     _with_component(getproperty(target, $field),
+                                                     component, v));
+                        return true)))
+    end
+    return Expr(:block, stmts..., :(return false))
+end
+
+# Morph-influence components are written by `_apply_track!` across the
+# target's subtree before this generic path is reached.
 function _write_track_value!(target, property::Symbol, component::Int, v::Real)
     component == 0 && return _write_track_value!(target, property, Float64(v))
     property === :quaternion &&
         return _write_quaternion_component!(target, component, v)
-    property === :morph_target_influences &&
-        return _write_morph_component!(target, property, component, v)
+    _set_component_track_field!(target, property, component, v) && return target
     _write_texture_track_value!(target, property, component, Float64(v)) &&
         return target
     if !hasproperty(target, property) &&
@@ -2653,40 +2880,6 @@ function _write_track_value!(target, property::Symbol, component::Int, v::Real)
     return target
 end
 
-function _copy_morph_track_values!(target, property::Symbol, v::Vector{Float64})
-    values = getproperty(target, property)
-    values === v && return target
-    if length(values) == length(v)
-        length(v) > 0 && copyto!(values, 1, v, 1, length(v))
-    else
-        setproperty!(target, property, copy(v))
-    end
-    return target
-end
-
-function _write_morph_track_values_tree!(target, property::Symbol, v::Vector{Float64})
-    wrote = false
-    if hasproperty(target, property)
-        _copy_morph_track_values!(target, property, v)
-        wrote = true
-    end
-    for child in get_children(target)
-        wrote |= _write_morph_track_values_tree!(child, property, v)
-    end
-    return wrote
-end
-
-function _write_track_value!(target, property::Symbol, v::Vector{Float64})
-    if property === :morph_target_influences
-        wrote = _write_morph_track_values_tree!(target, property, v)
-        wrote || setproperty!(target, property, copy(v))
-    else
-        setproperty!(target, property, copy(v))
-    end
-    return target
-end
-_write_track!(tr::AbstractKeyframeTrack, v) = _write_track_value!(tr.target, tr.property, v)
-_write_track!(tr::NumberKeyframeTrack, v) = _write_track_value!(tr.target, tr.property, tr.component, v)
 
 function _write_track_value!(target, property::Symbol, v::Quaternion)
     if property === :rotation || property === :quaternion
@@ -2705,6 +2898,7 @@ function _write_track_value!(target, property::Symbol, v::Vec3)
         setproperty!(target, :rotation, Euler(v.x, v.y, v.z, current.order))
         return target
     end
+    _set_vec3_track_field!(target, property, v) && return target
     if hasproperty(target, property)
         current = getproperty(target, property)
         setproperty!(target, property,
@@ -2719,7 +2913,22 @@ function _write_track_value!(target, property::Symbol, v::Vec3)
     return target
 end
 
+# Unrolled constant-name stores for the target type's `Float64` and `Bool`
+# fields (Bool thresholds at 0.5 like the generic path below); the generic
+# runtime-Symbol `setproperty!` boxes the value on every frame.
+@generated function _set_scalar_track_field!(target, property::Symbol, v::Float64)
+    stmts = Any[]
+    for (name, field_type) in zip(fieldnames(target), fieldtypes(target))
+        (field_type === Float64 || field_type === Bool) || continue
+        value = field_type === Bool ? :(v >= 0.5) : :v
+        push!(stmts, :(property === $(QuoteNode(name)) &&
+                       (setproperty!(target, $(QuoteNode(name)), $value); return true)))
+    end
+    return Expr(:block, stmts..., :(return false))
+end
+
 function _write_track_value!(target, property::Symbol, v::Float64)
+    _set_scalar_track_field!(target, property, v) && return target
     if hasproperty(target, property)
         current = getproperty(target, property)
         setproperty!(target, property, current isa Bool ? v >= 0.5 : v)
@@ -2755,8 +2964,14 @@ function _morph_buffer_aliases_track(values::Vector{Float64},
     return false
 end
 
-const _MorphInfluenceObject =
-    Union{Mesh, LineObject, PointsObject, LineSegments, LineLoop, SkinnedMesh}
+# Track application. `_apply_track!` is called with the track's target as a
+# separate argument so one dynamic dispatch selects code specialized on both
+# the concrete target and track types; the sample time travels inside the
+# mixer, so that dispatch boxes nothing. The morph-influence subtree walks
+# below are not specialized on the node type: their recursive calls then
+# resolve statically, and the immutable track is not re-boxed per node.
+const _MorphWeightsTrack =
+    Union{MorphWeightsKeyframeTrack, CubicSplineMorphWeightsKeyframeTrack}
 
 function _generic_morph_track_output_buffer!(target, property::Symbol, tr)
     width = length(tr.values[1])
@@ -2768,72 +2983,111 @@ function _generic_morph_track_output_buffer!(target, property::Symbol, tr)
     return values
 end
 
-_morph_track_output_buffer!(target, property::Symbol, tr) =
-    _generic_morph_track_output_buffer!(target, property, tr)
-
-function _morph_track_output_buffer!(
-    target::_MorphInfluenceObject, property::Symbol, tr,
-)
-    property === :morph_target_influences ||
-        return _generic_morph_track_output_buffer!(target, property, tr)
+# The node's influence vector when it already has the track's width and does
+# not alias a keyframe; otherwise a fresh vector stored on the node.
+function _morph_track_output_buffer!(@nospecialize(node), property::Symbol,
+                                     tr::_MorphWeightsTrack)
+    values = getproperty(node, property)
+    values isa Vector{Float64} ||
+        return _generic_morph_track_output_buffer!(node, property, tr)
     width = length(tr.values[1])
-    values = target.morph_target_influences
     if length(values) != width || _morph_buffer_aliases_track(values, tr)
         values = Vector{Float64}(undef, width)
-        target.morph_target_influences = values
+        setproperty!(node, property, values)
     end
     return values
 end
 
-function _write_morph_track_at_time_tree!(target, property::Symbol, tr, t)
+function _write_morph_track_at_time_tree!(@nospecialize(node), property::Symbol,
+                                          tr::_MorphWeightsTrack,
+                                          mixer::AnimationMixer)
     wrote = false
-    if hasproperty(target, property)
-        out = _morph_track_output_buffer!(target, property, tr)
-        _sample_morph_weights!(out, tr, t)
+    if hasproperty(node, property)
+        out = _morph_track_output_buffer!(node, property, tr)
+        _sample_morph_weights!(out, tr, mixer.sample_time)
         wrote = true
     end
-    for child in get_children(target)
-        wrote |= _write_morph_track_at_time_tree!(child, property, tr, t)
+    children = get_children(node)
+    if children isa Vector{AbstractObject3D}
+        for child in children
+            wrote |= _write_morph_track_at_time_tree!(child, property, tr, mixer)
+        end
+    else
+        for child in children
+            wrote |= _write_morph_track_at_time_tree!(child, property, tr, mixer)
+        end
     end
     return wrote
 end
 
-function _write_track_at_time!(tr::AbstractKeyframeTrack, t)
-    v = _track_value(tr, t)
-    _write_track!(tr, v)
-    return tr
+function _write_morph_component_track_tree!(@nospecialize(node), tr::NumberKeyframeTrack,
+                                            mixer::AnimationMixer)
+    wrote = false
+    if hasproperty(node, :morph_target_influences)
+        values = getproperty(node, :morph_target_influences)
+        value = Float64(_mixer_track_value(tr, mixer))
+        if values isa Vector{Float64}
+            _write_morph_component_value!(values, tr.component, value)
+        else
+            _write_morph_component_value!(values, tr.component, value)
+        end
+        wrote = true
+    end
+    children = get_children(node)
+    if children isa Vector{AbstractObject3D}
+        for child in children
+            wrote |= _write_morph_component_track_tree!(child, tr, mixer)
+        end
+    else
+        for child in children
+            wrote |= _write_morph_component_track_tree!(child, tr, mixer)
+        end
+    end
+    return wrote
 end
 
-function _write_track_at_time!(tr::MorphWeightsKeyframeTrack, t)
-    if tr.property === :morph_target_influences
-        wrote = _write_morph_track_at_time_tree!(tr.target, tr.property, tr, t)
-        wrote || _write_track!(tr, _track_value(tr, t))
-        return tr
-    end
-    v = _track_value(tr, t)
-    _write_track!(tr, v)
-    return tr
+# Sample `tr` at the mixer's clip time; :cubic tracks use the loop endings
+# chosen for this update.
+_mixer_track_value(tr::AbstractKeyframeTrack, mixer::AnimationMixer) =
+    _track_value(tr, mixer.sample_time)
+function _mixer_track_value(tr::Union{KeyframeTrack,NumberKeyframeTrack},
+                            mixer::AnimationMixer)
+    tr.interpolation === :cubic || return _track_value(tr, mixer.sample_time)
+    return _cubic_interpolant_sample(tr.times, tr.values, mixer.sample_time,
+                                     mixer.ending_start, mixer.ending_end)
 end
 
-function _write_track_at_time!(tr::CubicSplineMorphWeightsKeyframeTrack, t)
-    if tr.property === :morph_target_influences
-        wrote = _write_morph_track_at_time_tree!(tr.target, tr.property, tr, t)
-        wrote || _write_track!(tr, _track_value(tr, t))
-        return tr
+_apply_track!(target, tr::AbstractKeyframeTrack, mixer::AnimationMixer) =
+    _write_track_value!(target, tr.property, _mixer_track_value(tr, mixer))
+
+function _apply_track!(target, tr::NumberKeyframeTrack, mixer::AnimationMixer)
+    if tr.property === :morph_target_influences && tr.component != 0
+        _write_morph_component_track_tree!(target, tr, mixer) ||
+            throw(ArgumentError("target does not expose morph target influences"))
+        return target
     end
-    v = _track_value(tr, t)
-    _write_track!(tr, v)
-    return tr
+    return _write_track_value!(target, tr.property, tr.component,
+                               _mixer_track_value(tr, mixer))
+end
+
+function _apply_track!(target, tr::_MorphWeightsTrack, mixer::AnimationMixer)
+    if tr.property === :morph_target_influences &&
+       _write_morph_track_at_time_tree!(target, tr.property, tr, mixer)
+        return target
+    end
+    return _write_track_value!(target, tr.property, _track_value(tr, mixer.sample_time))
 end
 
 function _mixer_apply_time!(mixer::AnimationMixer, time::Float64)
-    sample_time = _animation_loop_time(time,
-                                       mixer.clip.duration,
-                                       mixer.loop,
-                                       mixer.repetitions,
-                                       mixer.clamp_when_finished)
+    mixer.sample_time = _animation_loop_time(time,
+                                             mixer.clip.duration,
+                                             mixer.loop,
+                                             mixer.repetitions,
+                                             mixer.clamp_when_finished)
+    mixer.ending_start, mixer.ending_end =
+        _animation_cubic_endings(time, mixer.clip.duration, mixer.loop, mixer.repetitions)
     for tr in mixer.clip.tracks
-        _write_track_at_time!(tr, sample_time)
+        _apply_track!(tr.target, tr, mixer)
     end
     mixer.time = time
     return mixer
