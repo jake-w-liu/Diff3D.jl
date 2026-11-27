@@ -233,6 +233,19 @@ end
         "v 0 0 0 1\nv 1 0 0 1\nv 0 1 0 1\nf 1 2 3\n", ".obj")), :color)
     @test !has_attribute(load_obj(_audit3_file(
         replace(text, "v 0 1 0 0 0 1" => "v 0 1 0"), ".obj")), :color)
+    # A v without a colour that no face references does not matter: three.js
+    # r186 gives the full colour attribute for both of these texts.
+    for t in (text * "v 5 5 5\n", "v 9 9 9\n" * replace(text, "f 1 2 3" => "f 2 3 4"))
+        geo = load_obj(_audit3_file(t, ".obj"))
+        @test has_attribute(geo, :color)
+        @test isapprox(get_attribute(geo, :color).data,
+                       [1, 0.21404114365577698, 0, 0.03310476616024971, 1, 0, 0, 0, 1];
+                       atol=1e-7)
+    end
+    # Once a face uses it, three.js's colour attribute no longer lines up with
+    # the corners (15 values for 6 corners here), so none is kept.
+    @test !has_attribute(load_obj(_audit3_file(
+        "v 9 9 9\n" * replace(text, "f 1 2 3" => "f 2 3 4\nf 1 2 3"), ".obj")), :color)
 end
 
 @testset "OBJ backslash continues a line" begin

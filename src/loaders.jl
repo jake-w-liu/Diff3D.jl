@@ -1130,14 +1130,17 @@ gets its face normal, and a file without normals gets
 As in three.js `OBJLoader`, a line ending in a backslash continues on the
 next line, and vertex records written as `v x y z r g b` add a per-vertex
 `:color` attribute, with the sRGB channels converted to linear. Colours are
-kept only when every `v` record carries them.
+kept only when every vertex that a face references carries one (otherwise
+three.js builds a colour attribute that does not line up with the corners).
 """
 function load_obj(path::String)
     verts = Float64[]            # v
     file_uvs = Float64[]         # vt
     file_normals = Float64[]     # vn
-    file_colors = Float64[]      # optional r g b after v x y z (linear)
-    colors_ok = true             # every v record so far carried a colour
+    # Linear r g b per v record from the first coloured one on; NaN marks a v
+    # without a colour.
+    file_colors = Float64[]
+    colors_ok = true             # no emitted corner references a v without a colour
     corner_vertices = Int[]      # file vertex index of each emitted corner
     out_pos = Float64[]
     out_uvs = Float64[]
@@ -1185,13 +1188,15 @@ function load_obj(path::String)
             nverts_v = length(verts) ÷ 3
             nverts_uv = length(file_uvs) ÷ 2
             nverts_n = length(file_normals) ÷ 3
+            # Before the first coloured v, every vertex a face can reference
+            # lacks a colour.
+            isempty(file_colors) && (colors_ok = false)
             out_vi, have_uvs, have_normals, missing_normals =
                 _obj_emit_face_record_range!(out_pos, out_uvs, out_nrm, indices,
                                              verts, file_uvs, file_normals, line,
                                              nverts_v, nverts_uv, nverts_n, out_vi,
                                              have_uvs, have_normals, missing_normals,
-                                             colors_ok && !isempty(file_colors) ?
-                                                 corner_vertices : nothing)
+                                             colors_ok ? corner_vertices : nothing)
             continue
         end
         parts = eachsplit(line)
@@ -1209,8 +1214,13 @@ function load_obj(path::String)
                 g_state = r_state === nothing ? nothing : iterate(parts, r_state[2])
                 b_state = g_state === nothing ? nothing : iterate(parts, g_state[2])
                 if b_state === nothing
-                    colors_ok = false
+                    isempty(file_colors) || push!(file_colors, NaN, NaN, NaN)
                 else
+                    if isempty(file_colors)
+                        # pad the v records before the first coloured one
+                        resize!(file_colors, length(verts) - 3)
+                        fill!(file_colors, NaN)
+                    end
                     push!(file_colors,
                           srgb_to_linear(_obj_parse_float(r_state[1], "v red")),
                           srgb_to_linear(_obj_parse_float(g_state[1], "v green")),
@@ -1260,15 +1270,19 @@ function load_obj(path::String)
             out_nrm[b+2] = face_normals[b+2]
         end
     end
-    if colors_ok && !isempty(file_colors)
+    if colors_ok && out_vi > 0
         colors = Vector{Float64}(undef, 3 * out_vi)
         @inbounds for (k, vidx) in enumerate(corner_vertices)
             b = 3 * (vidx - 1)
+            if isnan(file_colors[b+1])
+                colors_ok = false
+                break
+            end
             colors[3k-2] = file_colors[b+1]
             colors[3k-1] = file_colors[b+2]
             colors[3k] = file_colors[b+3]
         end
-        set_attribute!(geo, :color, colors, 3)
+        colors_ok && set_attribute!(geo, :color, colors, 3)
     end
     return geo
 end
