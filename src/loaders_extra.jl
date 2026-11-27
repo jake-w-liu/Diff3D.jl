@@ -3971,13 +3971,14 @@ function _font_triangulate_simple(poly::Vector{Vec2{Float64}})
             contains = false
             for other in remaining
                 (other == ip || other == ic || other == inext) && continue
-                (_font_same_point(points[other], a) ||
-                 _font_same_point(points[other], b) ||
-                 _font_same_point(points[other], c)) && continue
-                if _font_point_in_triangle(points[other], a, b, c)
-                    contains = true
-                    break
-                end
+                q = points[other]
+                # The cheap containment test runs first; only a contained
+                # vertex pays for the coincidence checks.
+                _font_point_in_triangle(q, a, b, c) || continue
+                (_font_same_point(q, a) || _font_same_point(q, b) ||
+                 _font_same_point(q, c)) && continue
+                contains = true
+                break
             end
             contains && continue
             push!(tris, (ip, ic, inext))
