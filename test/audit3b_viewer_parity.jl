@@ -358,3 +358,37 @@ end
     @test count("sum += current>stored ? 0.0 : 1.0;", html) == 4
     @test !occursin("current>stored ? 0.35", html)
 end
+
+@testset "shadow depth is packed into all four 8-bit channels" begin
+    # One 8-bit channel quantized shadow depth to 1/255 = 0.0039, coarser than the 0.0015 depth
+    # bias: headless Chrome showed quantization rings and acne on a lit ground plane. Pixels
+    # darker than the unshadowed render (CPU render! 2300 spot, 2333 point): spot 28606 ->
+    # 6795, point 7002 -> 2845. The depth programs now write packDepthToRGBA (three.js
+    # packing.glsl.js) and the receivers unpack and filter four NEAREST texels.
+    html = _audit3b_viewer_html()
+    @test count("gl_FragColor=packDepthToRGBA(clamp(", html) == 2
+    @test count("shadowDepth0(clamp(uv+off,0.0,1.0),", html) == 2
+    @test count("shadowDepth1(clamp(uv+off,0.0,1.0),", html) == 2
+    @test !occursin("texture2D(uShadowMap0,clamp(uv+off,0.0,1.0)).r", html)
+    @test !occursin("gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);\n    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);\n    const fb=gl.createFramebuffer();", html)
+    # The JavaScript packer for exported static maps against the shader's unpack factors,
+    # including the cleared far value 1.
+    unpack = match(r"float unpackRGBAToDepth\(vec4 v\)\{ return dot\(v,\(255\.0/256\.0\)/vec4\(([0-9.,]+)\)\); \}", html)
+    @test unpack !== nothing
+    f = parse.(Float64, split(unpack.captures[1], ','))
+    @test f == [16777216.0, 65536.0, 256.0, 1.0]
+    prelude = only(filter(l -> occursin("const fract=x=>", l), split(html, '\n')))
+    body = """
+    const out=[], b=[0,0,0,0];
+    for(let k=0;k<=255;k++){ packDepthBytes(k/255,b,0); out.push(b.slice()); }
+    for(const v of [0.123456789,0.5,0.999999]){ packDepthBytes(v,b,0); out.push(b.slice()); }
+    console.log(JSON.stringify(out));
+    """
+    r = _audit3b_node_json(html, ["packDepthBytes"], body; prelude=String(prelude))
+    if r !== nothing
+        unpacked = [(255 / 256) * sum(bytes[i] / 255 / f[i] for i in 1:4) for bytes in r]
+        values = [(0:255) ./ 255; 0.123456789; 0.5; 0.999999]
+        @test maximum(abs.(unpacked .- values)) < 1e-9
+        @test r[256] == [255, 255, 255, 255]
+    end
+end
