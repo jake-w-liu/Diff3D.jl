@@ -177,3 +177,44 @@ const norm=a=>{ const l=Math.hypot(a[0],a[1],a[2])||1; return [a[0]/l,a[1]/l,a[2
     @test [d.x, d.y, d.z] ≈ [1 / sqrt(2), 0.0, 1 / sqrt(2)] atol=1e-15
     @test occursin("\"direction\":[", json)
 end
+
+# GLSL vector constructors and dot for evaluating emitted shader expressions in Julia.
+_audit3b_vec(a...) = collect(Float64, a)
+_audit3b_dot(a, b) = sum(a .* b)
+
+@testset "viewer lighting uses three.js r186 BRDFs with 1/pi diffuse" begin
+    html = _audit3b_viewer_html()
+    # BRDF_Lambert = RECIPROCAL_PI * diffuseColor (bsdfs.glsl.js) for every lit material and
+    # light: the viewer used base * irradiance, PI times three.js. Headless Chrome readbacks of
+    # a 0.8-grey plane facing the camera (8-bit, linear output) before -> after, with three.js
+    # r186 float readbacks x 255 at the same pixel: Lambert + directional 204 -> 65 (64.94),
+    # Standard roughness 1 + directional 255 -> 63 (63.20), Standard + ambient 204 -> 64
+    # (63.98), Lambert + hemisphere 102 -> 32 (32.47), Lambert + point I=10 at z=2 255 -> 162
+    # (162.21), Phong shininess 30 + directional 205 -> 67 (66.81).
+    @test occursin("#define RECIPROCAL_PI 0.3183098861837907", html)
+    @test occursin("gDirectDiffuse+=irradiance*gDiffuse*RECIPROCAL_PI;", html)
+    @test occursin("if(!physical) indirectDiffuse=irradiance*gDiffuse*RECIPROCAL_PI;", html)
+    @test occursin("vec3 bc=(uUseLightMap>0.5?lightMapIrradiance*RECIPROCAL_PI:vec3(1.0))*ambientOcclusion*base;", html)
+    # lights_physical_fragment.glsl.js: roughness = min(max(roughness, 0.0525), 1).
+    @test occursin("uUseRoughnessMap),0.0525,1.0);", html)
+    @test !occursin("vec3 diffuse=uAmbientColor;", html)
+    @test !occursin("vec2 DFGApprox(", html)
+
+    # The split-sum DFG term is a fit of the r186 dfgLUT that Julia's _dfg_lut samples; check
+    # the emitted GLSL numerically against it over the clamped roughness range.
+    line = only(filter(l -> occursin("vec2 DFGFit(float dotNV,float roughness)", l), split(html, '\n')))
+    expr = match(r"return clamp\((.*),0\.0,1\.0\); }$", line).captures[1]
+    jl = replace(expr, "vec2(" => "_audit3b_vec(", "vec4(" => "_audit3b_vec(", "dot(" => "_audit3b_dot(")
+    fitexpr = Meta.parse(jl)
+    fit = eval(:((s, t, b, e24) -> $fitexpr))
+    worst = zeros(3)
+    for nv in range(0.0, 1.0; length=101), r in range(0.0525, 1.0; length=101)
+        s, t = 2r - 1, 2nv - 1
+        f = clamp.(Base.invokelatest(fit, s, t, [1.0, t, t * t, exp2(-6nv)], exp2(-24nv)), 0.0, 1.0)
+        lx, ly = Diff3D._dfg_lut(r, nv)
+        worst .= max.(worst, abs.([f[1] - lx, f[2] - ly, f[1] + f[2] - lx - ly]))
+    end
+    @test worst[1] < 0.031
+    @test worst[2] < 0.028
+    @test worst[3] < 0.057
+end
