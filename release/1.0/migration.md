@@ -27,4 +27,4 @@ release's compatibility contract and evidence when selecting a version.
   changed result as equivalent.
 
 See [the compatibility contract](../../docs/src/compatibility.md),
-[verification evidence](evidence.md), and [the release gates](../../RELEASE_PLAN.md).
+[verification evidence](evidence.md), and [the release gates](plan.md).

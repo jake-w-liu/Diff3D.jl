@@ -1,6 +1,6 @@
 # Compatibility
 
-This contract defines the supported surface for Diff3D 1.x. Consult the
+This contract defines the supported surface for Diff3D 2.x. Consult the
 documentation for the package version you use; development documentation can
 include unreleased work.
 
@@ -12,11 +12,18 @@ properties. Examples in the documentation use this surface. Julia indexing is
 one-based, camera field of view and rotations use radians, and transform
 matrices use column-major storage.
 
-The 1.x series preserves that documented behavior. Compatible additions use a
+The 2.x series preserves that documented behavior. Compatible additions use a
 minor release; incompatible public changes require a major release. A deprecated
-API continues to work throughout 1.x and has a documented replacement before
+API continues to work throughout 2.x and has a documented replacement before
 removal in a later major release. Correctness fixes restore the documented
 behavior and may change previously incorrect pixels or derivatives.
+
+Where three.js r186 defines a behavior or a default and this page does not list
+a deliberate difference, the three.js behavior is the documented behavior.
+Version 2.0 changed defaults, vertex orders, color spaces and lighting where 1.x
+departed from three.js without saying so; the
+[migration notes](https://github.com/jake-w-liu/Diff3D.jl/blob/main/release/2.0/migration.md)
+list every such change.
 
 Unexported helpers, internal cache fields, automatically generated constructors
 that are not documented, generated HTML implementation details, and
@@ -29,14 +36,20 @@ The [API reference](api.md) is the entry point for supported calls. A matching
 three.js name does not imply identical arguments, implementation, or backend
 support.
 
-Geometry generators follow three.js r186 vertex placement, UVs, normals, and
-defaults, with these deliberate differences: `ExtrudeGeometry` defaults to
-`bevel_enabled=false` (three.js enables a bevel by default); extrusion along a
-polyline `extrude_path` keeps smooth shared side normals and per-ring UVs rather
-than three.js's flat faces and world-space UVs; generators do not add
+Geometry generators follow three.js r186 vertex placement, vertex and index
+order, UVs, normals, and defaults, with these deliberate differences:
+`ExtrudeGeometry` defaults to `bevel_enabled=false` (three.js enables a bevel by
+default); extrusion along a polyline `extrude_path` keeps smooth shared side
+normals and per-ring UVs rather than three.js's flat faces and world-space UVs;
+`ShapeGeometry` and `ExtrudeGeometry` triangulate with Diff3D's ear clipper
+rather than Earcut, so triangle and vertex order differ; generators do not add
 three.js's per-part draw groups, because the renderers draw a mesh with one
-material; and `CylinderGeometry` caps share one center vertex instead of one per
-segment.
+material; `CylinderGeometry` caps share one center vertex instead of one per
+segment; and where three.js returns NaN or a collapsed shape from overflow or
+underflow (extreme radii, control points near `floatmax`, zero-height open
+cylinders), Diff3D returns the finite geometry. `merge_geometries` keeps
+`with_groups=true` as its default, and the `apply_matrix4!` family also
+transforms morph targets.
 
 ## Rendering backends
 
@@ -77,10 +90,79 @@ For tiled rendering, supply at least
 `min(tiles, target.height, Threads.nthreads())` distinct caches. The function
 does not enlarge a caller-supplied cache vector.
 
+The browser export raises `ArgumentError` for scene content its viewer cannot
+represent rather than dropping it: `ShaderMaterial`, a `LightProbe` with
+second-order `sh` coefficients, shadow-casting lights with a non-default
+`shadow_intensity` or `shadow_normal_bias`, and cameras with a view offset or a
+film offset (including `StereoCamera` eyes). The WebGL 1 viewer decodes sRGB
+textures after filtering; the CPU renderers decode each texel first, as WebGL 2
+does.
+
 CPU, soft, and browser images are not promised to be pixel-identical. Coverage,
 precision, lighting/material implementations, filtering, and antialiasing can
 differ. The example registry records the scope of each upstream example match;
 its partial examples are not a complete three.js conformance suite.
+
+## Deliberate differences from three.js
+
+Besides the geometry and export differences above, these behaviors differ from
+three.js r186 on purpose:
+
+- Rendering: opaque triangles use an inclusive edge rule rather than the GPU
+  top-left rule, so the owner of a shared-edge pixel at exactly equal depth is
+  the later-drawn triangle. Opaque meshes are ordered by depth and object id,
+  not grouped by material. Each instance of a transparent `InstancedMesh` is
+  sorted by its own depth. Lines are sampled at integer pixel positions, and
+  point size attenuation scales with the camera-to-target distance.
+- Shading: ambient and fill light, the transmission background, anisotropy
+  (isotropic broadening) and rect-area lights (a 3x3 quadrature of the
+  point-light BRDF rather than LTC) use Diff3D's own models. Direct lighting of
+  the Standard and Physical materials follows the three.js BRDF.
+- Lights and shadows: IES profiles normalize candela linearly (three.js squares
+  it). The shadow bias is a positive depth offset with default `3e-3` and a
+  default PCF radius of 0. `shadow_normal_bias` offsets along the shaded normal.
+- Textures: `Texture` keeps its own defaults for wrap mode, color space and
+  minification filter, and `DataTexture` rows run bottom to top. Cube textures
+  are not mirrored in X, so `light_probe_from_cube_texture` coefficients 4, 5
+  and 8 have the opposite sign to three.js for the same images.
+- Raycasting: point and line thresholds, and a point hit's `distance_to_ray`,
+  are measured in world space. Sphere tests treat a negative radius as empty.
+- Animation: one `AnimationMixer` drives one clip and uses a single
+  `time_scale`. `Clock()` starts at construction. Keyframe times must be finite
+  and strictly increasing. A morph-name track on a parent resolves the name on
+  each driven mesh.
+- Helpers are built once from the object's state at construction. `CameraHelper`
+  and `PlaneHelper` draw Diff3D's own line sets, and `color=` on a helper draws a
+  single color.
+- Loaders: `load_rgbe` decodes with the reference `rgbe.c` scale
+  (`mantissa * 2^(e-136)`), about 0.39% darker than three.js. PLY integer colors
+  are normalized by their type maximum, and polygons with more than four
+  vertices are fan-triangulated. glTF primitives without normals are de-indexed
+  with face normals. `load_obj_scene` gives each material its own `Mesh`.
+  The JSON parser matches `JSON.parse` except that numbers rounding to infinity,
+  unpaired surrogates and invalid UTF-8 are errors.
+- SVG: `<symbol>` renders only through `<use>`; percentage lengths resolve
+  against the current viewport; crossing or overlapping fill loops are filled
+  exactly under the fill rule; and the `<style>` cascade implements a CSS
+  subset (unsupported selectors are errors) rather than three.js's class and id
+  matching.
+- Reverse mode: at kinks of `min`, `max`, `abs`, `mod`, `rem` and `hypot`, an
+  `ADVar` returns a one-sided derivative; ties of `min` and `max` select the
+  first argument.
+
+## Not implemented
+
+These three.js r186 features have no Diff3D counterpart yet: `renderOrder`;
+`Object3D.clone`/`copy`; blending modes other than normal alpha blending and
+`premultipliedAlpha`; environment maps on the Basic, Lambert and Phong
+materials; bump and displacement maps; `alphaHash`; lines and points as shadow
+casters; simultaneous actions on one mixer (weights, fades, cross-fades, warps,
+additive clips); `FirstPersonControls`, `ArcballControls` and three.js's
+`FlyControls` behavior; `TTFLoader`; and `Color` HSL and CSS-style helpers.
+`save_gltf` writes node hierarchies, mesh, line and point primitives, morph
+targets, untextured materials, and transform and morph-weight animations; it
+raises an error for textures, cameras, lights, skins and instancing. WebGPU,
+TSL node materials, WebXR and audio playback are outside the package's scope.
 
 ## Numeric and differentiation inputs
 
@@ -164,8 +246,8 @@ renderer dispatch and generated browser JavaScript are not plugin interfaces.
 
 ## Platform and validation policy
 
-Diff3D 1.x supports Julia 1.10 and later in the 1.x series, as declared in
-`Project.toml`. The 1.0 release validation runs the minimum supported version,
+Diff3D 2.x supports Julia 1.10 and later in the 1.x series, as declared in
+`Project.toml`. Release validation runs the minimum supported version,
 Julia 1.10, and the current stable release, Julia 1.13, on Linux, macOS, and
 Windows. Both versions are pinned in the workflows so recorded evidence names an
 exact runtime; a newer stable Julia is added to the matrix rather than replacing

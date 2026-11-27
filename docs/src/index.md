@@ -34,7 +34,7 @@ save_png("cube.png", target.color)
 - Scene graph: objects, groups, meshes, lines, points, sprites, LODs, layers,
   skeletons, and instanced meshes.
 - Geometry: primitive, parametric, polyhedral, swept, extruded, wireframe, and
-  edge geometries.
+  edge geometries; curves, paths and shapes; in-place transforms.
 - Materials and lights: unlit, Lambert, Phong, PBR-style, physical, toon,
   matcap, normal, depth, sprite, line, point, shader materials, common lights,
   IES profiles, and shadows.
@@ -43,8 +43,9 @@ save_png("cube.png", target.color)
 - Differentiable workflows: soft rasterization, image losses, finite-difference
   checks, ForwardDiff gradients, reverse-mode scalar AD helpers, and inverse
   rendering optimizers.
-- I/O: PNG/PPM/PDF output, PNG decoding, OBJ/MTL/STL/PLY/XYZ loading, and
-  glTF/GLB loading.
+- I/O: PNG/PPM/PDF output; PNG, JPEG, HDR, EXR and KTX2 decoding;
+  OBJ/MTL/STL/PLY/XYZ, glTF/GLB, SVG and typeface loading; and STL, OBJ, PLY
+  and glTF writing.
 
 ## Feature Tour
 
@@ -699,7 +700,7 @@ println("OK lod")
 
 ### Raycasting
 
-Diff3D's `Raycaster` mirrors three.js: aim a world-space ray (directly or via `set_from_camera!` through NDC screen coordinates), then `raycast` a scene or object tree to get `Intersection`s sorted nearest-first. The lower-level `ray_triangle_intersect` exposes the Möller–Trumbore test used internally.
+Diff3D's `Raycaster` mirrors three.js: aim a world-space ray (directly or via `set_from_camera!` through NDC screen coordinates), then `raycast` a scene or object tree to get `Intersection`s sorted nearest-first. Mesh hits use three.js's watertight ray/triangle test in the object's local space and report the face, its normal, the interpolated normal and UVs, and barycentric weights. The lower-level `ray_triangle_intersect` is a stand-alone Möller–Trumbore test.
 
 Point and line instances use the same world-space picking thresholds as ordinary
 primitives. Each instanced hit includes a 1-based `instance_id`. Sprite picking
@@ -970,6 +971,62 @@ println("OK io: png $(size(decoded)), stl faces=$(mesh.n_faces), ",
 Rotated glTF textures store their UV transform in `Texture.matrix` with
 `matrix_auto_update=false`. Their authored `offset`, `repeat`, and `rotation`
 fields remain available for inspection.
+
+### Curves, Shapes & Object Utilities
+
+Version 2.0 adds the three.js `Curve`/`Path`/`Shape` hierarchy, in-place
+geometry transforms, `Object3D` operations such as `look_at!`, `attach!` and the
+world-space getters, camera view offsets and film helpers, the three.js tone
+mapping operators, and a glTF writer.
+
+```@example utilities
+using Diff3D # hide
+# --- Curves and shapes (three.js Curve / Path / Shape) ---
+outline = Shape()
+move_to!(outline, 0.0, 0.0)
+line_to!(outline, 2.0, 0.0)
+line_to!(outline, 2.0, 1.0)
+absarc!(outline, 1.0, 1.0, 1.0, 0.0, pi)            # round the top edge
+hole = Path()
+absarc!(hole, 1.0, 0.8, 0.3, 0.0, 2pi, true)         # clockwise hole
+push!(outline.holes, hole)
+plate = ExtrudeGeometry(outline; depth=0.2)
+println("outline length ", round(get_length(outline), digits=3), ", plate faces ", plate.n_faces)
+arc = EllipseCurve(0.0, 0.0, 2.0, 1.0)
+println("arc samples ", length(get_spaced_points(arc, 16)), ", tangent ", get_tangent_at(arc, 0.25))
+
+# --- Geometry transforms and utilities ---
+rounded = RoundedBoxGeometry(width=1.0, height=1.0, depth=1.0, radius=0.2)
+translate_geometry!(rounded, 0.0, 0.5, 0.0)
+creased = to_creased_normals(SphereGeometry(width_segments=8, height_segments=6); crease_angle=pi / 8)
+println("rounded box center y ", round(box3_center(compute_bounding_box(rounded)).y, digits=3),
+        ", creased vertices ", creased.n_vertices)
+
+# --- Object3D operations ---
+arm = Group(); arm.name = "arm"; arm.position = Vec3(2.0, 0.0, 0.0)
+hand = Mesh(BoxGeometry(), MeshBasicMaterial()); hand.name = "hand"; hand.position = Vec3(0.0, 1.0, 0.0)
+add!(arm, hand)
+rotate_on_axis!(arm, Vec3(0.0, 0.0, 1.0), pi / 2)
+world = Scene(); add!(world, arm)
+println("hand world position ", get_world_position(get_object_by_name(world, "hand")))
+attach!(world, hand)                                  # reparent, keep the world transform
+println("after attach ", get_world_position(hand), ", parent is scene: ", get_parent(hand) === world)
+
+# --- Camera view offsets and projection helpers ---
+cam = PerspectiveCamera(fov=pi / 3, aspect=2.0, near=0.1, far=50.0)
+cam.position = Vec3(0.0, 0.0, 5.0)
+println("focal length ", round(get_focal_length(cam), digits=2), " mm, origin in NDC ", vec3_project(Vec3(0.0, 0.0, 0.0), cam))
+set_view_offset!(cam, 800, 400, 0, 0, 400, 400)       # left half of an 800x400 view
+println("view-offset aspect ", cam.aspect)
+clear_view_offset!(cam)
+
+# --- Tone mapping and export ---
+println("ACES filmic of 2.0 gray: ", tone_map(Color3(2.0, 2.0, 2.0), :aces_filmic))
+dir = mktempdir()
+save_gltf(joinpath(dir, "hand.glb"), world)
+reloaded = load_glb(joinpath(dir, "hand.glb"))
+println("OK tour: glb bytes ", filesize(joinpath(dir, "hand.glb")), ", reloaded children ", length(get_children(reloaded)))
+```
 
 ### Interactive WebGL HTML Export
 

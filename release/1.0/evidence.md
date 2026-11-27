@@ -1,6 +1,6 @@
 # Diff3D 1.0 release evidence
 
-The gate tracker is [RELEASE_PLAN.md](../../RELEASE_PLAN.md). This file records
+The gate tracker is [plan.md](plan.md). This file records
 observed results; a planned command is not a passed check.
 
 ## Starting inspection — 2026-09-20

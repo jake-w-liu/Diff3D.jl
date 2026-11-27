@@ -1,6 +1,6 @@
 # Publishing the 1.0 candidate
 
-Publication is the final step after every gate in `RELEASE_PLAN.md` passes on
+Publication is the final step after every gate in `release/1.0/plan.md` passes on
 one immutable commit. The current tracker does not yet claim that these gates
 have passed. Publication follows review of the completed candidate.
 

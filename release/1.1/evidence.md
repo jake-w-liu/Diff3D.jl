@@ -1,7 +1,7 @@
 # Diff3D 1.1 release evidence
 
 This file records observed results for the 1.1.0 candidate. A planned command
-is not a passed check. The 1.0 gate process is in `RELEASE_PLAN.md`; the same
+is not a passed check. The 1.0 gate process is in `release/1.0/plan.md`; the same
 acceptance discipline applies here.
 
 ## Post-1.0 audit recovery — 2026-10-09

@@ -7,13 +7,15 @@ animation controls, loaders, and self-contained WebGL HTML export.
 
 ## Status
 
-The [1.x compatibility contract](docs/src/compatibility.md) defines the stable
-public API and the supported behavior of each rendering backend. The
-[release plan](RELEASE_PLAN.md) records validation status and candidate evidence.
-Use the documentation for the package version you install.
+The [2.x compatibility contract](docs/src/compatibility.md) defines the stable
+public API, the supported behavior of each rendering backend, the deliberate
+differences from three.js r186 and the features not yet implemented. Version 2.0
+changed defaults, vertex orders and color spaces to follow three.js; the
+[migration notes](release/2.0/migration.md) list every change. Use the
+documentation for the package version you install.
 
-The [measured comparison with three.js](release/1.0/comparison.md) records native
-gradient timings, browser frames, startup and artifact sizes from two matched
+The [comparison with three.js measured for version 1.0](release/1.0/comparison.md)
+records native gradient timings, browser frames, startup and artifact sizes from two matched
 runs — a Linux runner with software rendering and a macOS host with a hardware
 GPU — including both execution orders and the raw evidence. Diff3D's advantages
 in those fixtures are Julia differentiation at larger parameter counts and
@@ -68,8 +70,8 @@ save_png("cube.png", target.color)
 - Math: `Vec2`, `Vec3`, `Vec4`, `Mat3`, `Mat4`, `Quaternion`, `Euler`,
   bounding volumes, rays, planes, frustums, and interpolation helpers.
 - Geometry: boxes, spheres, planes, cylinders, cones, torus variants,
-  polyhedra, lathe/tube/extrude/shape/capsule geometries, wireframes, and
-  edges.
+  polyhedra, lathe/tube/extrude/shape/capsule geometries, wireframes, edges,
+  the `Curve`/`Path`/`Shape` hierarchy, and in-place transforms.
 - Materials and lighting: basic, Lambert, Phong, standard/PBR, physical, toon,
   matcap, normal, depth, line, point, sprite, shader materials, common light
   types, IES profiles, and shadow maps.
@@ -78,8 +80,9 @@ save_png("cube.png", target.color)
   self-contained WebGL HTML export.
 - Differentiable workflows: ForwardDiff-compatible soft rendering, image loss
   functions, numerical/reverse gradients, and inverse-rendering optimizers.
-- I/O and loaders: PPM/PNG/PDF output, OBJ/MTL/STL/PLY/XYZ loading, PNG decoding,
-  glTF/GLB loading, and base64/DEFLATE helpers.
+- I/O and loaders: PPM/PNG/PDF output; PNG, JPEG, HDR, EXR and KTX2 decoding;
+  OBJ/MTL/STL/PLY/XYZ, glTF/GLB, SVG and typeface loading; STL, OBJ, PLY and
+  glTF writing; and base64/DEFLATE helpers.
 
 ## Documentation
 
