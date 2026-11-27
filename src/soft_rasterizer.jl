@@ -10,7 +10,17 @@
 # All operations are pure Julia scalar math — ForwardDiff compatible.
 # --------------------------------------------------------------------------
 
-"""Configuration for the soft rasterizer."""
+"""
+    SoftRasterizerConfig(; sigma=1.0, gamma=1.0, bg_color=Color3(0.0, 0.0, 0.0), eps=1e-8)
+
+Configuration for [`soft_render`](@ref). `sigma` is the edge softness in
+pixels (coverage `sigmoid_approx(d / sigma)` of the signed distance `d`),
+`gamma` the depth-softmax temperature in NDC depth units, and `bg_color` the
+colour of the virtual background surface at the far plane. `eps` (positive)
+is the floor added to the background weight, the relative near/far clipping
+margin, and the doubled screen area (in pixel²) below which a triangle's
+coverage fades smoothly to zero as it degenerates.
+"""
 struct SoftRasterizerConfig{T<:Real}
     sigma::T       # Edge softness in pixel units (larger = softer)
     gamma::T       # Depth aggregation temperature in NDC units
@@ -187,6 +197,11 @@ Arguments:
 - config: SoftRasterizerConfig
 
 Returns: Array{T, 3} of size (height, width, 3) — RGB image.
+
+Degenerate triangles: a triangle whose doubled screen area `|A|` is below
+`config.eps` (pixel²) has its coverage multiplied by `s(|A| / eps)` with
+`s(t) = t^2 (3 - 2t)`, so a collapsing triangle fades out continuously and a
+zero-area triangle covers nothing; triangles with `|A| >= eps` are unaffected.
 """
 function soft_render(vertices::AbstractVector{Vec3{Tv}},
                      faces::Vector{NTuple{3,Int}},
@@ -423,6 +438,9 @@ end
                 tri.s1.x, tri.s1.y, tri.s2.x, tri.s2.y, tri.s3.x, tri.s3.y,
                 tri.area)
             coverage = sigmoid_approx(d / σ)
+            if _soft_is_faded(tri.area, eps)
+                coverage *= _soft_degenerate_fade(tri.area, eps)
+            end
             depth_weight = use_relative_depth ?
                 _soft_relative_depth_weight(m, tri.depth, γ) :
                 exp(tri.logit - m)
@@ -440,6 +458,21 @@ end
     denom = total_weight + w_bg
     return iszero(_primal_value(total_weight)) ? bg :
         _stable_color_lerp(average_color, bg, w_bg / denom)
+end
+
+# Image model at degeneracy. A triangle whose doubled screen area |A| is below
+# the configured `eps` (pixel^2) has its coverage multiplied by the smoothstep
+# s(t) = t^2 (3 - 2t), t = |A| / eps, which is 1 with zero slope at |A| = eps
+# and 0 with zero slope at A = 0. A collapsing triangle therefore fades out
+# continuously (C1) instead of switching from a half-covered sliver to
+# nothing; triangles with |A| >= eps are unchanged. The test uses primal values
+# so AD scalars take the same branch.
+@inline _soft_is_faded(area, eps) =
+    abs(_primal_value(area)) < _primal_value(eps)
+
+@inline function _soft_degenerate_fade(area, eps)
+    t = abs(area) / eps
+    return t * t * (3 - 2t)
 end
 
 # Per-vertex clip and screen positions, filled on first use.
@@ -708,6 +741,9 @@ end
          ndcz)
 end
 
+@inline _soft_coverage_margin(::Type{P}, sigma) where {P} =
+    max(P(3.0) * sigma, one(P))
+
 function _soft_screen_triangle(s1::Vec3{T}, s2::Vec3{T}, s3::Vec3{T},
                                color::Color3{T}, σ, γ, eps,
                                use_relative_depth::Bool, W::Int, H::Int) where {T}
@@ -724,7 +760,7 @@ function _soft_screen_triangle(s1::Vec3{T}, s2::Vec3{T}, s3::Vec3{T},
     x2 = _primal_value(s2.x); y2 = _primal_value(s2.y)
     x3 = _primal_value(s3.x); y3 = _primal_value(s3.y)
     P = typeof(x1)
-    margin = max(P(3.0) * _primal_value(σ), one(P))
+    margin = _soft_coverage_margin(P, _primal_value(σ))
     finite = isfinite(x1) && isfinite(y1) &&
              isfinite(x2) && isfinite(y2) &&
              isfinite(x3) && isfinite(y3)
@@ -741,7 +777,10 @@ function _soft_screen_triangle(s1::Vec3{T}, s2::Vec3{T}, s3::Vec3{T},
         bmin_y = 1
         bmax_y = 0
     end
-    valid = finite && abs(_primal_value(area)) > _primal_value(eps) &&
+    # Zero-area (and non-finite NaN-area) triangles cover nothing. Triangles
+    # with doubled area below `eps` stay, with coverage faded to zero as the
+    # area vanishes (`_soft_degenerate_fade`), so coverage is continuous.
+    valid = finite && abs(_primal_value(area)) > zero(P) &&
             bmax_x >= bmin_x && bmax_y >= bmin_y
     return _SoftScreenTriangle(s1, s2, s3, color, depth, logit,
                                bmin_x, bmax_x, bmin_y, bmax_y,

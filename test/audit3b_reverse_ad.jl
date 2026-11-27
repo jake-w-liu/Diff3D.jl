@@ -269,3 +269,59 @@ end
     end
 end
 
+
+# Triangle a, b, c in NDC (identity view-projection) on an 8x8 image. b sits
+# `delta` above a, perpendicular to a->c, so delta -> 0 collapses the triangle
+# onto the segment a-c, which runs through the pixel centres of row 4 (screen
+# y = 3.5). Doubled screen area: 4.8 px * 4 delta px = 19.2 delta px^2, so the
+# fade band |A| < eps = 1e-8 is delta < 5.208e-10.
+function audit3b_collapsing_image(delta)
+    T = typeof(delta)
+    y = T(0.125)
+    vertices = Vec3{T}[Vec3(T(-0.6), y, T(0.0)), Vec3(T(-0.6), y + delta, T(0.0)),
+                       Vec3(T(0.6), y, T(0.0))]
+    return soft_render(vertices, [(1, 2, 3)], [Color3(T(1.0), T(1.0), T(1.0))],
+                       Mat4{T}(), 8, 8, SoftRasterizerConfig(sigma=T(0.5), gamma=T(1.0)))
+end
+
+audit3b_collapsing_pixel(delta) = audit3b_collapsing_image(delta)[4, 4, 1]
+
+@testset "Soft coverage fades continuously as a triangle collapses" begin
+    # Image model (src/soft_rasterizer.jl `_soft_degenerate_fade`): coverage of
+    # a triangle with doubled area |A| < eps is scaled by s(|A|/eps),
+    # s(t) = t^2 (3 - 2t). Previously such triangles were dropped, so pixel
+    # (4, 4) on the collapsing segment jumped from 0.576 to 0.
+    # Outside the band the image is unchanged (value printed by the base
+    # commit 61c9d8e for delta = 1e-6).
+    @test audit3b_collapsing_pixel(1e-6) == 0.5761168781276158
+    @test audit3b_collapsing_pixel(5.3e-10) == 0.5761168781276158
+    @test audit3b_collapsing_pixel(0.0) == 0.0
+    # Continuity: on a 1e-12 grid the largest step stays below the bound
+    # max|d pixel / d delta| * 1e-12 (about 2e9 * 1e-12 = 2e-3).
+    deltas = range(0.0, 6e-10; length=601)
+    values = audit3b_collapsing_pixel.(deltas)
+    @test maximum(abs.(diff(values))) < 5e-3
+    @test issorted(values)
+    # Inside the band ForwardDiff, the fused reverse pullback and central
+    # differences agree on the (steep, C1) fade derivative.
+    for delta in (4e-10, 1e-10, 1e-11, -2e-10)
+        forward = ForwardDiff.derivative(audit3b_collapsing_pixel, delta)
+        reverse = reverse_gradient(p -> audit3b_collapsing_pixel(p[1]), [delta])[1]
+        @test abs(forward) > 1e6
+        @test isapprox(reverse, forward; rtol=1e-9)
+        # y + delta rounds at the 2.8e-17 spacing of 0.125, so the step is
+        # 1% of delta and the tolerance covers rounding plus O(h^2) truncation.
+        h = abs(delta) * 1e-2
+        central = (audit3b_collapsing_pixel(delta + h) - audit3b_collapsing_pixel(delta - h)) / 2h
+        @test isapprox(central, forward; rtol=2e-3)
+    end
+    # The gradient with respect to the config eps (it sets the band) also
+    # agrees between the modes.
+    eps_pixel(e) = soft_render(Vec3{typeof(e)}[Vec3(-0.6, 0.125, 0.0), Vec3(-0.6, 0.125 + 2e-10, 0.0),
+                                                Vec3(0.6, 0.125, 0.0)],
+                               [(1, 2, 3)], [Color3(1.0, 1.0, 1.0)], Mat4{Float64}(), 8, 8,
+                               SoftRasterizerConfig(sigma=0.5, gamma=1.0, eps=e))[4, 4, 1]
+    forward = ForwardDiff.derivative(eps_pixel, 1e-8)
+    @test forward < 0
+    @test isapprox(reverse_gradient(p -> eps_pixel(p[1]), [1e-8])[1], forward; rtol=1e-9)
+end

@@ -315,6 +315,31 @@ end
     return value, sign * b3x, sign * b3y, 0.0, 0.0, sign * a3x, sign * a3y  # c -> a
 end
 
+# Adjoint of the degeneracy fade s(t) = t^2 (3 - 2t), t = |A| / ε, where
+# A = edge_function(s1, s2, s3) = (x3 - x1)(y2 - y1) - (y3 - y1)(x2 - x1).
+@inline function _soft_ad_fade_pullback!(acc, scalars, fi::Int,
+                                         tri::_SoftScreenTriangle{Float64},
+                                         ε::Float64, fade_bar::Float64)
+    area = tri.area
+    t = abs(area) / ε
+    t_bar = fade_bar * (6.0 * t * (1.0 - t))
+    iszero(t_bar) && return nothing
+    area_bar = (area < 0 ? -t_bar : t_bar) / ε
+    scalars.eps -= t_bar * (t / ε)
+    x1 = tri.s1.x; y1 = tri.s1.y
+    x2 = tri.s2.x; y2 = tri.s2.y
+    x3 = tri.s3.x; y3 = tri.s3.y
+    @inbounds begin
+        acc[1, fi] += area_bar * (y3 - y2)
+        acc[2, fi] += area_bar * (x2 - x3)
+        acc[3, fi] -= area_bar * (y3 - y1)
+        acc[4, fi] += area_bar * (x3 - x1)
+        acc[5, fi] += area_bar * (y2 - y1)
+        acc[6, fi] -= area_bar * (x2 - x1)
+    end
+    return nothing
+end
+
 # Relative depth weight (see `_soft_relative_depth_weight`), its scaled delta,
 # and whether it depends on its inputs; constant results carry no derivative.
 @inline function _soft_relative_weight_state(nearest::Float64, depth::Float64,
@@ -387,6 +412,7 @@ function (pullback::_SoftADPixelPullback)(tape::Vector{ADVar})
     faces = Vector{Int}(undef, capacity)
     xs = Vector{Float64}(undef, capacity)
     coverages = Vector{Float64}(undef, capacity)
+    faded = Vector{Bool}(undef, capacity)
     depth_weights = Vector{Float64}(undef, capacity)
     weights = Vector{Float64}(undef, capacity)
     distance_grads = Matrix{Float64}(undef, 6, capacity)
@@ -398,7 +424,7 @@ function (pullback::_SoftADPixelPullback)(tape::Vector{ADVar})
         g_b = tape[position + 2].adj
         position += 3
         (iszero(g_r) && iszero(g_g) && iszero(g_b)) && continue
-        _soft_ad_pixel_pullback!(acc, scalars, faces, xs, coverages,
+        _soft_ad_pixel_pullback!(acc, scalars, faces, xs, coverages, faded,
             depth_weights, weights, distance_grads, primal, tiles, n,
             px, py, g_r, g_g, g_b, σ, γ, inv_γ, ε, bg, background_logit,
             use_relative, gamma_is_ad)
@@ -424,7 +450,7 @@ function (pullback::_SoftADPixelPullback)(tape::Vector{ADVar})
     return nothing
 end
 
-function _soft_ad_pixel_pullback!(acc, scalars, faces, xs, coverages,
+function _soft_ad_pixel_pullback!(acc, scalars, faces, xs, coverages, faded,
         depth_weights, weights, distance_grads, primal, tiles, n::Int,
         px::Int, py::Int, g_r::Float64, g_g::Float64, g_b::Float64,
         σ::Float64, γ::Float64, inv_γ::Float64, ε::Float64,
@@ -459,6 +485,8 @@ function _soft_ad_pixel_pullback!(acc, scalars, faces, xs, coverages,
             tri.s3.x, tri.s3.y, tri.area)
         x = d / σ
         coverage = sigmoid_approx(x)
+        is_faded = _soft_is_faded(tri.area, ε)
+        is_faded && (coverage *= _soft_degenerate_fade(tri.area, ε))
         depth_weight = use_relative ?
             _soft_relative_weight_state(m, tri.depth, γ)[1] :
             exp(tri.logit - m)
@@ -471,6 +499,7 @@ function _soft_ad_pixel_pullback!(acc, scalars, faces, xs, coverages,
         faces[count] = fi
         xs[count] = x
         coverages[count] = coverage
+        faded[count] = is_faded
         depth_weights[count] = depth_weight
         weights[count] = w
         distance_grads[1, count] = gax; distance_grads[2, count] = gay
@@ -542,6 +571,12 @@ function _soft_ad_pixel_pullback!(acc, scalars, faces, xs, coverages,
         end
         iszero(coverage_bar) && continue
         x = xs[j]
+        if faded[j]
+            # coverage = sigmoid(x) * s(t), t = |A| / ε (`_soft_degenerate_fade`).
+            fade_bar = coverage_bar * sigmoid_approx(x)
+            coverage_bar *= _soft_degenerate_fade(tri.area, ε)
+            _soft_ad_fade_pullback!(acc, scalars, fi, tri, ε, fade_bar)
+        end
         x_bar = coverage_bar * _soft_sigmoid_derivative(x)
         iszero(x_bar) && continue
         d_bar = x_bar / σ
