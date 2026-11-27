@@ -3955,7 +3955,7 @@ end
                        cast_shadow=true))
         static_shadow_json = Diff3D._web_lights_json(static_shadow_scene)
         @test occursin("\"shadow\":{\"type\":\"directionalStatic\"", static_shadow_json)
-        @test occursin("\"shadow\":{\"type\":\"pointStatic\"", static_shadow_json)
+        @test occursin("\"shadow\":{\"type\":\"pointDynamic\"", static_shadow_json)
         @test occursin("\"shadow\":{\"type\":\"spotStatic\"", static_shadow_json)
         clipped_shadow_json = Diff3D._web_shadow_json(static_shadow_scene, static_dir;
             clipping_planes=[Plane(Vec3(0.0, 1.0, 0.0), -10.0)])

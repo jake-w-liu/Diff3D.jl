@@ -317,3 +317,24 @@ _audit3b_dot(a, b) = sum(a .* b)
     @test worst[2] < 0.028
     @test worst[3] < 0.057
 end
+
+@testset "point-light shadows cover all six cube faces" begin
+    # three.js PointLightShadow renders six faces (WebGLShadowMap.js), as Julia's
+    # _point_shadow_cube does. The static export stored one 90-degree map aimed at the scene
+    # centre: with the light between two boxes, the ground behind the -x box read 7..57
+    # (lit) in the viewer where the CPU renders 0. The light now uses the six-face path.
+    scene = Scene()
+    add!(scene, Mesh(BoxGeometry(), MeshLambertMaterial(); cast_shadow=true, receive_shadow=true))
+    point = PointLight(position=Vec3(0.0, 1.2, 0.0), cast_shadow=true)
+    add!(scene, point)
+    json = Diff3D._web_shadow_json(scene, point)
+    @test occursin("\"type\":\"pointDynamic\"", json)
+    @test !occursin("\"data\":", json)
+    @test Diff3D._web_shadow_json(scene, point; shadow_mode=:none) == "null"
+    # A shadowed sample passes no light (three.js shadow.intensity 1; _shadow_lookup returns
+    # 0): the viewer kept 0.35, so the ground behind a box still read 20 of 57 after the
+    # six-face fix and reads 0 now.
+    html = _audit3b_viewer_html()
+    @test count("sum += current>stored ? 0.0 : 1.0;", html) == 4
+    @test !occursin("current>stored ? 0.35", html)
+end
