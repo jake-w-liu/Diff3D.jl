@@ -4850,7 +4850,7 @@ end
         @test occursin("EXT_shader_texture_lod", html)
         @test occursin("meshFragmentShaderCubeLod", html)
         @test occursin("textureCubeLodEXT(uEnvCubeMap,dir,clamp(rough,0.0,1.0)*uEnvMaxLod).rgb", html)
-        @test occursin("envColor(normalize(mix(reflect(-v,n),n,rough*rough)),rough)", html)
+        @test occursin("envColor(normalize(mix(reflect(-v,n),n,pow2(rough*rough))),rough)", html)
         @test occursin("\"mipmaps\":[{\"width\":2,\"height\":2", html)
         @test occursin("{\"width\":1,\"height\":1", html)
         @test occursin("uploadedMipmaps", html)

@@ -298,6 +298,11 @@ _audit3b_dot(a, b) = sum(a .* b)
     @test occursin("uUseRoughnessMap),0.0525,1.0);", html)
     @test !occursin("vec3 diffuse=uAmbientColor;", html)
     @test !occursin("vec2 DFGApprox(", html)
+    # envmap_physical_pars_fragment.glsl.js getIBLRadiance bends the reflection toward the
+    # normal by pow4(roughness), for the base and the clearcoat lobes.
+    @test occursin("envColor(normalize(mix(reflect(-v,n),n,pow2(rough*rough))),rough)", html)
+    @test occursin("envColor(normalize(mix(reflect(-v,clearcoatN),clearcoatN,pow2(ccRough*ccRough))),ccRough)", html)
+    @test !occursin("mix(reflect(-v,n),n,rough*rough)", html)
 
     # The split-sum DFG term is a fit of the r186 dfgLUT that Julia's _dfg_lut samples; check
     # the emitted GLSL numerically against it over the clamped roughness range.
