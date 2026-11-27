@@ -10924,8 +10924,15 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
             mesh_idx = _gltf_checked_zero_based_index(
                 node["mesh"], length(get(gltf, "meshes", Any[])), "node mesh")
             mesh_def = gltf["meshes"][mesh_idx + 1]
-            morph_weights = _gltf_checked_number_vector(
-                get(node, "weights", get(mesh_def, "weights", Float64[])), "morph weights")
+            # glTF 2.0 mesh.weights defaults to zero for every morph target;
+            # three.js GLTFLoader.js:2474-2486 sizes morphTargetInfluences to
+            # the target count before applying authored weights.
+            target_count = maximum(prim -> length(get(prim, "targets", Any[])),
+                                   mesh_def["primitives"]; init=0)
+            morph_weights = haskey(node, "weights") || haskey(mesh_def, "weights") ?
+                _gltf_checked_number_vector(
+                    get(node, "weights", get(mesh_def, "weights", Float64[])), "morph weights") :
+                zeros(target_count)
             morph_names = _gltf_target_names(mesh_def)
             for (prim_slot, prim) in enumerate(mesh_def["primitives"])
                 if instance_matrices !== nothing
