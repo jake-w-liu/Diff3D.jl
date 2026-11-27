@@ -6374,7 +6374,8 @@ function _svg_mask_definition_paths(paths::Vector{SVGPath}, mask_type::Symbol)
         error("unsupported SVG mask-type $(mask_type)")
     out = SVGPath[]
     for path in paths
-        path.closed && length(path.points) >= 3 || continue
+        # An open subpath fills as if closed (SVG 1.1 section 11.3).
+        length(path.points) >= 3 || continue
         path.style.fill !== nothing || continue
         _svg_mask_path_alpha(path) > 1e-12 || continue
         push!(out, path)
@@ -6388,10 +6389,10 @@ function _svg_clip_loops(definitions::Dict{String,_SVGClipDefinition},
         error("SVG clip-path references unknown id $clip_id")
     definition = definitions[clip_id]
     isempty(definition.paths) && return nothing
-    closed = [path for path in definition.paths
-              if path.closed && length(path.points) >= 3]
-    length(closed) == length(definition.paths) ||
-        error("SVG clipPath #$clip_id must contain only closed clipping paths")
+    # The clipping region is the union of the children's fill areas (SVG 1.1
+    # section 14.3.5): open subpaths count as implicitly closed, and lines or
+    # two-point subpaths enclose nothing.
+    closed = [path for path in definition.paths if length(path.points) >= 3]
     pieces = Vector{Vec2{Float64}}[]
     for group in _svg_element_path_groups(closed)
         fill_rule = group[1].style.fill_rule
@@ -7506,8 +7507,43 @@ function _svg_clip_closed_path_to_union(path::SVGPath,
     return fragments
 end
 
+# An open subpath with a fill paints its implicitly closed area but strokes
+# only the open polyline (SVG 1.1 section 11.3), so clipping or masking it
+# splits it into a closed fill-only path and an open stroke-only path.
+function _svg_split_open_fill(path::SVGPath)
+    style = path.style
+    filled = SVGPath(path.tag, path.points, true,
+                     SVGStyle(style.fill, nothing, style.stroke_width,
+                              style.opacity, style.fill_opacity,
+                              style.stroke_opacity, style.stroke_dasharray,
+                              style.stroke_dashoffset, style.stroke_linecap,
+                              style.stroke_linejoin, style.stroke_miterlimit,
+                              style.fill_rule),
+                     path.element_id)
+    style.stroke === nothing && return filled, nothing
+    stroked = SVGPath(path.tag, path.points, false,
+                      SVGStyle(nothing, style.stroke, style.stroke_width,
+                               style.opacity, style.fill_opacity,
+                               style.stroke_opacity, style.stroke_dasharray,
+                               style.stroke_dashoffset, style.stroke_linecap,
+                               style.stroke_linejoin, style.stroke_miterlimit,
+                               style.fill_rule),
+                      path.element_id)
+    return filled, stroked
+end
+
+_svg_open_fill(path::SVGPath) =
+    !path.closed && path.style.fill !== nothing && length(path.points) >= 3
+
 function _svg_clip_path_to_loops(path::SVGPath,
                                  clip_loops::Vector{Vector{Vec2{Float64}}})
+    if _svg_open_fill(path)
+        filled, stroked = _svg_split_open_fill(path)
+        fragments = _svg_clip_path_to_loops(filled, clip_loops)
+        stroked === nothing ||
+            append!(fragments, _svg_clip_open_path_to_union(stroked, clip_loops))
+        return fragments
+    end
     fragments = SVGPath[]
     if path.closed
         for clip_loop in clip_loops
@@ -7672,6 +7708,13 @@ end
 
 function _svg_mask_path_to_entries(path::SVGPath,
                                    entries::Vector{_SVGMaskEntry})
+    if _svg_open_fill(path)
+        filled, stroked = _svg_split_open_fill(path)
+        fragments = _svg_mask_closed_path_to_entries(filled, entries)
+        stroked === nothing ||
+            append!(fragments, _svg_mask_open_path_to_entries(stroked, entries))
+        return fragments
+    end
     if path.closed
         return _svg_mask_closed_path_to_entries(path, entries)
     end
@@ -8563,7 +8606,11 @@ function _svg_element_path_groups(paths::Vector{SVGPath})
 end
 
 function _svg_fill_geometries(paths::Vector{SVGPath})
-    closed = [path for path in paths if path.closed && length(path.points) >= 3]
+    # Open subpaths are filled as if closed (SVG 1.1 section 11.3; three.js
+    # ShapePath.toShapes triangulates every subpath regardless of autoClose).
+    # An open subpath without a fill (a stroked polyline) encloses nothing.
+    closed = [path for path in paths
+              if length(path.points) >= 3 && (path.closed || path.style.fill !== nothing)]
     isempty(closed) && return BufferGeometry[]
     fill_rule = closed[1].style.fill_rule
     geos = BufferGeometry[]
@@ -8597,7 +8644,7 @@ function _svg_fill_mesh_path_groups(paths::Vector{SVGPath})
     return groups
 end
 
-"""Triangulate closed SVG loops into a merged `BufferGeometry`."""
+"""Triangulate closed SVG loops and filled open subpaths (which fill as if closed) into a merged `BufferGeometry`."""
 function svg_geometry(svg::SVGDocument)
     geos = BufferGeometry[]
     for paths in _svg_element_path_groups(svg.paths)

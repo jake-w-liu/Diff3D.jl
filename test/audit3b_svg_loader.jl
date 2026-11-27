@@ -63,3 +63,60 @@ _audit3b_rgb(c) = (c.r, c.g, c.b)
         </svg>""")
     @test masked.paths[1].style.opacity ≈ 128 / 255 rtol = 1e-9
 end
+
+@testset "SVG open subpaths are filled as if closed" begin
+    # SVG 1.1 section 11.3 ("the fill operation fills open subpaths by
+    # performing the fill operation as if an additional closepath command
+    # were added"); three.js ShapePath.toShapes fills every subpath. Oracle
+    # (SVGLoader.parse + toShapes + ShapeUtils.triangulateShape): area 100 for
+    # the open square; the polyline triangle has area 50.
+    doc = _audit3b_svg("""
+        <svg width="100" height="100">
+          <path d="M0 0 L10 0 L10 10 L0 10" fill="#808080" stroke="red"/>
+          <polyline points="20,0 30,0 30,10" fill="blue"/>
+          <polyline points="40,0 50,0 50,10" fill="none" stroke="red"/>
+        </svg>""")
+    @test [p.closed for p in doc.paths] == [false, false, false]
+    fills = svg_meshes(doc)
+    @test length(fills) == 2
+    @test _audit3b_area(fills[1].geometry) ≈ 100.0
+    @test _audit3b_area(fills[2].geometry) ≈ 50.0
+    # A stroke-only polyline adds nothing to the fill geometry.
+    @test _audit3b_area(svg_geometry(doc)) ≈ 150.0
+    # The stroke of the open path is still open (butt ends, no closing edge).
+    strokes = svg_strokes(doc)
+    @test length(strokes) == 2
+    @test all(s -> !(s isa LineLoop), strokes)
+
+    # Clipping an open filled path clips the implicitly closed fill area and
+    # the open stroke separately: the clip x <= 5 keeps half of the square's
+    # area and a stroke made of the clipped top edge only (the left edge is
+    # not part of the open path).
+    clipped = _audit3b_svg("""
+        <svg width="100" height="100">
+          <clipPath id="c"><rect x="-1" y="-1" width="6" height="20"/></clipPath>
+          <path d="M0 0 L10 0 L10 10 L0 10" fill="#808080" stroke="red"
+                clip-path="url(#c)"/>
+        </svg>""")
+    @test _audit3b_area(svg_geometry(clipped)) ≈ 50.0
+    stroke_paths = [p for p in clipped.paths if p.style.stroke !== nothing]
+    @test all(p -> !p.closed && p.style.fill === nothing, stroke_paths)
+    @test sort([(first(p.points), last(p.points)) for p in stroke_paths]; by=string) ==
+          sort([(Vec2(0.0, 0.0), Vec2(5.0, 0.0)), (Vec2(5.0, 10.0), Vec2(0.0, 10.0))]; by=string)
+    @test all(p -> p.style.stroke === nothing,
+              [p for p in clipped.paths if p.style.fill !== nothing])
+
+    # Clip and mask content contributes its fill area, so an open child path
+    # clips like its closed triangle instead of raising an error.
+    open_clip = _audit3b_svg("""
+        <svg width="100" height="100">
+          <clipPath id="t"><path d="M0 0 L10 0 L0 10"/><line x1="0" y1="0" x2="9" y2="9"/></clipPath>
+          <mask id="m"><polyline points="0,0 10,0 0,10" fill="white"/></mask>
+          <rect width="10" height="10" clip-path="url(#t)"/>
+          <rect x="0" y="0" width="10" height="10" mask="url(#m)"/>
+        </svg>""")
+    meshes = svg_meshes(open_clip)
+    @test length(meshes) == 2
+    @test _audit3b_area(meshes[1].geometry) ≈ 50.0
+    @test _audit3b_area(meshes[2].geometry) ≈ 50.0
+end
