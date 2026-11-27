@@ -462,17 +462,76 @@ _b3_vec(v::Vec3) = (v.x, v.y, v.z)
     # cam = new PerspectiveCamera(); cam.position.set(0.5,1,-1); parent.add(cam);
     # cam.lookAt(3,4,-5): rotation (0.5719613004512871, 0.1538573050742357,
     # -0.281669594726074).
-    p, _ = _b3_rig()
-    camera = PerspectiveCamera()
-    camera.position = Vec3(0.5, 1.0, -1.0)
-    add!(p, camera)
-    @test Diff3D.look_at!(camera, Vec3(3.0, 4.0, -5.0)) === camera
-    @test _b3_close(_b3_euler(camera.rotation),
-                    (0.5719613004512871, 0.1538573050742357, -0.281669594726074); atol=4e-15)
-    # The target-aimed view looks at the world target too.
-    world_position = Diff3D._camera_world_position(camera)
-    @test _b3_close(_b3_vec(Diff3D.get_world_direction(camera)),
-                    _b3_vec(normalize(Vec3(3.0, 4.0, -5.0) - world_position)); atol=1e-14)
+    # Passing up=(0,1,0) gives three.js's world-space hint (camera.up) for
+    # both camera modes.
+    for driven in (false, true)
+        p, _ = _b3_rig()
+        camera = PerspectiveCamera(rotation_driven=driven)
+        camera.position = Vec3(0.5, 1.0, -1.0)
+        add!(p, camera)
+        @test Diff3D.look_at!(camera, Vec3(3.0, 4.0, -5.0); up=Vec3(0.0, 1.0, 0.0)) === camera
+        @test _b3_close(_b3_euler(camera.rotation),
+                        (0.5719613004512871, 0.1538573050742357, -0.281669594726074); atol=4e-15)
+        # The target-aimed view looks at the world target too. (A
+        # rotation-driven camera under this non-uniformly scaled parent is
+        # sheared, which three.js lookAt documents as unsupported.)
+        driven && continue
+        world_position = Diff3D._camera_world_position(camera)
+        @test _b3_close(_b3_vec(Diff3D.get_world_direction(camera)),
+                        _b3_vec(normalize(Vec3(3.0, 4.0, -5.0) - world_position)); atol=1e-14)
+    end
+    # The full view, including its roll, equals three.js for a camera under a
+    # rotated, scaled parent: p = Group at (1,-2,0.5), rotation (0.3,-0.4,0.9),
+    # scale 1.5; cam = new PerspectiveCamera(50, 1, 0.1, 2000) at (0.5,1,-1),
+    # cam.up.set(0.2,1,-0.3); p.add(cam); cam.lookAt(3,4,-5);
+    # cam.projectionMatrix × cam.matrixWorldInverse.
+    roll_pv = (1.986097983780976, -0.39987474231768666, 0.3279186776118217,
+               0.32788588738357194, -0.1593008785061298, 1.6342918291294142,
+               0.6432686581827896, 0.6432043345331537, 0.7930623941668826,
+               1.3296993418854461, -0.6920077992873546, -0.6919386019672918,
+               -1.3557784664839927, 1.3109536198626326, -0.9070270017527926,
+               -0.7069463030875507)
+    for driven in (false, true)
+        p = Group()
+        p.position = Vec3(1.0, -2.0, 0.5)
+        p.rotation = Euler(0.3, -0.4, 0.9)
+        p.scale = Vec3(1.5, 1.5, 1.5)
+        camera = PerspectiveCamera(fov=50 * (π / 180), near=0.1, far=2000.0,
+                                   rotation_driven=driven)
+        camera.position = Vec3(0.5, 1.0, -1.0)
+        add!(p, camera)
+        Diff3D.look_at!(camera, Vec3(3.0, 4.0, -5.0); up=Vec3(0.2, 1.0, -0.3))
+        @test _b3_close(_b3_euler(camera.rotation),
+                        (0.29591050285471376, -0.3076941258661294, -0.8186777123297673);
+                        atol=4e-15)
+        @test _b3_close((projection_matrix(camera) * view_matrix(camera)).e, roll_pv;
+                        atol=1e-14)
+        # Without `up`, the rotation and the rendered view agree and repeated
+        # calls are idempotent.
+        aimed = PerspectiveCamera(rotation_driven=driven)
+        aimed.position = Vec3(0.5, 1.0, -1.0)
+        add!(p, aimed)
+        Diff3D.look_at!(aimed, Vec3(3.0, 4.0, -5.0))
+        rotation = Diff3D.mat4_extract_rotation(compute_world_matrix(aimed)).e
+        view = view_matrix(aimed)
+        axes = mat4_transpose(view).e
+        @test _b3_close(Tuple(rotation[i] for i in (1, 2, 3, 5, 6, 7, 9, 10, 11)),
+                        Tuple(axes[i] for i in (1, 2, 3, 5, 6, 7, 9, 10, 11)); atol=1e-14)
+        Diff3D.look_at!(aimed, Vec3(3.0, 4.0, -5.0))
+        @test _b3_close(view_matrix(aimed).e, view.e; atol=1e-15)
+    end
+    # three.js extractRotation returns the identity for a singular parent, so
+    # lookAt under a zero-scaled parent stays finite: p.scale.set(0,1,1);
+    # p.rotation.set(0.2,0.3,0.4); child at (1,2,3); child.lookAt(4,5,6).
+    singular = Group()
+    singular.scale = Vec3(0.0, 1.0, 1.0)
+    singular.rotation = Euler(0.2, 0.3, 0.4)
+    flat = Object3D()
+    flat.position = Vec3(1.0, 2.0, 3.0)
+    add!(singular, flat)
+    Diff3D.look_at!(flat, Vec3(4.0, 5.0, 6.0))
+    @test _b3_close(_b3_euler(flat.rotation),
+                    (-0.9720116751868411, 0.6965339355574427, 0.7545968544337842); atol=4e-15)
     # Target-aimed cameras reject rotation updates that their view ignores.
     @test_throws ArgumentError Diff3D.rotate_x!(PerspectiveCamera(), 0.1)
     driven = PerspectiveCamera(rotation_driven=true)
@@ -575,6 +634,15 @@ end
     @test Diff3D.clear_children!(root) === root
     @test isempty(get_children(root)) && get_parent(a) === nothing &&
           get_parent(hidden) === nothing
+    # Clearing an LOD drops its levels, as removing each child does.
+    lod = LOD()
+    near_level = Object3D()
+    far_level = Object3D()
+    add_lod_level!(lod, 0.0, near_level)
+    add_lod_level!(lod, 10.0, far_level)
+    @test Diff3D.clear_children!(lod) === lod
+    @test isempty(get_children(lod)) && isempty(lod.levels)
+    @test lod_select(lod, 5.0) === nothing && lod_update!(lod, 5.0) === nothing
 end
 
 # Oracle values below come from node running three.js r186 on the same inputs
@@ -600,6 +668,9 @@ _b3_allocations(f::F) where {F} = (f(); @allocated f())
     @test _b3_close(_b3_v(Diff3D.vec3_clamp_length(Vec3(0.1, 0.2, 0.1), 1, 2)),
                     (0.40824829046386296, 0.8164965809277259, 0.40824829046386296))
     @test Diff3D.vec3_clamp_length(Vec3(), 1.0, 2.0) == Vec3()
+    # new Vector3(3,0,4).clampLength(2,1): MathUtils.clamp gives max(min, ...).
+    @test _b3_close(_b3_v(Diff3D.vec3_clamp_length(Vec3(3.0, 0.0, 4.0), 2.0, 1.0)),
+                    (1.2000000000000002, 0.0, 1.6); atol=4e-16)
     @test _b3_close(_b3_v(Diff3D.vec3_apply_axis_angle(a, n, 1.1)), # applyAxisAngle
                     (2.598089448953643, -0.2387867228050778, -0.0735670867152321); atol=1e-15)
     @test _b3_close(_b3_v(Diff3D.vec3_apply_euler(a, Euler(0.3, -0.7, 1.2, :ZXY))),  # applyEuler
@@ -621,6 +692,10 @@ _b3_allocations(f::F) where {F} = (f(); @allocated f())
                      0.0, 0.0, 0.0, 1.0))
     @test Diff3D.mat4_make_shear(0.1, 0.2, 0.3, 0.4, 0.5, 0.6).e ==  # makeShear
           (1.0, 0.1, 0.2, 0.0, 0.3, 1.0, 0.4, 0.0, 0.5, 0.6, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0)
+    @test Diff3D.mat4_make_shear(0.1f0, 0.2f0, 0.3f0, 0.4f0, 0.5f0, 0.6f0) isa Mat4{Float32}
+    # new Matrix4().extractRotation(new Matrix4().makeScale(0,2,3)) is the
+    # identity (Matrix4.js:289-295: determinantAffine() === 0).
+    @test Diff3D.mat4_extract_rotation(mat4_scaling(0.0, 2.0, 3.0)).e == Mat4().e
     @test _b3_close(Diff3D.mat4_extract_rotation(m).e,                # extractRotation
                     (0.8083070667743454, 0.35701964169862993, 0.4681630712092062, 0.0,
                      -0.44158016313715576, 0.893559408727084, 0.08098482943778701, 0.0,

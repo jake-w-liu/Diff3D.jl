@@ -2471,7 +2471,9 @@ vec3_reflect(v::Vec3, normal::Vec3) = v - normal * (2 * dot(v, normal))
 function vec3_clamp_length(v::Vec3, min_length::Real, max_length::Real)
     len = norm(v)
     divisor = iszero(_primal_value(len)) ? one(len) : len
-    return (v / divisor) * clamp(len, min_length, max_length)
+    # MathUtils.clamp is max(min, min(max, value)), which differs from
+    # Base.clamp when min_length > max_length.
+    return (v / divisor) * max(min_length, min(max_length, len))
 end
 
 """
@@ -2545,8 +2547,8 @@ mat4_get_scale(m::Mat4) = Vec3(_mat4_linear_column_norm(m, 1),
 """
     mat4_get_column(m, index)
 
-Column `index` (1 to 4) of `m` as a `Vec4` (three.js
-`Vector4.setFromMatrixColumn` with a zero-based index).
+Column `index` (1 to 4) of `m` as a `Vec4`. three.js
+`Vector3.setFromMatrixColumn(m, index - 1)` returns its first three components.
 """
 function mat4_get_column(m::Mat4, index::Integer)
     1 <= index <= 4 || throw(ArgumentError("mat4_get_column index must be in 1:4"))
@@ -2593,10 +2595,18 @@ mat4_extract_basis(m::Mat4) = (Vec3(m.e[1], m.e[2], m.e[3]),
 
 Rotation part of `m`: its linear columns divided by their lengths, without
 translation (three.js `Matrix4.extractRotation`; the result is not a pure
-rotation when `m` has shear).
+rotation when `m` has shear). As in three.js r186, a singular upper-left 3×3
+block gives the identity.
 """
 function mat4_extract_rotation(m::Mat4)
     e = m.e
+    # three.js Matrix4.extractRotation returns the identity when
+    # determinantAffine() === 0 (src/math/Matrix4.js:289-295).
+    if iszero(_primal_value(_mat4_determinant_affine(m)))
+        z = zero(one(e[1]) / one(e[1]))
+        l = one(z)
+        return Mat4((l, z, z, z, z, l, z, z, z, z, l, z, z, z, z, l))
+    end
     sx = one(e[1]) / _mat4_linear_column_norm(m, 1)
     sy = one(e[1]) / _mat4_linear_column_norm(m, 2)
     sz = one(e[1]) / _mat4_linear_column_norm(m, 3)
@@ -2632,8 +2642,8 @@ Shear matrix (three.js `Matrix4.makeShear`): `xy` is the amount x is sheared
 by y, and so on.
 """
 function mat4_make_shear(xy, xz, yx, yz, zx, zy)
-    T = promote_type(typeof(xy), typeof(xz), typeof(yx), typeof(yz),
-                     typeof(zx), typeof(zy), Float64)
+    T = float(promote_type(typeof(xy), typeof(xz), typeof(yx), typeof(yz),
+                           typeof(zx), typeof(zy)))
     o, l = zero(T), one(T)
     return Mat4{T}((l, convert(T, xy), convert(T, xz), o,
                     convert(T, yx), l, convert(T, yz), o,

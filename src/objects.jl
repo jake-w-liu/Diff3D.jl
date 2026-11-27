@@ -547,6 +547,15 @@ function remove!(lod::LOD, child::AbstractObject3D)
     return lod
 end
 
+# Removing every child drops every level, as `remove!` does one at a time.
+function clear_children!(lod::LOD)
+    invoke(clear_children!, Tuple{AbstractObject3D}, lod)
+    empty!(lod.levels)
+    empty!(lod._camera_levels)
+    lod._manual_level = 0
+    return lod
+end
+
 """
 Highest-distance LOD level whose threshold ≤ `distance` (three.js
 `getObjectForDistance`). A currently visible level's threshold is reduced by its

@@ -773,17 +773,8 @@ end
 
 # Rotation part of a world matrix with the column scales removed
 # (three.js Matrix4.extractRotation followed by Quaternion.setFromRotationMatrix).
-function _world_rotation_quaternion(world::Mat4)
-    e = world.e
-    sx = 1 / _norm3(e[1], e[2], e[3])
-    sy = 1 / _norm3(e[5], e[6], e[7])
-    sz = 1 / _norm3(e[9], e[10], e[11])
-    rotation = Mat4((e[1] * sx, e[2] * sx, e[3] * sx, 0.0,
-                     e[5] * sy, e[6] * sy, e[7] * sy, 0.0,
-                     e[9] * sz, e[10] * sz, e[11] * sz, 0.0,
-                     0.0, 0.0, 0.0, 1.0))
-    return quat_from_rotation_matrix(rotation)
-end
+_world_rotation_quaternion(world::Mat4) =
+    quat_from_rotation_matrix(mat4_extract_rotation(world))
 
 # three.js Object3D.lookAt (src/core/Object3D.js:609-643): cameras and lights
 # point their -z axis at the target, other objects their +z axis.

@@ -778,27 +778,43 @@ function _camera_local_aim(camera::AbstractCamera, world_target::Vec3, world_up:
 end
 
 """
-    look_at!(camera::AbstractCamera, target; up=camera.up) -> camera
+    look_at!(camera::AbstractCamera, target; up=nothing) -> camera
 
 Aim `camera` at the world-space `target`. As in three.js `Object3D.lookAt`
 for cameras, `rotation` is set so that the local -z axis points at `target`
-with `up` as the up hint, accounting for the parent's world rotation. A camera
-that is not `rotation_driven` also stores the equivalent parent-space
-`target`, so its view matrix looks at `target`.
+with the world-space up hint `up`, accounting for the parent's world rotation.
+
+Without `up`, a `rotation_driven` camera uses `camera.up` as the world-space
+hint (three.js `camera.up`). A target-aimed camera (not `rotation_driven`)
+keeps the world up direction its view already uses: its `up` field is in its
+parent's frame, so this equals three.js for an unparented camera or a parent
+without rotation. A target-aimed camera also stores the parent-space `target`
+(and, when `up` is given, the parent-space `up`) that reproduce this aim, so
+its view matrix equals the view implied by the new `rotation`.
 """
-function look_at!(camera::AbstractCamera, target::Vec3; up::Vec3=camera.up)
-    point = _validated_camera_vector(target, nameof(typeof(camera)), :target)
-    up_vector = _validated_camera_vector(up, nameof(typeof(camera)), :up)
+function look_at!(camera::AbstractCamera, target::Vec3;
+                  up::Union{Nothing, Vec3}=nothing)
+    kind = nameof(typeof(camera))
+    point = _validated_camera_vector(target, kind, :target)
+    up_vector = if up !== nothing
+        _validated_camera_vector(up, kind, :up)
+    elseif camera.rotation_driven
+        _validated_camera_vector(camera.up, kind, :up)
+    else
+        # World up of the current target/up aim (the parent-space `up` field
+        # transformed by the parent), so the view keeps its roll convention.
+        _camera_world_pose(camera)[3]
+    end
     q = _look_at_quaternion(camera, point, up_vector, true)
     rotation = euler_from_quaternion(quat_normalize(q), camera.rotation.order)
     isfinite(rotation.x) && isfinite(rotation.y) && isfinite(rotation.z) ||
-        throw(ArgumentError("$(nameof(typeof(camera))) look_at! rotation is not finite"))
-    camera.rotation = rotation
+        throw(ArgumentError("$kind look_at! rotation is not finite"))
     if !camera.rotation_driven
-        local_target, _ = _camera_local_aim(camera, point, up_vector)
-        camera.target = _validated_camera_vector(
-            local_target, nameof(typeof(camera)), :target)
+        local_target, local_up = _camera_local_aim(camera, point, up_vector)
+        camera.target = _validated_camera_vector(local_target, kind, :target)
+        up === nothing || (camera.up = _validated_camera_vector(local_up, kind, :up))
     end
+    camera.rotation = rotation
     return camera
 end
 
