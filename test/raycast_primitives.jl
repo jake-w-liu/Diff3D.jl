@@ -60,16 +60,20 @@ end
     path.indices=[3,1,2];set_draw_range!(path,2,2)
     set_instance_matrix!(loop,1,mat4_translation(-1.0,0.25,0.0)*mat4_scaling(2.0,0.5,1.0))
     picker.ray=Ray(Vec3(0.0,0.258,3.0),Vec3(0.0,0.0,-1.0))
-    nearby=only(raycast(picker,loop))
-    @test nearby.face_index==1 && nearby.instance_id==1
-    @test nearby.point.y≈0.25 atol=1e-15
+    # A two-entry LineLoop also tests its closing segment, and each hit
+    # reports its draw entry (three.js Line.raycast, src/objects/Line.js:
+    # `index: i` and `end - 1`; r186 gives indices 1 and 2, 0-based, here).
+    nearby=raycast(picker,loop)
+    @test sort([hit.face_index for hit in nearby])==[2,3]
+    @test all(hit->hit.instance_id==1,nearby)
+    @test all(hit->isapprox(hit.point.y,0.25;atol=1e-15),nearby)
     picker.ray=Ray(Vec3(0.0,0.262,3.0),Vec3(0.0,0.0,-1.0))
     @test isempty(raycast(picker,loop))
     picker.ray=Ray(Vec3(0.0,0.258,3.0),Vec3(0.0,0.0,-1.0))
     layers_set!(object_layers(loop),1);layers_set!(picker.layers,0)
     @test isempty(raycast(picker,loop))
     layers_enable!(picker.layers,1)
-    @test length(raycast(picker,loop))==1
+    @test length(raycast(picker,loop))==2
     set_instance_matrix!(loop,1,mat4_translation(2.0,0.25,0.0))
     @test isempty(raycast(picker,loop))
     empty!(loop.instance_matrices);empty!(loop.instance_colors)
