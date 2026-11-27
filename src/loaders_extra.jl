@@ -9949,7 +9949,10 @@ function _gltf_line_material(mat)
 end
 
 function _gltf_points_material(mat)
+    # glTF points are one pixel; three.js GLTFLoader.js:3514 disables size
+    # attenuation for the same reason.
     PointsMaterial(color=_gltf_material_color(mat),
+                   size_attenuation=false,
                    opacity=_gltf_material_opacity(mat),
                    transparent=_gltf_material_transparent(mat),
                    map=_gltf_material_map(mat),
