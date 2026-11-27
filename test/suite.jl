@@ -10077,10 +10077,15 @@ end
         @test shapes == svg_shapes(svg_path; curve_segments=2, circle_segments=8)
         @test length(shapes[end]) == 8
         geo = svg_geometry(svg)
-        @test geo.n_vertices == 20
-        @test geo.n_faces == 12
+        # The open polyline (3 points, 1 triangle) and the open curve subpath
+        # (5 points, 3 triangles) fill as if closed (SVG 1.1 section 11.3);
+        # three.js r186 SVGLoader + ShapePath.toShapes oracle fills them with
+        # areas 1 and 2.25 (audit3b_svg_loader.jl). These counts were 20/12
+        # when open subpaths were skipped.
+        @test geo.n_vertices == 28
+        @test geo.n_faces == 16
         @test isempty(geo.groups)
-        @test svg_geometry(svg_path; curve_segments=2, circle_segments=8).n_faces == 12
+        @test svg_geometry(svg_path; curve_segments=2, circle_segments=8).n_faces == 16
         rm(svg_path)
 
         view_path = tempname() * ".svg"
