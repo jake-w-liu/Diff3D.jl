@@ -234,3 +234,45 @@ end
     average = Diff3D._web_texture_average_color(Texture(rgb))
     @test [average.r, average.g, average.b] ≈ [0.3, 0.5, 0.7]
 end
+
+function _audit3_many_objects_case(count)
+    scene = Scene()
+    add!(scene, AmbientLight(intensity=0.3))
+    geometry = BoxGeometry()
+    for index in 1:count
+        group = Group()
+        group.position = Vec3(0.01 * index, 0.0, 0.0)
+        mesh = Mesh(geometry, MeshStandardMaterial(color=Color3(0.5, 0.25, index / count));
+                    name="box$index")
+        add!(group, mesh)
+        add!(scene, group)
+    end
+    return WebGLExportCase("many", "Many", "objects", scene)
+end
+
+function _audit3_data_json_allocations(case, io)
+    seekstart(io)
+    truncate(io, 0)
+    Diff3D._web_write_data_json(io, [case])
+    seekstart(io)
+    truncate(io, 0)
+    return @allocated Diff3D._web_write_data_json(io, [case])
+end
+
+@testset "WebGL export integer text and per-object allocation budget" begin
+    for x in (0, 7, 10, 99, 100, 12345, -1, -10, -987654321, typemax(Int), typemin(Int))
+        io = IOBuffer()
+        Diff3D._web_print_int(io, x)
+        @test String(take!(io)) == string(x)
+    end
+    if Base.JLOptions().opt_level > 0
+        count = 300
+        case = _audit3_many_objects_case(count)
+        io = IOBuffer(sizehint=4_000_000)
+        bytes = _audit3_data_json_allocations(case, io)
+        # v1.1.1 allocated about 2.9 KiB (1.13) to 3.3 KiB (1.10) per drawable
+        # through boxed texture registries and per-integer strings; the
+        # remaining cost is matrix/material boxing at dynamic call sites.
+        @test bytes <= 2400 * count
+    end
+end
