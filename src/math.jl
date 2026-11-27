@@ -2562,11 +2562,8 @@ end
 """
 function mat4_set_position(m::Mat4, position::Vec3)
     T = promote_type(eltype(m.e), _vec3_eltype(position))
-    e = map(value -> convert(T, value), m.e)
-    e = Base.setindex(e, convert(T, position.x), 13)
-    e = Base.setindex(e, convert(T, position.y), 14)
-    e = Base.setindex(e, convert(T, position.z), 15)
-    return Mat4{T}(e)
+    p = (position.x, position.y, position.z)
+    return Mat4{T}(ntuple(i -> convert(T, 13 <= i <= 15 ? p[i - 12] : m.e[i]), Val(16)))
 end
 
 """

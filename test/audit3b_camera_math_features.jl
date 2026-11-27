@@ -581,6 +581,7 @@ end
 # (src/math/Vector3.js, Matrix4.js, Sphere.js, Box3.js, Plane.js, Ray.js,
 # Triangle.js, MathUtils.js); the three.js method is named by each check.
 _b3_v(v) = (v.x, v.y, v.z)
+_b3_allocations(f::F) where {F} = (f(); @allocated f())
 
 @testset "audit3b: Vector3 and Matrix4 additions match three.js" begin
     a = Vec3(1.5, -2.0, 0.75); b = Vec3(-0.5, 3.0, 2.25); n = Vec3(0.6, 0.0, 0.8)
@@ -806,17 +807,19 @@ end
     @test Diff3D.vec3_angle_to(Vec3(zero_dual, zero_dual, zero_dual), Vec3(1.0, 0.0, 0.0)) ≈ π / 2
     @test ForwardDiff.derivative(t -> Diff3D.smoothstep(t, 0.0, 2.0), 0.5) ≈ 6 * 0.25 * 0.75 / 2
     if Base.JLOptions().opt_level > 0
-        s = BoundingSphere(Vec3(1.0, 2.0, 3.0), 2.5)
-        m = mat4_compose(Vec3(1.0, 2.0, 3.0), quat_from_euler(0.3, -0.4, 0.5), Vec3(2.0, 0.5, 1.5))
-        checks = (() -> Diff3D.ray_intersect_box(ray, Box3(Vec3(-1.0, -2.0, -3.0), Vec3(2.0, 1.0, 0.5))),
-                  () -> Diff3D.ray_distance_sq_to_segment(ray, Vec3(0.0, -1.0, 1.0), Vec3(1.0, 2.0, -1.0)),
-                  () -> Diff3D.sphere_union(s, BoundingSphere(Vec3(-2.0, 0.0, 1.0), 1.5)),
-                  () -> Diff3D.sphere_apply_matrix4(s, m),
-                  () -> Diff3D.plane_apply_matrix4(Plane(Vec3(0.0, 1.0, 0.0), -2.0), m),
-                  () -> Diff3D.mat4_set_position(m, Vec3()))
-        for check in checks
-            check()
-            @test (@allocated check()) == 0
+        # `let` makes the closures capture typed locals; the helper is a
+        # function barrier so only the call under test is measured.
+        let ray = ray, s = BoundingSphere(Vec3(1.0, 2.0, 3.0), 2.5),
+            m = mat4_compose(Vec3(1.0, 2.0, 3.0), quat_from_euler(0.3, -0.4, 0.5), Vec3(2.0, 0.5, 1.5))
+            checks = (() -> Diff3D.ray_intersect_box(ray, Box3(Vec3(-1.0, -2.0, -3.0), Vec3(2.0, 1.0, 0.5))),
+                      () -> Diff3D.ray_distance_sq_to_segment(ray, Vec3(0.0, -1.0, 1.0), Vec3(1.0, 2.0, -1.0)),
+                      () -> Diff3D.sphere_union(s, BoundingSphere(Vec3(-2.0, 0.0, 1.0), 1.5)),
+                      () -> Diff3D.sphere_apply_matrix4(s, m),
+                      () -> Diff3D.plane_apply_matrix4(Plane(Vec3(0.0, 1.0, 0.0), -2.0), m),
+                      () -> Diff3D.mat4_set_position(m, Vec3()))
+            for check in checks
+                @test _b3_allocations(check) == 0
+            end
         end
     end
 end
