@@ -1023,13 +1023,28 @@ function _cube_face_uv(dir::Vec3)
 end
 
 # Face samples address storage rows from the top for NEAREST texel selection
-# (see `_nearest_texel_indices`); bilinear weights are unaffected.
+# (see `_nearest_texel_indices`); bilinear weights are unaffected. A cube-map
+# lookup addresses the face directly: GL selects the face from the major axis
+# and ignores the wrap modes for cube faces (OpenGL ES 3.0 cube map texture
+# selection; ES 3.0 filters seamlessly across faces) and three.js has no UV transform for environment maps
+# (envmap_fragment.glsl.js:39 `textureCube(envMap, envMapRotation * reflectVec)`).
+# The face's own wrap modes and UV matrix therefore do not apply; the web export
+# likewise sets CLAMP_TO_EDGE on its cube textures.
 @inline _sample_cube_face(tex::Texture, u, v) =
-    _sample_texture_filtered(tex, u, v, tex.filter, true)
+    _sample_cube_face_data(tex.data, tex.filter, u, v, "sample_cube")
+
+@inline function _sample_cube_face_data(data::Array{Float64,3}, filter::Symbol, u, v,
+                                        label::String)
+    return _sample_texture_data(data, :clamp, :clamp, filter,
+                                _sanitize_uv(u), _sanitize_uv(v), label, true)
+end
 
 function _sample_cube_face_lod(tex::Texture, u, v, lod::Int)
     _checked_texture_data_size(tex, "sample_texture_lod")
-    return _sample_texture_lod_filtered(tex, u, v, lod, tex.filter, true)
+    lod <= 0 && return _sample_cube_face(tex, u, v)
+    isempty(tex.mipmaps) && return _sample_cube_face(tex, u, v)
+    level = tex.mipmaps[min(lod, length(tex.mipmaps))]
+    return _sample_cube_face_data(level, tex.filter, u, v, "sample_texture_lod")
 end
 
 """Sample a cube map along direction `dir` (three.js cube-map convention)."""

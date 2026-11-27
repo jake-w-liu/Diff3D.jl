@@ -125,3 +125,62 @@ end
     @test rect.power ≈ 100pi rtol = 1e-15
     @test RectAreaLight(width=2.0, height=3.0).width == 2.0
 end
+
+# OpenGL ES 3.0 cube map texture selection (Table 3.21): major axis picks the
+# face, s = (sc/|ma| + 1)/2, t = (tc/|ma| + 1)/2 with t counted from the first
+# uploaded row. three.js uploads CubeTexture faces with flipY = false
+# (CubeTexture.js), so t = 0 is storage row 1.
+function _audit3b_gl_cube_texel(direction)
+    x, y, z = direction.x, direction.y, direction.z
+    ax, ay, az = abs(x), abs(y), abs(z)
+    if ax >= ay && ax >= az
+        face, sc, tc, ma = x > 0 ? (1, -z, -y, ax) : (2, z, -y, ax)
+    elseif ay >= az
+        face, sc, tc, ma = y > 0 ? (3, x, z, ay) : (4, x, -z, ay)
+    else
+        face, sc, tc, ma = z > 0 ? (5, x, -y, az) : (6, -x, -y, az)
+    end
+    return face, (sc / ma + 1) / 2, (tc / ma + 1) / 2
+end
+
+function _audit3b_cube_faces(filter; kwargs...)
+    return ntuple(6) do face
+        data = zeros(4, 4, 3)
+        for row in 1:4, col in 1:4
+            data[row, col, 1] = col
+            data[row, col, 2] = row
+            data[row, col, 3] = face
+        end
+        Texture(data; filter=filter, colorspace=:linear, kwargs...)
+    end
+end
+
+@testset "Cube lookups follow the GL face selection and clamp at face edges" begin
+    cube = CubeTexture(_audit3b_cube_faces(:nearest))   # faces keep wrap = :repeat
+    directions = [Vec3(1.0, 0.3, -0.2), Vec3(-1.0, -0.4, 0.7), Vec3(0.2, 1.0, 0.6),
+                  Vec3(-0.5, -1.0, -0.1), Vec3(0.6, -0.3, 1.0), Vec3(0.1, 0.8, -1.0),
+                  # exactly on face edges and corners
+                  Vec3(1.0, 0.0, -1.0), Vec3(1.0, 1.0, 1.0), Vec3(-1.0, 0.0, 1.0),
+                  Vec3(0.0, -1.0, 1.0), Vec3(-1.0, -1.0, -1.0)]
+    for direction in directions
+        face, s, t = _audit3b_gl_cube_texel(direction)
+        # GL ignores the wrap mode: an edge coordinate of 1 selects texel n-1.
+        expected = Color3(Float64(clamp(floor(Int, 4s), 0, 3) + 1),
+                          Float64(clamp(floor(Int, 4t), 0, 3) + 1), Float64(face))
+        @test sample_cube(cube, direction) == expected
+    end
+    # Bilinear edge sample: clamped to the edge column instead of blending in the
+    # opposite edge of the face (repeat would give the (4 + 1)/2 average).
+    bilinear = CubeTexture(_audit3b_cube_faces(:bilinear))
+    @test sample_cube(bilinear, Vec3(1.0, 0.0, -1.0)).r == 4.0
+    @test sample_cube(bilinear, Vec3(1.0, 0.0, -0.99)).r == 4.0
+    # A face UV transform is not part of a cube lookup (three.js envmap
+    # shaders sample textureCube(envMap, direction) with no uv transform).
+    shifted = CubeTexture(_audit3b_cube_faces(:nearest; offset=Vec2(0.5, 0.0)))
+    @test sample_cube(shifted, Vec3(1.0, 0.0, 0.0)) == sample_cube(cube, Vec3(1.0, 0.0, 0.0))
+    # Mip levels are clamped the same way.
+    faces = _audit3b_cube_faces(:nearest)
+    foreach(generate_mipmaps!, faces)
+    mipped = CubeTexture(faces)
+    @test sample_cube_lod(mipped, Vec3(1.0, 0.0, -1.0), 1.0).r == 3.5
+end
