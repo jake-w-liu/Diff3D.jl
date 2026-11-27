@@ -1114,8 +1114,11 @@ end
 
 # three.js treats `transparent` as authoritative: an opaque material with opacity below one is
 # still drawn opaque (WebGLRenderLists.js push:134, WebGLState.js setMaterial:765).
+# Line materials have no `transparent` field; there the CPU renderer blends when
+# opacity is below one (`_primitive_transparent`), and the export follows it.
 _web_material_transparent(mat) =
-    hasproperty(mat, :transparent) && Bool(getproperty(mat, :transparent))
+    hasproperty(mat, :transparent) ? Bool(getproperty(mat, :transparent)) :
+    _web_material_opacity(mat) < 1.0
 _web_material_side(mat) = hasproperty(mat, :side) ?
     String(_validated_material_side(getproperty(mat, :side))) : "front"
 _web_material_depth_test(mat) =
@@ -2842,6 +2845,9 @@ function _web_write_drawable_json(io::IO, obj, world::Mat4, num_buf::Vector{UInt
     _web_material_size(mat)
     _web_material_linewidth(mat)
     _validate_depth_material(mat)
+    # A wireframe keeps its mesh material's blending (three.js draws the same
+    # material as lines; the CPU wireframe pass also tests the mesh material).
+    transparent = _web_material_transparent(mat)
     wireframe && (mat = _web_wireframe_material(mat))
     if mode == "triangles" || mode == "sprite"
         _validate_web_triangle_geometry(geo)
@@ -2954,7 +2960,7 @@ function _web_write_drawable_json(io::IO, obj, world::Mat4, num_buf::Vector{UInt
     write(io, ",\"alphaTest\":")
     _js_write_num(io, _web_material_alpha_test(mat), num_buf)
     write(io, ",\"transparent\":")
-    write(io, _web_material_transparent(mat) ? "true" : "false")
+    write(io, transparent ? "true" : "false")
     write(io, ",\"side\":")
     _js_write_str(io, _web_material_side(mat))
     write(io, ",\"depthTest\":")
