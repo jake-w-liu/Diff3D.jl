@@ -38,18 +38,79 @@ end
                        colorspace=:linear)
     @test sample_texture(gradient, 0.5, 0.0).r == 1.0
 
-    # Every wrap mode at exact in-range texel boundaries.
-    for H in 1:5, W in 1:5, wrap_s in (:repeat, :clamp, :mirror),
+    # Every wrap mode at exact texel boundaries, including the reflected
+    # periods of mirrored repeat (GL wraps the integer texel index, so a
+    # boundary inside a reflected period selects the texel on its far side).
+    for H in (1, 2, 4, 8), W in (1, 2, 4, 8), wrap_s in (:repeat, :clamp, :mirror),
         wrap_t in (:repeat, :clamp, :mirror)
         values = reshape(collect(1.0:(H * W)), H, W, 1)
         texture = Texture(values; filter=:nearest, wrap_s, wrap_t,
                           colorspace=:linear)
-        for i in 0:W, j in 0:H
+        for i in -2W:3W, j in -2H:3H
             s, t = i / W, j / H
-            @test sample_texture(texture, s, t).r ==
-                  _audit3_gl_nearest(values, s, t, wrap_s, wrap_t)
+            expected = _audit3_gl_nearest(values, s, t, wrap_s, wrap_t)
+            @test sample_texture(texture, s, t).r == expected
+            @test Diff3D.sample_texture_channel(texture, s, t, 1) == expected
         end
     end
+    mirrored = Texture(reshape([0.0, 1.0, 2.0, 3.0], 1, 4, 1); filter=:nearest,
+                       wrap_s=:mirror, colorspace=:linear)
+    # s = 1.25 is texel coordinate 5, which mirrors to texel 2 (not 3).
+    @test sample_texture(mirrored, 1.25, 0.5).r == 2.0
+    @test sample_texture(mirrored, -0.75, 0.5).r == 2.0
+end
+
+# GLES 3.0 table 3.21 face selection; t counts rows from the first uploaded
+# row, which is storage row 1 because CubeTexture.js sets `flipY = false`.
+function _audit3_gl_cube_texel(d)
+    x, y, z = d
+    ax, ay, az = abs.(d)
+    if ax >= ay && ax >= az
+        face = x > 0 ? 1 : 2; sc = x > 0 ? -z : z; tc = -y; ma = ax
+    elseif ay >= az
+        face = y > 0 ? 3 : 4; sc = x; tc = y > 0 ? z : -z; ma = ay
+    else
+        face = z > 0 ? 5 : 6; sc = z > 0 ? x : -x; tc = -y; ma = az
+    end
+    return face, (tc / ma + 1) / 2, (sc / ma + 1) / 2
+end
+
+@testset "Nearest cube faces select GL texels" begin
+    for N in (1, 2, 4, 8)
+        faces = ntuple(face -> begin
+            data = zeros(N, N, 3)
+            for row in 1:N, col in 1:N
+                data[row, col, 1] = face
+                data[row, col, 2] = row - 1
+                data[row, col, 3] = col - 1
+            end
+            Texture(data; filter=:nearest, wrap_s=:clamp, wrap_t=:clamp,
+                    colorspace=:linear)
+        end, 6)
+        cube = CubeTexture(faces)
+        for a in (1 - 2N):(2N - 1), b in (1 - 2N):(2N - 1), axis in 1:6
+            p, q = a / (2N), b / (2N)
+            d = axis == 1 ? (1.0, p, q) : axis == 2 ? (-1.0, p, q) :
+                axis == 3 ? (p, 1.0, q) : axis == 4 ? (p, -1.0, q) :
+                axis == 5 ? (p, q, 1.0) : (p, q, -1.0)
+            face, t, s = _audit3_gl_cube_texel(d)
+            color = sample_cube(cube, Vec3(d...))
+            @test (color.r, color.g, color.b) ==
+                  (face, clamp(floor(Int, t * N), 0, N - 1),
+                   clamp(floor(Int, s * N), 0, N - 1))
+        end
+    end
+    # The face centre of an even face reads storage row N/2 + 1 (1-based),
+    # at every explicit LOD as well as in sample_cube.
+    data = zeros(4, 4, 3); data[3, 3, :] .= 1.0
+    face = Texture(data; filter=:nearest, colorspace=:linear)
+    generate_mipmaps!(face)
+    cube = CubeTexture(ntuple(_ -> face, 6))
+    @test sample_cube(cube, Vec3(1.0, 0.0, 0.0)).r == 1.0
+    @test sample_cube_lod(cube, Vec3(1.0, 0.0, 0.0), 0).r == 1.0
+    # Level 1 (2x2) holds 1/4 at storage [2, 2]; level 2 (1x1) holds 1/16.
+    @test sample_cube_lod(cube, Vec3(1.0, 0.0, 0.0), 1).r == 0.25
+    @test sample_cube_lod(cube, Vec3(1.0, 0.0, 0.0), 1.5).r ≈ 5 / 32
 end
 
 @testset "Material defaults follow the three.js classes" begin
@@ -105,6 +166,22 @@ end
     @test DataTexture(reshape([0.0, 1.0], 1, 2, 1); filter=:bilinear).filter === :bilinear
     @test sample_texture(DepthTexture([0.25 0.75]; filter=:linear), 0.5, 0.5).r == 0.5
     @test CanvasTexture(reshape([0.0, 1.0], 1, 2, 1)).filter === :bilinear
+    # node: new THREE.DataTexture(data, 1, 1, RGBAFormat, UnsignedByteType,
+    # undefined, undefined, undefined, LinearFilter) has magFilter
+    # LinearFilter and minFilter NearestFilter; the base filter follows
+    # magnification, as in the glTF loader.
+    for make in (() -> DataTexture(reshape([0.0, 1.0], 1, 2, 1); mag_filter=:linear),
+                 () -> DepthTexture([0.0 1.0]; mag_filter=:linear))
+        texture = make()
+        @test texture.mag_filter === :linear
+        @test texture.min_filter === :nearest
+        @test texture.filter === :bilinear
+        @test sample_texture(texture, 0.5, 0.5).r == 0.5
+    end
+    mip_only = DataTexture(reshape([0.0, 1.0], 1, 2, 1);
+                           min_filter=:linear_mipmap_linear)
+    @test (mip_only.filter, mip_only.mag_filter, mip_only.min_filter) ===
+          (:nearest, :nearest, :linear_mipmap_linear)
 end
 
 @testset "Samplers return one concrete type for Dual coordinates" begin
