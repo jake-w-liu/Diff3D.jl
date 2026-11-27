@@ -383,3 +383,20 @@ end
     @test _audit3b_covers(direct, (10.25, -0.5))
     @test _audit3b_covers(direct, (10.9, -0.9))
 end
+
+function _audit3b_path_parse_overhead(d)
+    Diff3D._svg_path_points(d, 4)
+    Diff3D._svg_lex(d, Diff3D._SVG_PATH_TOKEN_RE, "SVG path data")
+    total = @allocated Diff3D._svg_path_points(d, 4)
+    lex = @allocated Diff3D._svg_lex(d, Diff3D._SVG_PATH_TOKEN_RE, "SVG path data")
+    return total - lex
+end
+
+@testset "SVG path data parsing allocates only its tokens and points" begin
+    # Beyond lexing, parsing 1000 L commands only builds the point vector
+    # (about 44 KB measured on Julia 1.13). Parse state captured and
+    # reassigned by closures was boxed and allocated per number (about 260 KB).
+    d = "M0 0" * join([" L$(i % 7).5 $(i % 5).25" for i in 1:1000])
+    @test length(only(Diff3D._svg_path_points(d, 4)).points) == 1001
+    @test _audit3b_path_parse_overhead(d) < 120_000
+end
