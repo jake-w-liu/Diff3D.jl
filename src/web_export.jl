@@ -227,6 +227,12 @@ function _js_write_str(io::IO, s::AbstractString)
             write(io, "\\u2028")
         elseif c == '\u2029'
             write(io, "\\u2029")
+        elseif c < ' '
+            # The HTML script-data tokenizer replaces a raw U+0000 with U+FFFD
+            # before JavaScript sees it; escape every remaining C0 control.
+            write(io, "\\u00")
+            write(io, UInt8('0') + UInt8(c) >> 4)
+            write(io, "0123456789abcdef"[(UInt8(c) & 0x0f) + 1])
         else
             isvalid(c) || throw(ArgumentError(
                 "WebGL export strings must be valid Unicode; got $(repr(s))"))
@@ -250,15 +256,39 @@ function _js_str(s::AbstractString)
 end
 const _WEB_NUM_BUFFER_BYTES = 64
 const _WEB_NUM_PRINTF_FORMAT = Printf.Format("%.17g")
-const _WEB_INT_PRINTF_FORMAT = Printf.Format("%d")
 
 _web_num_buffer() = Base.StringVector(_WEB_NUM_BUFFER_BYTES)
 
 @inline function _js_write_int(io::IO, x::Int, buf::Vector{UInt8})
     # A signed 64-bit decimal needs at most 20 bytes.
     length(buf) < 21 && resize!(buf, 21)
-    n = Printf.format(buf, 1, _WEB_INT_PRINTF_FORMAT, x) - 1
+    pos = 1
+    if x < 0
+        @inbounds buf[1] = UInt8('-')
+        pos = 2
+    end
+    # Two's-complement magnitude; also exact for typemin(Int).
+    v = x < 0 ? zero(UInt64) - (x % UInt64) : x % UInt64
+    n = _web_write_decimal_digits!(buf, pos, v, ndigits(v)) - 1
     GC.@preserve buf unsafe_write(io, pointer(buf), UInt(n))
+    return nothing
+end
+
+# Same text as `print(io, x)` for an Int, without allocating a String per call.
+function _web_print_int(io::IO, x::Int)
+    if x < 0
+        write(io, UInt8('-'))
+    end
+    v = x < 0 ? zero(UInt64) - (x % UInt64) : x % UInt64
+    scale = UInt64(1)
+    while v ÷ scale >= UInt64(10)
+        scale *= UInt64(10)
+    end
+    while true
+        write(io, UInt8('0') + ((v ÷ scale) % UInt64(10)) % UInt8)
+        scale == 1 && break
+        scale ÷= UInt64(10)
+    end
     return nothing
 end
 
@@ -268,12 +298,118 @@ function _js_num(x::Real)
     return String(take!(io))
 end
 
-# Printf's buffer method preserves %.17g formatting without a per-number
-# allocation or a platform-dependent libc symbol lookup. The 64-byte buffer
-# also fits the scientific-notation scratch output used by general formatting.
+# Exported numbers use Printf's "%.17g" text (round-trip exact). Printf derives
+# the %g exponent from a 17-decimal `Ryu.writeexp` (18 significant digits) and
+# then formats again with `writefixed`, so every number costs two Ryu passes.
+# `_web_format_g17!` produces the same bytes for the fixed-notation range with
+# exact integer arithmetic: a normal double is m * 2^e with m < 2^53, and for
+# 1e-5 <= |x| < 1e17 every scaled product m * 10^p (p <= 22) fits in UInt128.
+# Both roundings are round-half-even on the exact value, like Ryu's tie rule
+# (base/ryu/exp.jl and fixed.jl: `roundUp == 2` rounds only odd digits).
+# Values outside that range (exponent notation, subnormals) use Printf.
+const _WEB_G17_POW10 = ntuple(i -> UInt128(10)^(i - 1), 23)  # 10^0 ... 10^22
+const _WEB_G17_E17 = UInt64(10)^17
+const _WEB_G17_E18 = UInt64(10)^18
+# floor(k * log10(2)) estimates the decimal exponent of a value in [2^k, 2^(k+1)).
+const _WEB_LOG10_2 = 0.30102999566398120
+
+# Round-half-even of m * 2^e * 10^p; callers keep the result below 10^18.
+@inline function _web_g17_scaled_round(m::UInt64, e::Int, p::Int)
+    product = UInt128(m) * @inbounds(_WEB_G17_POW10[p + 1])
+    e >= 0 && return (product << e) % UInt64
+    shift = -e
+    q = product >> shift
+    r = product - (q << shift)
+    half = UInt128(1) << (shift - 1)
+    (r > half || (r == half && isodd(q))) && (q += one(UInt128))
+    return q % UInt64
+end
+
+const _WEB_DIGIT_PAIRS = let pairs = Vector{UInt8}(undef, 200)
+    for i in 0:99
+        pairs[2i + 1] = UInt8('0') + UInt8(i ÷ 10)
+        pairs[2i + 2] = UInt8('0') + UInt8(i % 10)
+    end
+    Tuple(pairs)
+end
+
+# Writes the lowest `ndig` decimal digits of `v` (zero-padded) at `pos`.
+@inline function _web_write_decimal_digits!(buf::Vector{UInt8}, pos::Int, v::UInt64,
+                                            ndig::Int)
+    last = pos + ndig - 1
+    p = last
+    @inbounds while p > pos
+        q = v ÷ UInt64(100)
+        r = (v - q * UInt64(100)) % Int
+        buf[p] = _WEB_DIGIT_PAIRS[2r + 2]
+        buf[p - 1] = _WEB_DIGIT_PAIRS[2r + 1]
+        v = q
+        p -= 2
+    end
+    p == pos && @inbounds(buf[p] = UInt8('0') + (v % UInt64(10)) % UInt8)
+    return last + 1
+end
+
+# Writes "%.17g" text of a finite `x` into `buf` (at least 64 bytes) and returns
+# the byte count, or 0 when `x` is outside the exact fast range.
+function _web_format_g17!(buf::Vector{UInt8}, x::Float64)
+    if x == 0.0
+        signbit(x) || (@inbounds buf[1] = UInt8('0'); return 1)
+        @inbounds buf[1] = UInt8('-')
+        @inbounds buf[2] = UInt8('0')
+        return 2
+    end
+    ax = abs(x)
+    (ax >= 1.0e-5 && ax < 1.0e17) || return 0
+    bits = reinterpret(UInt64, ax)
+    m = (bits & 0x000fffffffffffff) | 0x0010000000000000
+    e = Int(bits >> 52) - 1075
+    # The true decimal exponent is est or est + 1.
+    est = floor(Int, (e + 52) * _WEB_LOG10_2)
+    x0 = est + 1
+    n18 = _web_g17_scaled_round(m, e, 17 - x0)
+    if n18 < _WEB_G17_E17
+        x0 = est
+        n18 = _web_g17_scaled_round(m, e, 17 - x0)
+    end
+    # Printf's exponent is that of the value rounded to 18 significant digits.
+    xexp = n18 >= _WEB_G17_E18 ? x0 + 1 : x0
+    (-4 <= xexp < 17) || return 0
+    decimals = 16 - xexp
+    n = _web_g17_scaled_round(m, e, decimals)
+    pos = 1
+    if signbit(x)
+        @inbounds buf[1] = UInt8('-')
+        pos = 2
+    end
+    if decimals >= 18
+        # n <= 10^17 < 10^decimals: no integer digits.
+        ip = UInt64(0)
+        fp = n
+    else
+        scale = @inbounds(_WEB_G17_POW10[decimals + 1]) % UInt64
+        ip = n ÷ scale
+        fp = n - ip * scale
+    end
+    pos = _web_write_decimal_digits!(buf, pos, ip, ndigits(ip))
+    if fp != 0
+        while fp % UInt64(10) == 0
+            fp ÷= UInt64(10)
+            decimals -= 1
+        end
+        @inbounds buf[pos] = UInt8('.')
+        pos += 1
+        pos = _web_write_decimal_digits!(buf, pos, fp, decimals)
+    end
+    return pos - 1
+end
+
+# Neither path allocates per number. Printf's buffer method needs no libc
+# symbol lookup, and the 64-byte buffer fits its scientific-notation scratch.
 @inline function _js_write_finite_num(io::IO, x::Float64, buf::Vector{UInt8})
     length(buf) < _WEB_NUM_BUFFER_BYTES && resize!(buf, _WEB_NUM_BUFFER_BYTES)
-    n = Printf.format(buf, 1, _WEB_NUM_PRINTF_FORMAT, x) - 1
+    n = _web_format_g17!(buf, x)
+    n == 0 && (n = Printf.format(buf, 1, _WEB_NUM_PRINTF_FORMAT, x) - 1)
     GC.@preserve buf unsafe_write(io, pointer(buf), UInt(n))
     return nothing
 end
@@ -285,6 +421,20 @@ end
     xf = Float64(x)
     isfinite(xf) || _throw_web_nonfinite_number(xf)
     _js_write_finite_num(io, xf, buf)
+    return nothing
+end
+
+# Integers within +-2^53 convert to Float64 exactly and have at most 16 digits,
+# so their "%.17g" text is the plain decimal integer.
+const _WEB_MAX_EXACT_INT = 2^53
+
+@inline function _js_write_num(io::IO, x::Union{Int,Int32,UInt32,Int16,UInt16,Int8,UInt8},
+                               buf::Vector{UInt8})
+    if -_WEB_MAX_EXACT_INT <= x <= _WEB_MAX_EXACT_INT
+        _js_write_int(io, Int(x), buf)
+    else
+        _js_write_finite_num(io, Float64(x), buf)
+    end
     return nothing
 end
 
@@ -369,19 +519,6 @@ function _js_repeated_array(value::Real, n::Integer)
     write(io, ']')
     return String(take!(io))
 end
-function _js_write_repeated_pattern_array(io::IO, pattern::NTuple{N,<:Real},
-                                          count::Integer, num_buf::Vector{UInt8}) where {N}
-    write(io, '[')
-    first = true
-    for _ in 1:count
-        for value in pattern
-            first ? (first = false) : write(io, ',')
-            _js_write_num(io, value, num_buf)
-        end
-    end
-    write(io, ']')
-    return nothing
-end
 function _js_repeated_pattern_array(pattern::NTuple{N,<:Real}, count::Integer) where {N}
     lits = ntuple(i -> _js_num(pattern[i]), Val(N))
     io = IOBuffer()
@@ -415,12 +552,6 @@ function _js_write_attribute_components_array(io::IO, data::AbstractVector, stri
                                               components::Int, n_items::Int)
     return _js_write_attribute_components_array(io, data, stride, components, n_items,
                                                 _web_num_buffer())
-end
-function _js_attribute_components_array(data::AbstractVector, stride::Int,
-                                        components::Int, n_items::Int)
-    io = IOBuffer(sizehint=_web_num_array_sizehint(components * n_items))
-    _js_write_attribute_components_array(io, data, stride, components, n_items)
-    return String(take!(io))
 end
 function _js_write_skin_indices_array(io::IO, indices::AbstractVector{<:NTuple{4,Int}},
                                       num_buf::Vector{UInt8})
@@ -524,21 +655,6 @@ function _js_write_plane(io::IO, p::Plane, num_buf::Vector{UInt8})
     write(io, ']')
     return nothing
 end
-function _js_vec(v::Vec2)
-    io = IOBuffer(sizehint=_web_nested_num_array_sizehint(1, 2))
-    _js_write_vec(io, v, _web_num_buffer())
-    return String(take!(io))
-end
-function _js_vec(v::Vec3)
-    io = IOBuffer(sizehint=_web_nested_num_array_sizehint(1, 3))
-    _js_write_vec(io, v, _web_num_buffer())
-    return String(take!(io))
-end
-function _js_quat(q::Quaternion)
-    io = IOBuffer(sizehint=_web_nested_num_array_sizehint(1, 4))
-    _js_write_quat(io, q, _web_num_buffer())
-    return String(take!(io))
-end
 function _js_color(c::Color3)
     io = IOBuffer(sizehint=_web_nested_num_array_sizehint(1, 3))
     _js_write_color(io, c, _web_num_buffer())
@@ -571,11 +687,6 @@ function _js_mat_array(ms::AbstractVector{<:Mat4})
         _js_write_mat(io, m, num_buf)
     end
     write(io, ']')
-    return String(take!(io))
-end
-function _js_plane(p::Plane)
-    io = IOBuffer(sizehint=_web_nested_num_array_sizehint(1, 4))
-    _js_write_plane(io, p, _web_num_buffer())
     return String(take!(io))
 end
 _html_escape(s::AbstractString) = replace(s, "&"=>"&amp;", "<"=>"&lt;", ">"=>"&gt;", "\""=>"&quot;")
@@ -793,7 +904,9 @@ function _web_texture_average_color(tex::Texture)
         s / n
     end
     r = channel_average(1)
-    g = C >= 2 ? channel_average(2) : r
+    # One- and two-channel data is luminance (+ alpha), as in `_texel` and the
+    # uploaded RGBA bytes; channel 2 of a two-channel texture is alpha.
+    g = C >= 3 ? channel_average(2) : r
     b = C >= 3 ? channel_average(3) : r
     return Color3(clamp(r, 0.0, 1.0), clamp(g, 0.0, 1.0), clamp(b, 0.0, 1.0))
 end
@@ -884,7 +997,7 @@ function _web_write_camera_json_validated(io::IO, camera, num_buf::Vector{UInt8}
     if camera isa PerspectiveCamera
         position, target, up = _camera_world_pose(camera)
         write(io, "{\"type\":\"perspective\",\"id\":")
-        print(io, camera.id)
+        _web_print_int(io, camera.id)
         write(io, ",\"name\":")
         _js_write_str(io, camera.name)
         write(io, ",\"position\":")
@@ -916,7 +1029,7 @@ function _web_write_camera_json_validated(io::IO, camera, num_buf::Vector{UInt8}
     elseif camera isa OrthographicCamera
         position, target, up = _camera_world_pose(camera)
         write(io, "{\"type\":\"orthographic\",\"id\":")
-        print(io, camera.id)
+        _web_print_int(io, camera.id)
         write(io, ",\"name\":")
         _js_write_str(io, camera.name)
         write(io, ",\"position\":")
@@ -980,8 +1093,11 @@ end
 
 # three.js treats `transparent` as authoritative: an opaque material with opacity below one is
 # still drawn opaque (WebGLRenderLists.js push:134, WebGLState.js setMaterial:765).
+# Line materials have no `transparent` field; there the CPU renderer blends when
+# opacity is below one (`_primitive_transparent`), and the export follows it.
 _web_material_transparent(mat) =
-    hasproperty(mat, :transparent) && Bool(getproperty(mat, :transparent))
+    hasproperty(mat, :transparent) ? Bool(getproperty(mat, :transparent)) :
+    _web_material_opacity(mat) < 1.0
 _web_material_side(mat) = hasproperty(mat, :side) ?
     String(_validated_material_side(getproperty(mat, :side))) : "front"
 _web_material_depth_test(mat) =
@@ -1107,9 +1223,9 @@ function _web_write_texture_json(io::IO, tex, num_buf::Vector{UInt8})
     tex_coord = _texture_tex_coord(tex.tex_coord)
     colorspace = _texture_colorspace_symbol(tex.colorspace)
     write(io, "{\"width\":")
-    print(io, W)
+    _web_print_int(io, W)
     write(io, ",\"height\":")
-    print(io, H)
+    _web_print_int(io, H)
     write(io, ",\"wrapS\":")
     _js_write_str(io, String(wrap_s))
     write(io, ",\"wrapT\":")
@@ -1143,7 +1259,7 @@ function _web_write_texture_json(io::IO, tex, num_buf::Vector{UInt8})
     write(io, ",\"matrixAutoUpdate\":")
     write(io, tex.matrix_auto_update ? "true" : "false")
     write(io, ",\"texCoord\":")
-    print(io, tex_coord)
+    _web_print_int(io, tex_coord)
     write(io, ",\"needsUpdate\":")
     write(io, tex.needs_update ? "true" : "false")
     write(io, ",\"data\":")
@@ -1180,14 +1296,6 @@ end
 
 function _web_write_cube_level_json(io::IO, data::Array{Float64,3})
     return _web_write_cube_level_json(io, data, _web_num_buffer())
-end
-
-function _web_cube_level_json(data::Array{Float64,3})
-    H, W, C = size(data)
-    (H > 0 && W > 0 && C > 0) || return "null"
-    io = IOBuffer(sizehint=_web_texture_json_sizehint(H, W))
-    _web_write_cube_level_json(io, data, _web_num_buffer())
-    return String(take!(io))
 end
 
 function _web_cube_face_json_sizehint(tex)
@@ -1275,14 +1383,17 @@ function _web_material_texture(mat)
     return nothing
 end
 
-struct _WebTextureRegistry
-    ids::IdDict{Texture,Int}
-    textures::Vector{Texture}
+# Mutable so the registries pass by reference: drawable writers hand them to
+# calls that dispatch on `Any`-typed material maps, which would otherwise box an
+# immutable registry on every call.
+mutable struct _WebTextureRegistry
+    const ids::IdDict{Texture,Int}
+    const textures::Vector{Texture}
 end
 
-struct _WebCubeTextureRegistry
-    ids::IdDict{CubeTexture,Int}
-    textures::Vector{CubeTexture}
+mutable struct _WebCubeTextureRegistry
+    const ids::IdDict{CubeTexture,Int}
+    const textures::Vector{CubeTexture}
 end
 
 _web_texture_registry() = _WebTextureRegistry(IdDict{Texture,Int}(), Texture[])
@@ -1342,7 +1453,7 @@ function _web_write_texture_or_ref_json(io::IO, tex, num_buf::Vector{UInt8},
         id = get(registry.ids, tex, 0)
         if id != 0
             write(io, "{\"ref\":")
-            print(io, id)
+            _web_print_int(io, id)
             write(io, '}')
             return nothing
         end
@@ -1357,7 +1468,7 @@ function _web_write_env_or_ref_json(io::IO, env, num_buf::Vector{UInt8},
         id = get(registry.ids, env, 0)
         if id != 0
             write(io, "{\"ref\":")
-            print(io, id)
+            _web_print_int(io, id)
             write(io, '}')
             return nothing
         end
@@ -1373,7 +1484,7 @@ function _web_write_env_texture_registry_json(io::IO,
     for (i, env) in enumerate(registry.textures)
         i == 1 || write(io, ',')
         write(io, "{\"id\":")
-        print(io, i)
+        _web_print_int(io, i)
         write(io, ",\"texture\":")
         _web_write_env_json(io, env, num_buf)
         write(io, '}')
@@ -1388,7 +1499,7 @@ function _web_write_texture_registry_json(io::IO, registry::_WebTextureRegistry,
     for (i, tex) in enumerate(registry.textures)
         i == 1 || write(io, ',')
         write(io, "{\"id\":")
-        print(io, i)
+        _web_print_int(io, i)
         write(io, ",\"texture\":")
         _web_write_texture_json(io, tex, num_buf)
         write(io, '}')
@@ -1467,33 +1578,17 @@ function _web_shadow_json(scene::Scene, light::Union{DirectionalLight,PointLight
     _js_write_str(io, light isa DirectionalLight ? "directionalStatic" :
                       light isa PointLight ? "pointStatic" : "spotStatic")
     write(io, ",\"size\":")
-    print(io, W)
+    _web_print_int(io, W)
     write(io, ",\"bias\":")
     _js_write_num(io, sm.bias * 0.5, num_buf)
     write(io, ",\"pcfRadius\":")
-    print(io, sm.pcf_radius)
+    _web_print_int(io, sm.pcf_radius)
     write(io, ",\"matrix\":")
     _js_write_mat(io, sm.light_vp, num_buf)
     write(io, ",\"data\":")
     _web_write_shadow_depth_data(io, sm.depth)
     write(io, '}')
     return String(take!(io))
-end
-
-function _web_visibility_chain(obj::AbstractObject3D)
-    chain = AbstractObject3D[]
-    current = obj
-    while current !== nothing
-        push!(chain, current)
-        current = get_parent(current)
-    end
-    ids = Int[]
-    values = Bool[]
-    for item in reverse(chain)
-        push!(ids, item.id)
-        push!(values, is_visible(item))
-    end
-    return ids, values
 end
 
 function _web_visible_or_forced(obj::AbstractObject3D, force_ids::Set{Int})
@@ -1710,6 +1805,10 @@ function _web_write_light_json(io::IO, light::HemisphereLight;
     _js_write_color(io, light.ground_color, num_buf)
     write(io, ",\"intensity\":")
     _js_write_num(io, light.intensity, num_buf)
+    # Sky axis: the normalized world position (WebGLLights.js hemisphere
+    # `direction.setFromMatrixPosition(matrixWorld)`; zero stays zero).
+    write(io, ",\"direction\":")
+    _js_write_vec(io, _hemisphere_direction(light), num_buf)
     _web_write_light_visibility_json(io, light, visibility_target_ids, visibility_values;
                                      visibility_extra_id=visibility_extra_id,
                                      visibility_extra_value=visibility_extra_value)
@@ -1899,12 +1998,6 @@ function _web_write_tangent_json(io::IO, geo::BufferGeometry, num_buf::Vector{UI
     end
     write(io, "null")
     return false
-end
-
-function _web_tangent_json(geo::BufferGeometry)
-    io = IOBuffer(sizehint=_web_num_array_sizehint(4 * geo.n_vertices))
-    has_tangents = _web_write_tangent_json(io, geo, _web_num_buffer())
-    return has_tangents, String(take!(io))
 end
 
 function _web_morph_position_target_count(geo::BufferGeometry)
@@ -2133,11 +2226,11 @@ function _web_write_bone_json(io::IO, bone::Bone, num_buf::Vector{UInt8})
     parent_id = parent === nothing ? 0 : parent.id
     parent_matrix = parent === nothing ? Mat4() : compute_world_matrix(parent)
     write(io, "{\"id\":")
-    print(io, bone.id)
+    _web_print_int(io, bone.id)
     write(io, ",\"name\":")
     _js_write_str(io, bone.name)
     write(io, ",\"parentId\":")
-    print(io, parent_id)
+    _web_print_int(io, parent_id)
     write(io, ",\"matrix\":")
     _js_write_mat(io, compute_world_matrix(bone), num_buf)
     write(io, ",\"parentMatrix\":")
@@ -2223,13 +2316,6 @@ function _web_write_line_distance_json(io::IO, geo::BufferGeometry, num_buf::Vec
     end
     write(io, "null")
     return nothing
-end
-
-function _web_line_distance_json(geo::BufferGeometry)
-    has_distances = _geometry_attribute_for_components(geo, :lineDistance, 1) !== nothing
-    io = IOBuffer(sizehint=has_distances ? _web_num_array_sizehint(geo.n_vertices) : 8)
-    _web_write_line_distance_json(io, geo, _web_num_buffer())
-    return String(take!(io))
 end
 
 function _web_draw_range_values(geo::BufferGeometry)
@@ -2328,9 +2414,9 @@ function _web_write_geo_object(io::IO, geo::BufferGeometry,
     write(io, ",\"indices\":")
     _js_write_index_array_zero_based(io, indices, num_buf)
     write(io, ",\"drawStart\":")
-    print(io, draw_start)
+    _web_print_int(io, draw_start)
     write(io, ",\"drawCount\":")
-    print(io, draw_count)
+    _web_print_int(io, draw_count)
     return nothing
 end
 
@@ -2356,7 +2442,7 @@ end
 
 function _web_write_visibility_state(io::IO, id::Int, visible::Bool)
     write(io, "{\"id\":")
-    print(io, id)
+    _web_print_int(io, id)
     write(io, ",\"visible\":")
     write(io, visible ? "true" : "false")
     write(io, '}')
@@ -2498,7 +2584,7 @@ function _web_write_transform_node_json(io::IO, obj::AbstractObject3D,
     if obj isa LOD
         write(io, ",\"lodAutoUpdate\":", obj.auto_update ? "true" : "false")
         write(io, ",\"lodInitialLevel\":")
-        print(io, obj._manual_level)
+        _web_print_int(io, obj._manual_level)
         _web_write_lod_path_json(io, lod_path, num_buf)
         write(io, ",\"visibilityStates\":")
         _web_write_visibility_states_json(io, visibility_target_ids, visibility_values;
@@ -2507,7 +2593,7 @@ function _web_write_transform_node_json(io::IO, obj::AbstractObject3D,
         for (index, level) in enumerate(obj.levels)
             index == 1 || write(io, ',')
             write(io, "{\"object\":")
-            print(io, level.object.id)
+            _web_print_int(io, level.object.id)
             write(io, ",\"distance\":")
             _js_write_num(io, level.distance, num_buf)
             write(io, ",\"hysteresis\":")
@@ -2704,6 +2790,9 @@ function _web_write_drawable_json(io::IO, obj, world::Mat4, num_buf::Vector{UInt
     _web_material_size(mat)
     _web_material_linewidth(mat)
     _validate_depth_material(mat)
+    # A wireframe keeps its mesh material's blending (three.js draws the same
+    # material as lines; the CPU wireframe pass also tests the mesh material).
+    transparent = _web_material_transparent(mat)
     wireframe && (mat = _web_wireframe_material(mat))
     if mode == "triangles" || mode == "sprite"
         _validate_web_triangle_geometry(geo)
@@ -2729,7 +2818,7 @@ function _web_write_drawable_json(io::IO, obj, world::Mat4, num_buf::Vector{UInt
     positions = positions_override === nothing ? _web_positions(obj, geo) : positions_override
     use_vertex_colors = !wireframe && (mode != "triangles" || _web_material_vertex_colors(mat))
     write(io, "{\"id\":")
-    print(io, transform_obj.id)
+    _web_print_int(io, transform_obj.id)
     write(io, ",\"name\":")
     _js_write_str(io, getproperty(obj, :name))
     write(io, ",\"mode\":")
@@ -2756,7 +2845,7 @@ function _web_write_drawable_json(io::IO, obj, world::Mat4, num_buf::Vector{UInt
     end
     _web_write_lod_path_json(io, lod_path, num_buf)
     write(io, ",\"parentId\":")
-    print(io, parent_id)
+    _web_print_int(io, parent_id)
     write(io, ",\"matrix\":")
     _js_write_mat(io, m, num_buf)
     write(io, ",\"parentMatrix\":")
@@ -2806,7 +2895,7 @@ function _web_write_drawable_json(io::IO, obj, world::Mat4, num_buf::Vector{UInt
     write(io, ",\"depthPacking\":")
     _js_write_str(io, _web_material_depth_packing(mat))
     write(io, ",\"depthPackingMode\":")
-    print(io, _web_material_depth_packing_id(mat))
+    _web_print_int(io, _web_material_depth_packing_id(mat))
     write(io, ",\"toonSteps\":")
     _js_write_num(io, _web_material_toon_steps(mat), num_buf)
     write(io, ",\"color\":")
@@ -2816,7 +2905,7 @@ function _web_write_drawable_json(io::IO, obj, world::Mat4, num_buf::Vector{UInt
     write(io, ",\"alphaTest\":")
     _js_write_num(io, _web_material_alpha_test(mat), num_buf)
     write(io, ",\"transparent\":")
-    write(io, _web_material_transparent(mat) ? "true" : "false")
+    write(io, transparent ? "true" : "false")
     write(io, ",\"side\":")
     _js_write_str(io, _web_material_side(mat))
     write(io, ",\"depthTest\":")
@@ -3531,10 +3620,6 @@ function _web_track_json_sizehint(tr::AbstractKeyframeTrack, value_components::I
     return _web_sizehint_add(256, _web_num_array_sizehint(n_nums))
 end
 
-function _web_track_json_buffer(tr::AbstractKeyframeTrack, value_components::Integer...)
-    return IOBuffer(sizehint=_web_track_json_sizehint(tr, value_components...))
-end
-
 function _js_write_vec3_components_array(io::IO, values::AbstractVector{<:Vec3},
                                          num_buf::Vector{UInt8})
     write(io, '[')
@@ -3633,7 +3718,7 @@ _web_track_json_sizehint(tr::CubicSplineQuaternionKeyframeTrack) =
 
 function _web_write_track_json(io::IO, tr::KeyframeTrack, num_buf::Vector{UInt8})
     write(io, "{\"target\":")
-    print(io, tr.target.id)
+    _web_print_int(io, tr.target.id)
     write(io, ",\"property\":")
     _js_write_str(io, _web_track_property_name(tr))
     write(io, ",\"kind\":\"vec3\",\"times\":")
@@ -3648,11 +3733,11 @@ end
 
 function _web_write_track_json(io::IO, tr::NumberKeyframeTrack, num_buf::Vector{UInt8})
     write(io, "{\"target\":")
-    print(io, tr.target.id)
+    _web_print_int(io, tr.target.id)
     write(io, ",\"property\":")
     _js_write_str(io, _web_track_property_name(tr))
     write(io, ",\"component\":")
-    print(io, tr.component)
+    _web_print_int(io, tr.component)
     write(io, ",\"kind\":\"number\",\"times\":")
     _js_write_array(io, tr.times, num_buf)
     write(io, ",\"values\":")
@@ -3665,7 +3750,7 @@ end
 
 function _web_write_track_json(io::IO, tr::QuaternionKeyframeTrack, num_buf::Vector{UInt8})
     write(io, "{\"target\":")
-    print(io, tr.target.id)
+    _web_print_int(io, tr.target.id)
     write(io, ",\"property\":")
     _js_write_str(io, _web_track_property_name(tr))
     write(io, ",\"kind\":\"quat\",\"times\":")
@@ -3681,11 +3766,11 @@ end
 function _web_write_track_json(io::IO, tr::MorphWeightsKeyframeTrack, num_buf::Vector{UInt8})
     stride = isempty(tr.values) ? 0 : length(tr.values[1])
     write(io, "{\"target\":")
-    print(io, tr.target.id)
+    _web_print_int(io, tr.target.id)
     write(io, ",\"property\":")
     _js_write_str(io, _web_track_property_name(tr))
     write(io, ",\"kind\":\"weights\",\"stride\":")
-    print(io, stride)
+    _web_print_int(io, stride)
     write(io, ",\"times\":")
     _js_write_array(io, tr.times, num_buf)
     write(io, ",\"values\":")
@@ -3702,11 +3787,11 @@ function _web_write_track_json(io::IO, tr::CubicSplineMorphWeightsKeyframeTrack,
                                num_buf::Vector{UInt8})
     stride = isempty(tr.values) ? 0 : length(tr.values[1])
     write(io, "{\"target\":")
-    print(io, tr.target.id)
+    _web_print_int(io, tr.target.id)
     write(io, ",\"property\":")
     _js_write_str(io, _web_track_property_name(tr))
     write(io, ",\"kind\":\"weights\",\"stride\":")
-    print(io, stride)
+    _web_print_int(io, stride)
     write(io, ",\"times\":")
     _js_write_array(io, tr.times, num_buf)
     write(io, ",\"values\":")
@@ -3728,7 +3813,7 @@ end
 function _web_write_track_json(io::IO, tr::CubicSplineKeyframeTrack,
                                num_buf::Vector{UInt8})
     write(io, "{\"target\":")
-    print(io, tr.target.id)
+    _web_print_int(io, tr.target.id)
     write(io, ",\"property\":")
     _js_write_str(io, _web_track_property_name(tr))
     write(io, ",\"kind\":\"vec3\",\"times\":")
@@ -3746,7 +3831,7 @@ end
 function _web_write_track_json(io::IO, tr::CubicSplineQuaternionKeyframeTrack,
                                num_buf::Vector{UInt8})
     write(io, "{\"target\":")
-    print(io, tr.target.id)
+    _web_print_int(io, tr.target.id)
     write(io, ",\"property\":")
     _js_write_str(io, _web_track_property_name(tr))
     write(io, ",\"kind\":\"quat\",\"times\":")
@@ -3765,12 +3850,6 @@ function _web_write_track_json(io::IO, tr::AbstractKeyframeTrack)
     return _web_write_track_json(io, tr, _web_num_buffer())
 end
 
-function _web_track_json(tr::AbstractKeyframeTrack)
-    io = IOBuffer(sizehint=_web_track_json_sizehint(tr))
-    _web_write_track_json(io, tr)
-    return String(take!(io))
-end
-
 function _web_clip_json_sizehint(clip::AnimationClip)
     sizehint = 256
     for track in clip.tracks
@@ -3787,7 +3866,7 @@ function _web_write_clip_json(io::IO, clip::AnimationClip, num_buf::Vector{UInt8
     write(io, ",\"loop\":")
     _js_write_str(io, String(clip.loop))
     write(io, ",\"repetitions\":")
-    print(io, clip.repetitions)
+    _web_print_int(io, clip.repetitions)
     write(io, ",\"clampWhenFinished\":")
     write(io, clip.clamp_when_finished ? "true" : "false")
     write(io, ",\"timeScale\":")
@@ -3809,31 +3888,6 @@ function _web_clip_json(clip::AnimationClip)
     io = IOBuffer(sizehint=_web_clip_json_sizehint(clip))
     _web_write_clip_json(io, clip)
     return String(take!(io))
-end
-
-function _web_case_json_sizehint(lights_json::AbstractString,
-                                 nodes::AbstractVector{<:AbstractString},
-                                 objects::AbstractVector{<:AbstractString},
-                                 animations::AbstractVector{AnimationClip},
-                                 texture_registry::Union{Nothing,_WebTextureRegistry}=nothing,
-                                 env_texture_registry::Union{Nothing,_WebCubeTextureRegistry}=nothing)
-    sizehint = length(lights_json) + sum(length, nodes; init=0) +
-               sum(length, objects; init=0) + 1024
-    if texture_registry !== nothing
-        for tex in texture_registry.textures
-            H, W, _ = size(tex.data)
-            sizehint = _web_sizehint_add(sizehint, _web_texture_json_sizehint(H, W) + 32)
-        end
-    end
-    if env_texture_registry !== nothing
-        for env in env_texture_registry.textures
-            sizehint = _web_sizehint_add(sizehint, _web_env_json_sizehint(env) + 32)
-        end
-    end
-    for clip in animations
-        sizehint = _web_sizehint_add(sizehint, _web_clip_json_sizehint(clip))
-    end
-    return sizehint
 end
 
 function _web_position_float_count(obj, geo::BufferGeometry)
@@ -3949,30 +4003,6 @@ function _web_write_objects_json(io::IO, objects::_WebDrawableStream,
                                      env_texture_registry=objects.env_texture_registry)
 end
 
-function _web_collect_case_light_node_parts(case::WebGLExportCase)
-    animation_target_ids, lights_json = _web_collect_case_light_parts(case)
-    nodes = _web_collect_transform_nodes(case.scene, animation_target_ids, case.camera)
-    return animation_target_ids, lights_json, nodes
-end
-
-function _web_collect_case_light_parts(case::WebGLExportCase)
-    animation_target_ids = _web_case_animation_target_ids(case.animations)
-    no_animations = isempty(case.animations)
-    stale_shadow_ids = no_animations ? _WEB_EMPTY_ID_SET :
-                       _web_stale_shadow_light_ids(case.scene, case.animations)
-    dynamic_shadow_ids = no_animations ? _WEB_EMPTY_ID_SET :
-                         _web_dynamic_directional_shadow_light_ids(case.scene, case.animations)
-    dynamic_spot_shadow_ids = no_animations ? _WEB_EMPTY_ID_SET :
-                              _web_dynamic_spot_shadow_light_ids(case.scene, case.animations)
-    dynamic_point_shadow_ids = no_animations ? _WEB_EMPTY_ID_SET :
-                               _web_dynamic_point_shadow_light_ids(case.scene, case.animations)
-    lights_json = _web_lights_json(case.scene, animation_target_ids, stale_shadow_ids,
-                                   dynamic_shadow_ids, dynamic_spot_shadow_ids,
-                                   dynamic_point_shadow_ids;
-                                   clipping_planes=case.clipping_planes)
-    return animation_target_ids, lights_json
-end
-
 struct _WebLightsStream
     scene::Scene
     force_ids::Set{Int}
@@ -3998,16 +4028,6 @@ function _web_case_light_stream(case::WebGLExportCase,
         no_animations ? _WEB_EMPTY_ID_SET :
             _web_dynamic_point_shadow_light_ids(case.scene, case.animations),
         case.clipping_planes)
-end
-
-function _web_collect_case_json_parts(case::WebGLExportCase)
-    animation_target_ids, lights_json, nodes = _web_collect_case_light_node_parts(case)
-    texture_registry = _web_texture_registry()
-    env_texture_registry = _web_cube_texture_registry()
-    objects = _web_collect_drawables(case.scene, animation_target_ids, case.radius;
-                                    texture_registry=texture_registry,
-                                    env_texture_registry=env_texture_registry)
-    return lights_json, nodes, objects, texture_registry, env_texture_registry
 end
 
 function _web_write_lights_part(io::IO, lights_json::AbstractString,
@@ -4056,13 +4076,13 @@ function _web_write_case_json_parts(io::IO, case::WebGLExportCase,
     write(io, ",\"toneMapping\":")
     _js_write_str(io, String(case.tone_mapping))
     write(io, ",\"toneMappingMode\":")
-    print(io, _web_tone_mapping_id(case.tone_mapping))
+    _web_print_int(io, _web_tone_mapping_id(case.tone_mapping))
     write(io, ",\"toneExposure\":")
     _js_write_num(io, case.tone_exposure, num_buf)
     write(io, ",\"outputColorSpace\":")
     _js_write_str(io, String(case.output_color_space))
     write(io, ",\"outputColorSpaceMode\":")
-    print(io, _web_output_color_space_id(case.output_color_space))
+    _web_print_int(io, _web_output_color_space_id(case.output_color_space))
     write(io, ",\"clippingPlanes\":[")
     for (i, plane) in enumerate(case.clipping_planes)
         i == 1 || write(io, ',')
@@ -4142,8 +4162,55 @@ function _web_light_caps(cases::AbstractVector{WebGLExportCase})
             hemi=max(1, max_hemi), rect=max(1, max_rect))
 end
 
+# Serialization emits one small write per number and separator. IOStream locks
+# on every write and IOBuffer checks capacity on every write, so the data JSON
+# goes through this fixed-size staging buffer (bounded memory, one write to the
+# destination per 64 KiB chunk).
+const _WEB_STAGING_BYTES = 1 << 16
+
+mutable struct _WebStagedIO{T<:IO} <: IO
+    io::T
+    buf::Vector{UInt8}
+    n::Int
+end
+
+_WebStagedIO(io::IO) = _WebStagedIO(io, Vector{UInt8}(undef, _WEB_STAGING_BYTES), 0)
+
+function _web_flush_staged!(s::_WebStagedIO)
+    if s.n > 0
+        GC.@preserve s unsafe_write(s.io, pointer(s.buf), UInt(s.n))
+        s.n = 0
+    end
+    return nothing
+end
+
+@inline function Base.write(s::_WebStagedIO, b::UInt8)
+    s.n == length(s.buf) && _web_flush_staged!(s)
+    s.n += 1
+    @inbounds s.buf[s.n] = b
+    return 1
+end
+
+function Base.unsafe_write(s::_WebStagedIO, p::Ptr{UInt8}, nb::UInt)
+    n = Int(nb)
+    if n > length(s.buf) - s.n
+        _web_flush_staged!(s)
+        n >= length(s.buf) && return unsafe_write(s.io, p, nb)
+    end
+    GC.@preserve s unsafe_copyto!(pointer(s.buf, s.n + 1), p, n)
+    s.n += n
+    return n
+end
+
 function _web_write_data_json_validated(io::IO,
                                         cases::AbstractVector{WebGLExportCase})
+    staged = _WebStagedIO(io)
+    _web_write_data_json_cases(staged, cases)
+    _web_flush_staged!(staged)
+    return nothing
+end
+
+function _web_write_data_json_cases(io::IO, cases::AbstractVector{WebGLExportCase})
     write(io, "{\"cases\":[")
     for (i, case) in enumerate(cases)
         i == 1 || write(io, ',')
