@@ -238,7 +238,9 @@ end
               mat4_get(m, 1, 2), mat4_get(m, 2, 2), mat4_get(m, 3, 2),
               mat4_get(m, 1, 3), mat4_get(m, 2, 3), mat4_get(m, 3, 3))
     scale = maximum(abs, values)
-    iszero(scale) && return scale
+    # Test the primal: on a tie ForwardDiff may return the operand that
+    # carries nonzero partials, and such a zero-valued Dual is not `iszero`.
+    iszero(_primal_value(scale)) && return scale
     isfinite(scale) || return scale
     a11 = values[1] / scale
     a21 = values[2] / scale
@@ -561,7 +563,7 @@ end
 
 function _mat4_orthographic_axis(lo, hi, label::String)
     scale = max(abs(lo), abs(hi))
-    iszero(scale) && throw(ArgumentError("$label bounds must differ"))
+    iszero(_primal_value(scale)) && throw(ArgumentError("$label bounds must differ"))
     lo_scaled = lo / scale
     hi_scaled = hi / scale
     span = hi_scaled - lo_scaled
@@ -820,7 +822,7 @@ function _mat4_linear_orientation_sign(matrix::Mat4)
     d, e, f = values[2], values[6], values[10]
     g, h, i = values[3], values[7], values[11]
     scale = maximum(abs, (a, b, c, d, e, f, g, h, i))
-    iszero(scale) && return 0
+    iszero(_primal_value(scale)) && return 0
     an, bn, cn = a / scale, b / scale, c / scale
     dn, en, fn = d / scale, e / scale, f / scale
     gn, hn, inn = g / scale, h / scale, i / scale
@@ -1987,7 +1989,7 @@ end
         return (a + b + c) / 3
     end
     scale = max(max(abs(a), abs(b)), abs(c))
-    iszero(scale) && return zero(a) / one(a)
+    iszero(_primal_value(scale)) && return zero(a) / one(a)
     return ((a / scale + b / scale + c / scale) / 3) * scale
 end
 
@@ -2006,7 +2008,7 @@ function triangle_barycentric(tri::Triangle, p::Vec3)
         max(_vec3_max_abs(tri.a), _vec3_max_abs(tri.b)),
         _vec3_max_abs(tri.c),
     )
-    if iszero(scale)
+    if iszero(_primal_value(scale))
         z = zero(tri.a.x + p.x) / one(tri.a.x + p.x)
         return Vec3(z, z, z)
     end
@@ -2097,7 +2099,7 @@ line3_at(l::Line3, t) = Vec3(
     # rounded distinct values to zero). For nearby IEEE floats, subtraction is
     # exact by Sterbenz's lemma; normalizing first would round away the true ulp.
     scale = max(abs(value1), abs(value2))
-    iszero(scale) && return zero(value1), scale, false
+    iszero(_primal_value(scale)) && return zero(value1), scale, false
     difference = value2 / scale - value1 / scale
     iszero(difference) && return difference, scale, false
     return difference, scale, true

@@ -107,7 +107,12 @@ export
     mat4_compose, mat4_decompose, mat4_determinant,
     quat_from_euler, quat_to_mat4, quat_multiply, quat_normalize,
     quat_slerp, quat_from_unit_vectors, quat_dot, quat_from_rotation_matrix,
+    quat_from_axis_angle, quat_conjugate, quat_invert, quat_angle_to,
+    quat_rotate_towards, quat_rotate_vector,
+    euler_from_rotation_matrix, euler_from_quaternion,
     Box3, BoundingSphere, Ray, Plane, box3_expand_by_point,
+    box3_is_empty, box3_center, box3_size, box3_union, box3_intersect,
+    box3_contains_point, box3_intersects_box, box3_apply_matrix4,
     plane_distance_to_point, clamp_color,
     Triangle, triangle_normal, triangle_area, triangle_centroid,
     triangle_barycentric, triangle_contains_point,
@@ -193,7 +198,7 @@ export
     tone_map_reinhard, tone_map_aces, srgb_encode, linear_to_srgb, srgb_to_linear,
     downsample, render_aa,
     render_lines!, render_points!,
-    EffectComposer, add_pass!, compose,
+    EffectComposer, add_pass!, compose, tone_map, output_pass,
     grayscale_pass, reinhard_pass, aces_pass, srgb_pass,
     BenchResult, benchmark_render, build_instanced_scene, scene_triangle_count,
 
@@ -244,7 +249,8 @@ export
     WebGLExportCase, save_webgl_html,
 
     # Loaders
-    compute_vertex_normals!, save_stl_binary, load_stl, load_obj,
+    compute_vertex_normals!, compute_tangents!, save_stl_binary, save_stl_ascii,
+    save_obj, save_ply, load_stl, load_obj,
     inflate, zlib_inflate, load_png, load_jpeg, load_ktx2, load_image,
     load_rgbe, load_hdr, TextureLoader, RGBELoader, load_exr, EXRLoader,
     AudioBufferData, audio_duration, load_wav, load_audio, AudioLoader,

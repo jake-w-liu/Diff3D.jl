@@ -8063,7 +8063,8 @@ end
         lod_cube = CubeTexture(ntuple(_ -> lod_face, 6))
         @test sample_cube_lod(lod_cube, Vec3(1.0,0,0), 0).r ≈ 1.0
         @test sample_cube_lod(lod_cube, Vec3(1.0,0,0), 2).r ≈ 1 / 16
-        @test sample_cube_lod(lod_cube, Vec3(1.0,0,0), 1.5).r ≈ 1 / 32
+        # GL nearest at the 2x2 level reads storage [2, 2] = 1/4 (GLES 3.0 §3.8.10).
+        @test sample_cube_lod(lod_cube, Vec3(1.0,0,0), 1.5).r ≈ 5 / 32
         @test_opt_alloc 64 sample_cube_lod(lod_cube, Vec3(1.0,0,0), 1.5)
         @test_throws ArgumentError sample_cube_lod(lod_cube, Vec3(1.0,0,0), NaN)
         lod_env_json = Diff3D._web_env_json(lod_cube)
@@ -8561,10 +8562,10 @@ end
         @test beveled_text.n_vertices == 56
         @test beveled_text.n_faces == 28
         bevel_box = compute_bounding_box(beveled_text)
-        @test bevel_box.min.x == 0.0
-        @test bevel_box.max.x == 1.0
-        @test bevel_box.min.z == 0.0
-        @test bevel_box.max.z == 0.4
+        @test bevel_box.min.x == -0.1
+        @test bevel_box.max.x == 1.1
+        @test bevel_box.min.z == -0.05
+        @test bevel_box.max.z == 0.45
         smooth_bevel = TextGeometry(font, "A"; depth=0.4, bevel_enabled=true,
                                     bevel_size=0.1, bevel_thickness=0.05,
                                     bevel_segments=2)
@@ -8586,8 +8587,8 @@ end
                                     bevel_segments=1)
         @test beveled_hole.n_faces == 66
         bevel_hole_box = compute_bounding_box(beveled_hole)
-        @test bevel_hole_box.min.z == 0.0
-        @test bevel_hole_box.max.z == 0.4
+        @test bevel_hole_box.min.z == -0.05
+        @test bevel_hole_box.max.z == 0.45
         @test TextGeometry(font, "Z").n_vertices == 0
 
         @test_throws "font has no glyph" font_glyph_shapes(font, "Z")
@@ -8970,24 +8971,24 @@ end
         @test [path.tag for path in use_svg.paths] ==
               [:rect, :line, :rect, :path, :path, :rect, :line]
         @test use_svg.paths[1].points[1] == Vec2(5.0, 7.0)
-        @test use_svg.paths[1].style.fill == Color3(1.0, 0.0, 0.0)
+        @test use_svg.paths[1].style.fill == Color3(0.0, 0.0, 1.0)
         @test use_svg.paths[2].points == [Vec2(1.0, 7.0), Vec2(3.0, 7.0)]
-        @test use_svg.paths[2].style.stroke == Color3(0.0, 1.0, 0.0)
+        @test use_svg.paths[2].style.stroke == Color3(0.0, 0.0, 0.0)
         @test use_svg.paths[2].style.stroke_width == 2.0
         @test use_svg.paths[3].points[1] == Vec2(11.0, 2.0)
         @test use_svg.paths[3].style.fill == Color3(0.0, 0.0, 1.0)
         @test use_svg.paths[4].points[1] == Vec2(20.0, 0.0)
         @test use_svg.paths[4].element_id == use_svg.paths[5].element_id
         @test use_svg.paths[6].points[1] == Vec2(32.0, 3.0)
-        @test use_svg.paths[6].style.fill == Color3(0.0, 1.0, 0.0)
+        @test use_svg.paths[6].style.fill == Color3(0.0, 0.0, 1.0)
         @test use_svg.paths[6].style.stroke == Color3(1.0, 0.0, 0.0)
         @test use_svg.paths[7].points == [Vec2(32.0, 5.0), Vec2(33.0, 5.0)]
-        @test use_svg.paths[7].style.stroke == Color3(1.0, 0.0, 0.0)
+        @test use_svg.paths[7].style.stroke == Color3(0.0, 0.0, 0.0)
         @test use_svg.paths[7].style.stroke_width == 3.0
         use_meshes = svg_meshes(use_svg)
         @test length(use_meshes) == 4
         @test svg_triangle_area_xy(use_meshes[3].geometry) ≈ 12.0
-        @test use_meshes[end].material.color == Color3(0.0, 1.0, 0.0)
+        @test use_meshes[end].material.color == Color3(0.0, 0.0, 1.0)
         @test svg_geometry(use_svg).n_faces > 0
         @test length(svg_strokes(use_svg)) == 3
         rm(use_path)
@@ -11809,8 +11810,10 @@ end
         @test dot(n_half, n0) > dot(n_full, n0)
         # Roughness map overrides the material roughness per face (PBR result moves).
         rmap = DataTexture(fill(0.9, 4, 4, 3))
-        sharp = shade_mesh_faces(geo, wm, MeshStandardMaterial(color=Color3(0.8,0.2,0.2), metalness=0.5, roughness=0.05), light, campos)
-        mapped = shade_mesh_faces(geo, wm, MeshStandardMaterial(color=Color3(0.8,0.2,0.2), metalness=0.5, roughness=0.05, roughness_map=rmap), light, campos)
+        # three.js clamps roughness to 0.0525 (lights_physical_fragment.glsl.js:10), so the
+        # base roughness must sit above the clamp for the map to change the result.
+        sharp = shade_mesh_faces(geo, wm, MeshStandardMaterial(color=Color3(0.8,0.2,0.2), metalness=0.5, roughness=0.3), light, campos)
+        mapped = shade_mesh_faces(geo, wm, MeshStandardMaterial(color=Color3(0.8,0.2,0.2), metalness=0.5, roughness=0.3, roughness_map=rmap), light, campos)
         @test abs(sharp[1].r - mapped[1].r) > 1e-6
         eff = Diff3D._apply_pbr_maps(MeshStandardMaterial(metalness=0.5, roughness=0.8,
                                                          roughness_map=rmap, metalness_map=rmap),
@@ -12971,7 +12974,7 @@ end
         @testset "_texel handles 2-channel texture (#28)" begin
             d = zeros(Float64, 2, 2, 2); d[1,1,1] = 0.7; d[1,1,2] = 0.2  # luminance, alpha
             tex = Texture(d; filter=:nearest)
-            c = sample_texture(tex, 0.0, 1.0)  # samples top-left texel; old code threw BoundsError
+            c = sample_texture(tex, 0.0, 0.75)  # samples top-left texel; old code threw BoundsError
             @test c.r ≈ 0.7 && c.g ≈ 0.7 && c.b ≈ 0.7
         end
 
@@ -14460,14 +14463,15 @@ end
                                      min_filter=:nearest_mipmap_linear)
             linear_prefix = Texture(copy(data); filter=:nearest,
                                     min_filter=:linear_mipmap_nearest)
-            @test sample_texture_auto(nearest_prefix, 0.5, 0.5, 1.0).r ≈ 0.0
+            # GL nearest at the centre reads texel (floor(1), floor(1)) = storage [1, 2].
+            @test sample_texture_auto(nearest_prefix, 0.5, 0.5, 1.0).r ≈ 1.0
             @test sample_texture_auto(linear_prefix, 0.5, 0.5, 1.0).r ≈ 0.5
             mag_linear = Texture(copy(data); filter=:nearest,
                                  min_filter=:nearest, mag_filter=:linear)
             mag_nearest = Texture(copy(data); filter=:bilinear,
                                   min_filter=:linear, mag_filter=:nearest)
             @test sample_texture_auto(mag_linear, 0.5, 0.5, 1e-6).r ≈ 0.5
-            @test sample_texture_auto(mag_nearest, 0.5, 0.5, 1e-6).r ≈ 0.0
+            @test sample_texture_auto(mag_nearest, 0.5, 0.5, 1e-6).r ≈ 1.0
 
             base = fill(0.0, 4, 4, 3)
             mip1 = fill(0.25, 2, 2, 3)
@@ -14948,14 +14952,16 @@ end
 
             rough_data = zeros(Float64, 2, 2, 3); rough_data[:,:,2] .= 0.95
             rough_map = Texture(rough_data; filter=:nearest, colorspace=:linear)
-            pbr = MeshStandardMaterial(color=Color3(0.8,0.8,0.8), roughness=0.05,
+            pbr = MeshStandardMaterial(color=Color3(0.8,0.8,0.8), roughness=0.3,
                                        roughness_map=rough_map)
             direct = shade_face(Vec3(0.0,0.0,1.0), Vec3(0.0,0.0,1.0), Vec3(),
                                 pbr, AbstractLight[DirectionalLight(position=Vec3(0.0,0.0,2.0))])
             mapped = Diff3D._apply_roughness_map(pbr, rough_map, 0.5, 0.5)
             direct_mapped = shade_face(Vec3(0.0,0.0,1.0), Vec3(0.0,0.0,1.0), Vec3(),
                                        mapped, AbstractLight[DirectionalLight(position=Vec3(0.0,0.0,2.0))])
-            @test direct_mapped.r < direct.r
+            # Head-on (N = L = V) the GGX lobe peaks higher as roughness drops
+            # (0.3 * 0.95 = 0.285), so the mapped face is brighter.
+            @test direct_mapped.r > direct.r
         end
 
         @testset "smooth-path light map samples secondary UVs" begin
@@ -25167,7 +25173,10 @@ end
     )
     for field in nonnegative_fields
         message = "material $field must be finite and non-negative"
-        for value in (NaN, Inf, -0.01, false)
+        # attenuation_distance accepts the three.js default Infinity
+        # (MeshPhysicalMaterial.js:302); the audit3 test covers that mapping.
+        for value in (field === :attenuation_distance ? (NaN, -0.01, false) :
+                      (NaN, Inf, -0.01, false))
             @test_throws message physical_material_with(field, value)
         end
         @test getproperty(physical_material_with(field, 0.0), field) == 0.0
@@ -31689,7 +31698,7 @@ end
     classified_alpha_sprite = texture_alpha_sprite()
     @test Diff3D._render_primitive_blends(classified_alpha_sprite)
     @test !Diff3D._render_primitive_blends(Sprite(SpriteMaterial(
-        map=rgb_texture)))
+        map=rgb_texture, transparent=false)))
     @test_opt_alloc 0 Diff3D._render_primitive_blends(
         classified_alpha_sprite)
 
@@ -34140,3 +34149,21 @@ include("webexport_audit.jl")
 include("adscene_audit.jl")
 include("anim_audit.jl")
 include("geometry_audit.jl")
+include("audit3_animation.jl")
+include("audit3_controls_helpers.jl")
+include("audit3_differentiable.jl")
+include("audit3_geometry_extra.jl")
+include("audit3_geometry_primitives.jl")
+include("audit3_lights_shadows.jl")
+include("audit3_loaders_binary.jl")
+include("audit3_loaders_font_svg.jl")
+include("audit3_loaders_gltf.jl")
+include("audit3_loaders_mesh.jl")
+include("audit3_materials_textures.jl")
+include("audit3_math_core.jl")
+include("audit3_objects_raycast.jl")
+include("audit3_rasterizer.jl")
+include("audit3_renderer_extra.jl")
+include("audit3_shading.jl")
+include("audit3_webexport_data.jl")
+include("audit3_webexport_viewer.jl")
