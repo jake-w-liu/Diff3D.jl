@@ -2276,8 +2276,8 @@ end
 # `_PhongMapped` or `_PBRSurface`) starting from the emitted radiance `result`.
 # Built-in scene-light vectors are narrowed per light so the accumulation stays
 # unboxed; `_DirectLightView` skips fill lights.
-function _shade_model(model, result, normal::Vec3, view_dir::Vec3, position::Vec3,
-                      lights::Vector{SceneLight}, shadow_fn)
+@inline function _shade_model(model, result, normal::Vec3, view_dir::Vec3, position::Vec3,
+                              lights::Vector{SceneLight}, shadow_fn)
     @inbounds for i in eachindex(lights)
         result = _dispatch_scene_light(_dispatch_accumulate_light, lights[i], result,
                                        model, normal, view_dir, position, shadow_fn)
@@ -2285,8 +2285,8 @@ function _shade_model(model, result, normal::Vec3, view_dir::Vec3, position::Vec
     return result
 end
 
-function _shade_model(model, result, normal::Vec3, view_dir::Vec3, position::Vec3,
-                      lights::_DirectLightView{Vector{SceneLight}}, shadow_fn)
+@inline function _shade_model(model, result, normal::Vec3, view_dir::Vec3, position::Vec3,
+                              lights::_DirectLightView{Vector{SceneLight}}, shadow_fn)
     source = lights.lights
     @inbounds for i in eachindex(source)
         light = source[i]
@@ -2297,8 +2297,8 @@ function _shade_model(model, result, normal::Vec3, view_dir::Vec3, position::Vec
     return result
 end
 
-function _shade_model(model, result, normal::Vec3, view_dir::Vec3, position::Vec3,
-                      lights, shadow_fn)
+@inline function _shade_model(model, result, normal::Vec3, view_dir::Vec3, position::Vec3,
+                              lights, shadow_fn)
     for light in lights
         result = _accumulate_light(result, model, normal, view_dir, position, light,
                                    shadow_fn)
