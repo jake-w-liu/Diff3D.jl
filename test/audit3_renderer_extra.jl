@@ -139,6 +139,41 @@ end
     end
 end
 
+@testset "render_tiled! culls blended wireframes like render!" begin
+    # render! drops offscreen transparent items (frustum_cull=true) before its
+    # unstable back-to-front sort. Two overlapping wireframes at equal depth
+    # must keep render!'s relative order when offscreen wireframes also exist.
+    camera = PerspectiveCamera(); camera.position = Vec3(0.0, 0.0, 4.0)
+    scene = Scene(); scene.background = Color3(0.0, 0.0, 0.0)
+    for color in (Color3(1.0, 0.0, 0.0), Color3(0.0, 1.0, 0.0))
+        add!(scene, Mesh(PlaneGeometry(width=1.5, height=1.5, width_segments=2, height_segments=2),
+                         MeshBasicMaterial(color=color, wireframe=true, transparent=true,
+                                           opacity=0.5)))
+    end
+    for (i, z) in ((1, -1.0), (2, 1.0))
+        offscreen = Mesh(PlaneGeometry(width=0.5, height=0.5),
+                         MeshBasicMaterial(color=Color3(0.0, 0.0, 1.0), wireframe=true,
+                                           transparent=true, opacity=0.5))
+        offscreen.position = Vec3(100.0 + i, 0.0, z)
+        add!(scene, offscreen)
+    end
+    instances = InstancedMesh(BoxGeometry(width=0.5, height=0.5, depth=0.5),
+                              MeshBasicMaterial(color=Color3(1.0, 1.0, 1.0), wireframe=true,
+                                                transparent=true, opacity=0.5), 4)
+    for (i, x) in enumerate((-0.2, 100.0, 0.2, -100.0))
+        set_instance_matrix!(instances, i, mat4_translation(x, 0.0, 0.5))
+        set_instance_color!(instances, i, Color3(i / 4, 1.0 - i / 4, 0.5))
+    end
+    add!(scene, instances)
+    expected = RenderTarget(32, 32); render!(expected, scene, camera)
+    for tiles in (1, 2, 5)
+        target = RenderTarget(32, 32)
+        render_tiled!(target, scene, camera; tiles=tiles)
+        @test target.color == expected.color
+        @test isequal(target.depth, expected.depth)
+    end
+end
+
 # Screen-space corners (x, y) from three.js r186 src/renderers/shaders/ShaderLib/
 # sprite.glsl.js (vertex shader: scale the centred quad by the world column
 # lengths, then rotate by SpriteMaterial.rotation, then project), evaluated in

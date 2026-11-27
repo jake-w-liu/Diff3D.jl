@@ -3557,28 +3557,39 @@ function _render_tiled_instanced_wireframes!(
 end
 
 # Blended wireframes, pushed in `render!`'s order (instances, then meshes) and
-# sorted back to front by the same routine.
+# sorted back to front by the same routine. Items outside the view frustum are
+# dropped as `render!` drops them by default (`frustum_cull=true`): the sort is
+# not stable, so a list with extra offscreen items could order equal-depth
+# visible wireframes differently.
 function _tiled_transparent_wireframe_items!(items::Vector{_TransparentRenderItem},
                                              meshes::Vector{Mesh},
                                              mesh_worlds::Vector{Mat4{Float64}},
                                              instanced::Vector{InstancedMesh},
                                              instanced_worlds::Vector{Mat4{Float64}},
-                                             view::Mat4)
+                                             view::Mat4, frustum::Frustum,
+                                             bounds_cache::Tuple{Vector{BufferGeometry},
+                                                                 Vector{BoundingSphere{Float64}}})
     empty!(items)
     @inbounds for (instanced_slot, im) in pairs(instanced)
         _instanced_triangle_drawable(im) || continue
         mat = _instanced_material(im)
         (material_wireframe(mat) && _primitive_transparent(mat)) || continue
         base = instanced_worlds[instanced_slot]
+        geo = _instanced_geometry(im)
         for instance_index in eachindex(im.instance_matrices)
+            world = base * im.instance_matrices[instance_index]
+            _mesh_in_frustum(frustum, geo, world, bounds_cache) || continue
             push!(items, _TransparentRenderItem(
-                _mesh_view_depth_world(base * im.instance_matrices[instance_index], view),
+                _mesh_view_depth_world(world, view),
                 _TRANSPARENT_INSTANCED_WIREFRAME_ITEM, instanced_slot, instance_index))
         end
     end
     @inbounds for index in eachindex(meshes)
-        mat = _mesh_material(meshes[index])
+        mesh = meshes[index]
+        mat = _mesh_material(mesh)
         (material_wireframe(mat) && _primitive_transparent(mat)) || continue
+        _mesh_in_frustum(frustum, _mesh_geometry(mesh), mesh_worlds[index],
+                         bounds_cache) || continue
         push!(items, _TransparentRenderItem(
             _mesh_view_depth_world(mesh_worlds[index], view),
             _TRANSPARENT_WIREFRAME_ITEM, index, 0))
@@ -3676,7 +3687,8 @@ function render_tiled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
     end
     wireframe_items = _tiled_transparent_wireframe_items!(
         shared_cache.transparent_items, meshes, mesh_worlds, instanced,
-        instanced_worlds, view)
+        instanced_worlds, view, frustum_from_matrix(proj * view),
+        (shared_cache.bound_geometries, shared_cache.bounds))
     band = cld(H, active_tiles)
     if thread_count == 1
         for t in 1:active_tiles
