@@ -74,7 +74,7 @@ entry points only (`time`, then bytes allocated per call):
 | `reverse_gradient`, soft render 64 px, 459 parameters | 498.7 ms, 637 MB | 7.5 ms, 3.5 MB |
 | `reverse_gradient`, soft render 128 px | 1326 ms, 1.54 GB | 16.9 ms, 10.8 MB |
 | `ForwardDiff.gradient`, soft render 64 px | 1788 ms | 646.7 ms |
-| `raycast`, 24,576-face sphere | 2.51 ms | 0.147 ms |
+| `raycast`, sphere with 128x96 segments | 2.51 ms | 0.147 ms |
 | `raycast`, 400 boxes | 0.128 ms, 256 B | 0.102 ms, 576 B |
 | `load_png`, 512x512 | 10.6 ms | 1.36 ms |
 | `save_webgl_html`, lit three-mesh scene | 14.9 ms | 5.3 ms |
