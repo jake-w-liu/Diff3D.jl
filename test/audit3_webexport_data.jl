@@ -311,3 +311,62 @@ end
         @test bytes <= 2400 * count
     end
 end
+
+function audit3_staged_export_allocations(cases)
+    Diff3D._web_write_data_json_validated(devnull, cases)
+    return @allocated Diff3D._web_write_data_json_validated(devnull, cases)
+end
+
+# An IO whose first write starts another export on the same task, while the
+# outer export still holds the task's staging buffer.
+struct Audit3NestedExportIO <: IO
+    inner::IOBuffer
+    cases::Vector{WebGLExportCase}
+    nested::Vector{Vector{UInt8}}
+end
+
+function Base.unsafe_write(io::Audit3NestedExportIO, p::Ptr{UInt8}, n::UInt)
+    if isempty(io.nested)
+        push!(io.nested, UInt8[])
+        buffer = IOBuffer()
+        Diff3D._web_write_data_json_validated(buffer, io.cases)
+        io.nested[1] = take!(buffer)
+    end
+    return unsafe_write(io.inner, p, n)
+end
+
+Base.write(io::Audit3NestedExportIO, byte::UInt8) = write(io.inner, byte)
+
+@testset "export data staging buffer is reused per task" begin
+    scene = Scene()
+    for i in 1:2
+        add!(scene, Mesh(SphereGeometry(radius=1.0, width_segments=16, height_segments=8),
+                         MeshBasicMaterial(); name="staged_$i"))
+    end
+    cases = [WebGLExportCase("staged", "Staged", "", scene; radius=4.0)]
+    reference = IOBuffer()
+    Diff3D._web_write_data_json_cases(reference, cases)     # unstaged writer
+    expected = take!(reference)
+    direct = IOBuffer()
+    Diff3D._web_write_data_json_validated(direct, cases)
+    @test take!(direct) == expected
+    # A nested export on the same task must not share the lent buffer.
+    nesting = Audit3NestedExportIO(IOBuffer(), cases, Vector{UInt8}[])
+    Diff3D._web_write_data_json_validated(nesting, cases)
+    @test take!(nesting.inner) == expected
+    @test nesting.nested == [expected]
+    # The buffer is returned after an error and is per task.
+    @test_throws ArgumentError Diff3D._web_write_data_json_validated(
+        devnull, [WebGLExportCase("staged", "Staged", "", Scene(); radius=NaN)])
+    @test !Diff3D._web_staging_slot().lent
+    results = fetch.([Threads.@spawn begin
+        buffer = IOBuffer()
+        Diff3D._web_write_data_json_validated(buffer, cases)
+        take!(buffer)
+    end for _ in 1:4])
+    @test all(==(expected), results)
+    if Base.JLOptions().opt_level > 0
+        # The 64 KiB staging buffer used to be allocated by every export.
+        @test audit3_staged_export_allocations(cases) < 16_384
+    end
+end

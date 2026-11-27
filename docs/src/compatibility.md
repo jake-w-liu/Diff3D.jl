@@ -117,7 +117,9 @@ three.js r186 on purpose:
 - Shading: ambient and fill light, the transmission background, anisotropy
   (isotropic broadening) and rect-area lights (a 3x3 quadrature of the
   point-light BRDF rather than LTC) use Diff3D's own models. Direct lighting of
-  the Standard and Physical materials follows the three.js BRDF.
+  the Standard and Physical materials follows the three.js BRDF. The browser
+  export evaluates ambient light the three.js way, so a metallic surface lit
+  mostly by ambient light renders brighter on the CPU than in the browser.
 - Lights and shadows: IES profiles normalize candela linearly (three.js squares
   it). The shadow bias is a positive depth offset with default `3e-3` and a
   default PCF radius of 0. `shadow_normal_bias` offsets along the shaded normal.

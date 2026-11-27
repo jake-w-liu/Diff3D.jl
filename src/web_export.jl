@@ -4236,6 +4236,21 @@ end
 
 _WebStagedIO(io::IO) = _WebStagedIO(io, Vector{UInt8}(undef, _WEB_STAGING_BYTES), 0)
 
+# Each task keeps one staging buffer and lends it to one export at a time, so
+# repeated exports do not allocate 64 KiB each. A nested export on the same
+# task (the buffer is already lent) gets a buffer of its own.
+mutable struct _WebStagingSlot
+    buf::Vector{UInt8}
+    lent::Bool
+end
+
+const _WEB_STAGING_KEY = :Diff3D_web_staging_slot
+
+function _web_staging_slot()
+    return get!(() -> _WebStagingSlot(Vector{UInt8}(undef, _WEB_STAGING_BYTES), false),
+                task_local_storage(), _WEB_STAGING_KEY)::_WebStagingSlot
+end
+
 function _web_flush_staged!(s::_WebStagedIO)
     if s.n > 0
         GC.@preserve s unsafe_write(s.io, pointer(s.buf), UInt(s.n))
@@ -4264,9 +4279,21 @@ end
 
 function _web_write_data_json_validated(io::IO,
                                         cases::AbstractVector{WebGLExportCase})
-    staged = _WebStagedIO(io)
-    _web_write_data_json_cases(staged, cases)
-    _web_flush_staged!(staged)
+    slot = _web_staging_slot()
+    if slot.lent
+        staged = _WebStagedIO(io)
+        _web_write_data_json_cases(staged, cases)
+        _web_flush_staged!(staged)
+        return nothing
+    end
+    slot.lent = true
+    try
+        staged = _WebStagedIO(io, slot.buf, 0)
+        _web_write_data_json_cases(staged, cases)
+        _web_flush_staged!(staged)
+    finally
+        slot.lent = false
+    end
     return nothing
 end
 
