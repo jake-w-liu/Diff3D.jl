@@ -1544,6 +1544,12 @@ function _web_shadow_json(scene::Scene, light::Union{DirectionalLight,PointLight
                           clipping_planes=_NO_PLANES)
     (hasproperty(light, :cast_shadow) && getproperty(light, :cast_shadow)) || return "null"
     shadow_mode === :none && return "null"
+    # The viewer's shadow shaders take neither setting; refuse them rather than
+    # exporting a shadow that ignores them.
+    _light_shadow_intensity(light) == 1.0 ||
+        throw(ArgumentError("compact WebGL shadows support only shadow_intensity=1"))
+    _light_shadow_normal_bias(light) == 0.0 ||
+        throw(ArgumentError("compact WebGL shadows support only shadow_normal_bias=0"))
     if shadow_mode === :directional_dynamic || shadow_mode === :spot_dynamic ||
        shadow_mode === :point_dynamic
         if shadow_mode === :directional_dynamic
@@ -1865,6 +1871,11 @@ function _web_write_light_json(io::IO, light::LightProbe;
                                clipping_planes=_NO_PLANES,
                                num_buf::Vector{UInt8}=_web_num_buffer())
     _validate_light_object(light)
+    # The viewer evaluates only the order-1 `coeffs`; refuse SH9 rather than
+    # exporting a probe without its spherical-harmonic light.
+    _light_probe_has_sh(light) && any(c -> c.r != 0 || c.g != 0 || c.b != 0, light.sh) &&
+        throw(ArgumentError("compact WebGL export does not support LightProbe sh " *
+                            "(order-2 spherical harmonics); use coeffs"))
     _web_write_validated_light_common_json(io, "lightProbe", light, num_buf)
     write(io, ",\"position\":")
     _js_write_vec(io, _light_world_position(light), num_buf)

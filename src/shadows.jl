@@ -24,13 +24,18 @@ mutable struct _PointShadowCube
 end
 
 """
-    ShadowMap(depth, light_vp, bias, pcf_radius=0)
+    ShadowMap(depth, light_vp, bias, pcf_radius=0; intensity=1.0, normal_bias=0.0)
 
 Light-space depth map queried by [`shadow_visibility`](@ref). `depth` holds NDC
 depth from the light (smaller is nearer, `Inf` marks an empty texel) sampled
 through the view-projection `light_vp`; `bias` is subtracted from a receiver's
 NDC depth before the comparison and `pcf_radius` selects percentage-closer
 filtering.
+
+`intensity` (three.js `LightShadow.intensity`, in `[0, 1]`) scales how dark the
+shadow is: a query returns `mix(1, lit_fraction, intensity)`. `normal_bias`
+(three.js `LightShadow.normalBias`, world units) offsets a query point along the
+surface normal passed to [`shadow_visibility`](@ref) before the depth test.
 
 [`compute_shadow_map`](@ref) returns a cube map for a `PointLight`: `depth` then
 stores the six square faces side by side (`res × 6res`, faces ordered +X, -X,
@@ -43,20 +48,26 @@ struct ShadowMap
     bias::Float64
     pcf_radius::Int             # percentage-closer-filtering radius r; 0 = hard shadow
     cube::Union{Nothing, _PointShadowCube}   # point-light cube faces; nothing = single 2D map
+    intensity::Float64          # three.js LightShadow.intensity
+    normal_bias::Float64        # three.js LightShadow.normalBias (world units)
 
-    function ShadowMap(depth::Matrix{Float64}, light_vp::Mat4{Float64}, bias, pcf_radius)
+    function ShadowMap(depth::Matrix{Float64}, light_vp::Mat4{Float64}, bias, pcf_radius;
+                       intensity=1.0, normal_bias=0.0)
         !isempty(depth) || throw(ArgumentError("ShadowMap depth must be non-empty"))
         all(isfinite, light_vp.e) || throw(ArgumentError("ShadowMap light_vp must be finite"))
         b = _validated_shadow_bias(bias)
         b === nothing && throw(ArgumentError("ShadowMap bias must be finite"))
         pcf = _validated_shadow_pcf_radius(pcf_radius)
         pcf === nothing && throw(ArgumentError("ShadowMap pcf_radius must be an integer"))
-        return new(depth, light_vp, b, pcf, nothing)
+        return new(depth, light_vp, b, pcf, nothing,
+                   _validated_shadow_intensity(intensity),
+                   _validated_shadow_normal_bias(normal_bias))
     end
 
     # Point-light cube map; only built by the shadow pass.
     function ShadowMap(depth::Matrix{Float64}, cube::_PointShadowCube, bias::Float64,
-                       pcf_radius::Int, ::Val{:cube})
+                       pcf_radius::Int, intensity::Float64, normal_bias::Float64,
+                       ::Val{:cube})
         res = size(depth, 1)
         res > 0 && size(depth, 2) == 6res ||
             throw(ArgumentError("cube ShadowMap depth must be res × 6res"))
@@ -66,12 +77,14 @@ struct ShadowMap
         for vp in cube.face_vps
             all(isfinite, vp.e) || throw(ArgumentError("ShadowMap light_vp must be finite"))
         end
-        return new(depth, cube.face_vps[1], bias, pcf_radius, cube)
+        return new(depth, cube.face_vps[1], bias, pcf_radius, cube,
+                   _validated_shadow_intensity(intensity),
+                   _validated_shadow_normal_bias(normal_bias))
     end
 end
 
-ShadowMap(depth::Matrix{Float64}, light_vp::Mat4, bias, pcf_radius) =
-    ShadowMap(depth, convert(Mat4{Float64}, light_vp), bias, pcf_radius)
+ShadowMap(depth::Matrix{Float64}, light_vp::Mat4, bias, pcf_radius; kwargs...) =
+    ShadowMap(depth, convert(Mat4{Float64}, light_vp), bias, pcf_radius; kwargs...)
 
 # Backward-compatible constructor: existing 3-arg callers get a hard shadow (r=0),
 # matching the original single-sample depth comparison byte-for-byte.
@@ -88,6 +101,19 @@ end
     maps = query.maps
     return haskey(maps, light) ? shadow_visibility(maps[light], p) : 1.0
 end
+
+@inline function (query::_ShadowQuery)(light, p::Vec3, normal::Vec3)
+    maps = query.maps
+    return haskey(maps, light) ? shadow_visibility(maps[light], p; normal=normal) : 1.0
+end
+
+# Shading-side entry: built-in shadow queries also receive the surface normal
+# for `normal_bias`; a caller-supplied `shadow_fn(light, position)` keeps its
+# two-argument form.
+@inline _shadow_fn_visibility(shadow_fn, light, p::Vec3, normal::Vec3) =
+    shadow_fn(light, p)
+@inline _shadow_fn_visibility(query::_ShadowQuery, light, p::Vec3, normal::Vec3) =
+    query(light, p, normal)
 
 function _validated_shadow_resolution(resolution::Int)
     resolution > 0 || throw(ArgumentError("shadow resolution must be positive"))
@@ -177,26 +203,38 @@ end
 # consistent), and z >= |p - light| / sqrt(1 + 2 tan^2) >= (d - radius) / ... since
 # the frustum's corner rays are the most oblique. Using only the first under-fits
 # near for cameras aimed away from the centre (cube faces, off-axis spots).
+# `caster_distance` is a lower bound on the distance from the light to every
+# shadow caster (`_shadow_caster_distance`); the same corner argument turns it
+# into a bound on their view depth. Without it a light inside the bounding sphere
+# fell back to near = radius/100, and the fixed NDC `bias` then spanned a
+# world-space depth of about bias*z^2/(2 near): a 3e-3 bias erased the shadow of
+# a 0.1-thick tile three units below a light in a 10-unit room.
 # The floor keeps `near` positive (and the near/far ratio bounded) when the
-# light sits inside the bounding sphere.
+# light sits inside the bounding sphere and touches a caster.
 function _perspective_shadow_planes(lv::Mat4, light_pos::Vec3, center::Vec3, radius,
-                                    tan_half_fov)
+                                    tan_half_fov, caster_distance=0.0)
     d = norm(light_pos - center)
     zc = -mat4_transform_point(lv, center).z
-    corner = (d - radius) / sqrt(1 + 2 * tan_half_fov^2)
-    near = max(zc - radius, corner, max(radius, d) * 1e-2)
+    corner_scale = sqrt(1 + 2 * tan_half_fov^2)
+    corner = (d - radius) / corner_scale
+    near = max(zc - radius, corner, caster_distance / corner_scale,
+               max(radius, d) * 1e-2)
     far = max(zc + radius, near * (1 + 1e-6))
     return (near, far)
 end
 
-function _light_view_proj(light::SpotLight, center::Vec3, radius)
+_light_view_proj(light::DirectionalLight, center::Vec3, radius, caster_distance) =
+    _light_view_proj(light, center, radius)
+
+function _light_view_proj(light::SpotLight, center::Vec3, radius, caster_distance=0.0)
     light_position = _light_world_position(light)
     direction = light.rotation_driven ? _light_emission_direction(light) :
                 _shadow_direction(light_position, light.target)
     lv = light.rotation_driven ? _view_from_direction(light_position, direction, _safe_up(direction)) :
          mat4_look_at(light_position, light.target, _safe_up(direction))
     fov = min(light.angle * 2.0, π * 0.9)
-    near, far = _perspective_shadow_planes(lv, light_position, center, radius, tan(fov / 2))
+    near, far = _perspective_shadow_planes(lv, light_position, center, radius, tan(fov / 2),
+                                           caster_distance)
     lp = mat4_perspective(fov, 1.0, near, far)
     return lp * lv
 end
@@ -204,11 +242,12 @@ end
 # Single 90-degree frustum aimed at the scene centre. The CPU shadow pass uses
 # the full cube (`_point_shadow_cube`); this one-map form serves the WebGL
 # static export, which stores one 2D depth texture per light.
-function _light_view_proj(light::PointLight, center::Vec3, radius)
+function _light_view_proj(light::PointLight, center::Vec3, radius, caster_distance=0.0)
     light_position = _light_world_position(light)
     dir = _shadow_direction(light_position, center)
     lv = mat4_look_at(light_position, center, _safe_up(dir))
-    near, far = _perspective_shadow_planes(lv, light_position, center, radius, 1.0)
+    near, far = _perspective_shadow_planes(lv, light_position, center, radius, 1.0,
+                                           caster_distance)
     lp = mat4_perspective(π/2, 1.0, near, far)
     return lp * lv
 end
@@ -217,15 +256,81 @@ end
 # face by WebGLShadowMap.js). Each face fits its own near/far planes to the
 # scene bounding sphere. The view is built from the axis itself rather than
 # `origin + axis`, which rounds back to `origin` for distant lights.
-function _point_shadow_cube(light::PointLight, center::Vec3, radius)
+function _point_shadow_cube(light::PointLight, center::Vec3, radius, caster_distance=0.0)
     origin = _light_world_position(light)
     face_vps = ntuple(Val(6)) do face
         lv = _view_from_direction(origin, _POINT_SHADOW_DIRECTIONS[face],
                                   _POINT_SHADOW_UPS[face])
-        near, far = _perspective_shadow_planes(lv, origin, center, radius, 1.0)
+        near, far = _perspective_shadow_planes(lv, origin, center, radius, 1.0,
+                                               caster_distance)
         mat4_perspective(π/2, 1.0, near, far) * lv
     end
     return _PointShadowCube(origin, face_vps)
+end
+
+# Distance from `origin` to the axis-aligned box of a world-space triangle: a
+# lower bound on the distance to every point of the triangle.
+@inline function _shadow_triangle_box_distance(origin::Vec3, a::Vec3, b::Vec3, c::Vec3)
+    dx = max(min(a.x, b.x, c.x) - origin.x, origin.x - max(a.x, b.x, c.x), 0.0)
+    dy = max(min(a.y, b.y, c.y) - origin.y, origin.y - max(a.y, b.y, c.y), 0.0)
+    dz = max(min(a.z, b.z, c.z) - origin.z, origin.z - max(a.z, b.z, c.z), 0.0)
+    return sqrt(dx * dx + dy * dy + dz * dz)
+end
+
+mutable struct _ShadowCasterDistance
+    const origin::Vec3{Float64}
+    best::Float64
+end
+
+function _shadow_geometry_caster_distance!(state::_ShadowCasterDistance, geo,
+                                           world::Mat4{Float64})
+    origin = state.origin
+    best = state.best
+    for face_index in _draw_face_range(geo)
+        i1, i2, i3 = get_face(geo, face_index)
+        a = mat4_transform_point(world, get_vertex(geo, i1))
+        b = mat4_transform_point(world, get_vertex(geo, i2))
+        c = mat4_transform_point(world, get_vertex(geo, i3))
+        distance = _shadow_triangle_box_distance(origin, a, b, c)
+        # A non-finite vertex leaves no usable bound; zero falls back to the
+        # radius-relative floor of `_perspective_shadow_planes`.
+        isfinite(distance) || (best = 0.0; break)
+        best = min(best, distance)
+    end
+    state.best = best
+    return nothing
+end
+
+# Mesh geometry is untyped; these barriers take only heap references so the
+# per-drawable dynamic call does not box a matrix or a return value.
+_shadow_mesh_caster_distance!(state::_ShadowCasterDistance, geo, mesh) =
+    _shadow_geometry_caster_distance!(state, geo, compute_world_matrix(mesh))
+
+function _shadow_instanced_caster_distance!(state::_ShadowCasterDistance, geo, im)
+    base = compute_world_matrix(im)
+    for M in im.instance_matrices
+        _shadow_geometry_caster_distance!(state, geo, base * M)
+    end
+    return nothing
+end
+
+# Lower bound on the distance from `origin` to every triangle the shadow pass
+# rasterizes (the casters `_raster_shadow_casters!` draws); 0 when unknown.
+function _shadow_caster_distance(meshes, instanced, origin::Vec3{Float64})
+    state = _ShadowCasterDistance(origin, Inf)
+    for mesh in meshes
+        is_visible(mesh) || continue
+        object_casts_shadow(mesh) || continue
+        _shadow_mesh_caster_distance!(state, mesh.geometry, mesh)
+    end
+    for im in instanced
+        _visible_in_tree(im) || continue
+        _instanced_triangle_drawable(im) || continue
+        object_casts_shadow(im) || continue
+        _shadow_instanced_caster_distance!(state, im.geometry, im)
+    end
+    best = state.best
+    return isfinite(best) ? best : 0.0
 end
 
 # Cube face whose 90-degree frustum contains the light-to-point offset `d`:
@@ -555,18 +660,24 @@ function _compute_shadow_map_from_drawables(meshes, instanced, light,
     has_caster = any(m -> is_visible(m) && object_casts_shadow(m), meshes) ||
                  any(im -> _visible_in_tree(im) && _instanced_triangle_drawable(im) &&
                            object_casts_shadow(im), instanced)
+    intensity = _light_shadow_intensity(light)
+    normal_bias = _light_shadow_normal_bias(light)
     has_caster ||
-        return ShadowMap(depth, Mat4{Float64}(), shadow_bias, pcf)
+        return ShadowMap(depth, Mat4{Float64}(), shadow_bias, pcf;
+                         intensity=intensity, normal_bias=normal_bias)
     center, radius = _scene_bounds(meshes, instanced)
+    caster_distance = light isa DirectionalLight ? 0.0 :
+        _shadow_caster_distance(meshes, instanced, _light_world_position(light))
     if point_cube
-        faces = _point_shadow_cube(light, center, radius)
+        faces = _point_shadow_cube(light, center, radius, caster_distance)
         _raster_shadow_casters!(depth, res, meshes, instanced, collect(faces.face_vps),
                                 clipping_planes)
-        return ShadowMap(depth, faces, shadow_bias, pcf, Val(:cube))
+        return ShadowMap(depth, faces, shadow_bias, pcf, intensity, normal_bias, Val(:cube))
     end
-    vp = _light_view_proj(light, center, radius)
+    vp = _light_view_proj(light, center, radius, caster_distance)
     _raster_shadow_casters!(depth, res, meshes, instanced, [vp], clipping_planes)
-    return ShadowMap(depth, vp, shadow_bias, pcf)
+    return ShadowMap(depth, vp, shadow_bias, pcf; intensity=intensity,
+                     normal_bias=normal_bias)
 end
 
 function _compute_scene_shadow_map(scene, light, cube::Bool; resolution::Int=512,
@@ -616,7 +727,7 @@ _compute_single_shadow_map(scene, light; resolution::Int=512, bias=nothing,
 @inline _vh(v::Vec3) = Vec4(v.x, v.y, v.z, 1.0)
 
 """
-    shadow_visibility(sm, p; pcf_radius=sm.pcf_radius)
+    shadow_visibility(sm, p; pcf_radius=sm.pcf_radius, normal=nothing)
 
 Visibility of a world-space point from the shadow map's light: `1` lit, `0`
 fully occluded. With `pcf_radius = r > 0`, a `(2r+1)x(2r+1)` neighbourhood of the
@@ -625,16 +736,35 @@ soft penumbra (percentage-closer filtering, matching three.js `PCFShadowMap`).
 The neighbourhood is clamped to the map bounds (to the sampled face of a
 point-light cube map). `pcf_radius=0` reproduces the single-sample hard shadow
 exactly.
+
+The result is `mix(1, visibility, sm.intensity)` (three.js `getShadow`). When a
+unit surface `normal` is given, the lookup point is first moved to
+`p + normal * sm.normal_bias` (three.js `shadowmap_vertex`). The CPU renderers
+pass the shaded surface normal, which includes any normal-map perturbation,
+where three.js uses the interpolated vertex normal.
 """
-function shadow_visibility(sm::ShadowMap, p::Vec3; pcf_radius::Int=sm.pcf_radius)
+function shadow_visibility(sm::ShadowMap, p::Vec3; pcf_radius::Int=sm.pcf_radius,
+                           normal::Union{Nothing,Vec3}=nothing)
     r = _validated_shadow_pcf_radius(pcf_radius)::Int
     isfinite(p.x) && isfinite(p.y) && isfinite(p.z) ||
         throw(ArgumentError("shadow_visibility point must be finite"))
+    if normal !== nothing && sm.normal_bias != 0.0
+        p = p + normal * sm.normal_bias
+        isfinite(p.x) && isfinite(p.y) && isfinite(p.z) ||
+            throw(ArgumentError("shadow_visibility normal must be finite"))
+    end
     H, W = size(sm.depth)
     cube = sm.cube
-    cube === nothing && return _shadow_lookup(sm.depth, sm.light_vp, sm.bias, r, p, 0, W, H)
-    face = _point_shadow_face(p - cube.origin)
-    return _shadow_lookup(sm.depth, cube.face_vps[face], sm.bias, r, p, (face - 1) * H, H, H)
+    visibility = if cube === nothing
+        _shadow_lookup(sm.depth, sm.light_vp, sm.bias, r, p, 0, W, H)
+    else
+        face = _point_shadow_face(p - cube.origin)
+        _shadow_lookup(sm.depth, cube.face_vps[face], sm.bias, r, p, (face - 1) * H, H, H)
+    end
+    intensity = sm.intensity
+    intensity == 1.0 && return visibility
+    # GLSL mix(1, shadow, intensity) = 1 * (1 - intensity) + shadow * intensity.
+    return (1.0 - intensity) + visibility * intensity
 end
 
 # Depth test of `p` against the `W × H` map stored in columns
