@@ -120,3 +120,139 @@ end
     @test _audit3b_area(meshes[1].geometry) ≈ 50.0
     @test _audit3b_area(meshes[2].geometry) ≈ 50.0
 end
+
+function _audit3b_bbox(paths)
+    xs = [p.x for path in paths for p in path.points]
+    ys = [p.y for path in paths for p in path.points]
+    return (minimum(xs), minimum(ys), maximum(xs), maximum(ys))
+end
+
+_audit3b_close(a, b; atol=1e-9) = all(isapprox.(a, b; atol=atol))
+
+@testset "SVG clip paths and masks live in the referencing element's user space" begin
+    # SVG 1.1 section 14.3.5: clipPathUnits="userSpaceOnUse" is "the current
+    # user coordinate system in place at the time when the clipPath element is
+    # referenced (i.e., the user coordinate system for the element referencing
+    # the clipPath element via the clip-path property)"; the clipPath's own
+    # ancestors do not matter, its own transform does. Expected boxes are that
+    # derivation (three.js SVGLoader has no clip-path support).
+    doc = _audit3b_svg("""
+        <svg width="200" height="100">
+          <defs><clipPath id="c"><rect width="5" height="5"/></clipPath></defs>
+          <g transform="translate(100,0)">
+            <clipPath id="far"><rect width="5" height="5"/></clipPath>
+          </g>
+          <clipPath id="moved" transform="translate(2,0)"><rect width="5" height="5"/></clipPath>
+          <g transform="translate(20,0)"><rect width="10" height="10" clip-path="url(#c)"/></g>
+          <rect x="40" width="10" height="10" transform="scale(2)" clip-path="url(#c)"/>
+          <rect width="10" height="10" clip-path="url(#far)"/>
+          <g transform="translate(0,40)" clip-path="url(#moved)"><rect width="10" height="10"/></g>
+        </svg>""")
+    groups = Diff3D._svg_element_path_groups(doc.paths)
+    # The element's own scale(2) scales the clip too: user 40..50 x 0..10 is
+    # clipped to user 0..5, which misses it entirely, leaving three elements.
+    @test length(groups) == 3
+    # Group translate(20,0): the clip moves with the group.
+    @test _audit3b_close(_audit3b_bbox(groups[1]), (20.0, 0.0, 25.0, 5.0))
+    # The translate(100,0) around clipPath #far does not apply.
+    @test _audit3b_close(_audit3b_bbox(groups[2]), (0.0, 0.0, 5.0, 5.0))
+    # clipPath #moved's own transform does.
+    @test _audit3b_close(_audit3b_bbox(groups[3]), (2.0, 40.0, 7.0, 45.0))
+    scaled = _audit3b_svg("""
+        <svg width="200" height="100">
+          <clipPath id="c"><rect width="5" height="5"/></clipPath>
+          <rect width="10" height="10" transform="scale(2)" clip-path="url(#c)"/>
+        </svg>""")
+    @test _audit3b_close(_audit3b_bbox(scaled.paths), (0.0, 0.0, 10.0, 10.0))
+
+    # objectBoundingBox: the box is the element's bounding box in its own user
+    # space (SVG 1.1 section 7.11), so under rotate(30) the clip x <= 0.25
+    # keeps the user-space strip 0 <= x <= 2.5 of the 10x10 square (area 25).
+    rotated = _audit3b_svg("""
+        <svg width="100" height="100">
+          <clipPath id="bb" clipPathUnits="objectBoundingBox"><rect width="0.25" height="1"/></clipPath>
+          <rect width="10" height="10" transform="translate(50,10) rotate(30)" clip-path="url(#bb)"/>
+        </svg>""")
+    θ = 30 * π / 180
+    inv(p) = Vec2(cos(θ) * (p.x - 50) + sin(θ) * (p.y - 10),
+                  -sin(θ) * (p.x - 50) + cos(θ) * (p.y - 10))
+    user = [inv(p) for path in rotated.paths for p in path.points]
+    @test all(p -> -1e-9 <= p.x <= 2.5 + 1e-9 && -1e-9 <= p.y <= 10 + 1e-9, user)
+    @test sum(path -> abs(Diff3D._font_polygon_area(path.points)), rotated.paths) ≈ 25.0
+
+    # Basic-shape lengths are user-space lengths too (CSS Masking 1 section
+    # 5.1): inset(0 5px 0 0) on a 10x10 rect under scale(2) keeps user x <= 5,
+    # i.e. root x <= 10.
+    inset = _audit3b_svg("""
+        <svg width="100" height="100">
+          <rect width="10" height="10" transform="scale(2)" style="clip-path: inset(0 5px 0 0)"/>
+        </svg>""")
+    @test _audit3b_close(_audit3b_bbox(inset.paths), (0.0, 0.0, 10.0, 20.0))
+
+    # Masks follow the same rule (SVG 1.1 section 14.4, maskContentUnits
+    # userSpaceOnUse), including through a mirrored transform.
+    masked = _audit3b_svg("""
+        <svg width="100" height="100">
+          <mask id="m"><rect width="5" height="5" fill="white"/></mask>
+          <g transform="translate(20,0)"><rect width="10" height="10" mask="url(#m)"/></g>
+          <g transform="translate(60,0) scale(-1,1)"><rect width="10" height="10" mask="url(#m)"/></g>
+        </svg>""")
+    mgroups = Diff3D._svg_element_path_groups(masked.paths)
+    @test _audit3b_close(_audit3b_bbox(mgroups[1]), (20.0, 0.0, 25.0, 5.0))
+    @test _audit3b_close(_audit3b_bbox(mgroups[2]), (55.0, 0.0, 60.0, 5.0))
+
+    # The x/y of `use` belong to its user space (SVG 1.1 section 5.6: an
+    # additional translate(x,y) on the generated group).
+    used = _audit3b_svg("""
+        <svg width="100" height="100">
+          <clipPath id="c"><rect width="5" height="5"/></clipPath>
+          <defs><rect id="r" width="10" height="10"/></defs>
+          <use href="#r" x="30" clip-path="url(#c)"/>
+        </svg>""")
+    @test _audit3b_close(_audit3b_bbox(used.paths), (30.0, 0.0, 35.0, 5.0))
+end
+
+@testset "SVG clip-path, mask and use references may precede their definitions" begin
+    # SVG 1.1 section 5.3.1: IRI references resolve against the whole
+    # document; an element may reference a definition that appears later.
+    doc = _audit3b_svg("""
+        <svg width="100" height="100">
+          <rect width="10" height="10" clip-path="url(#c)"/>
+          <rect x="20" width="10" height="10" mask="url(#m)"/>
+          <g clip-path="url(#c)"><rect width="3" height="3"/></g>
+          <use href="#later" x="50"/>
+          <defs>
+            <clipPath id="c"><rect width="5" height="5"/></clipPath>
+            <mask id="m"><rect x="20" width="4" height="4" fill="white"/></mask>
+            <rect id="later" width="2" height="2"/>
+          </defs>
+        </svg>""")
+    groups = Diff3D._svg_element_path_groups(doc.paths)
+    @test length(groups) == 4
+    @test _audit3b_close(_audit3b_bbox(groups[1]), (0.0, 0.0, 5.0, 5.0))
+    @test _audit3b_close(_audit3b_bbox(groups[2]), (20.0, 0.0, 24.0, 4.0))
+    @test _audit3b_close(_audit3b_bbox(groups[3]), (0.0, 0.0, 3.0, 3.0))
+    @test _audit3b_close(_audit3b_bbox(groups[4]), (50.0, 0.0, 52.0, 2.0))
+    # Inheritance inside a forward clip definition comes from its own
+    # ancestors: the clip-rule on the enclosing group makes the inner square a
+    # hole.
+    holed = _audit3b_svg("""
+        <svg width="100" height="100">
+          <rect width="10" height="10" clip-path="url(#h)"/>
+          <g style="clip-rule: evenodd" fill-rule="evenodd">
+            <clipPath id="h"><path d="M0 0 H10 V10 H0 Z M2 2 H8 V8 H2 Z"/></clipPath>
+          </g>
+        </svg>""")
+    @test _audit3b_area(svg_geometry(holed)) ≈ 64.0
+    # Cycles through clip-path references are rejected, not recursed forever.
+    @test_throws "circular reference" _audit3b_svg("""
+        <svg><clipPath id="a"><rect width="5" height="5" clip-path="url(#a)"/></clipPath>
+        <rect width="10" height="10" clip-path="url(#a)"/></svg>""")
+    @test_throws "circular reference" _audit3b_svg("""
+        <svg><mask id="a"><rect width="5" height="5" fill="white" mask="url(#b)"/></mask>
+        <mask id="b"><rect width="5" height="5" fill="white" mask="url(#a)"/></mask>
+        <rect width="10" height="10" mask="url(#a)"/></svg>""")
+    @test_throws "SVG clip-path references unknown id" _audit3b_svg("""
+        <svg><rect id="notclip" width="5" height="5"/>
+        <rect width="10" height="10" clip-path="url(#notclip)"/></svg>""")
+end
