@@ -8,8 +8,9 @@ A picking result, the counterpart of a three.js `Raycaster` intersection.
 
 - `distance`, `point`: world-space distance from the ray origin and hit point.
 - `object`: the object that was hit.
-- `face_index`: mesh face, point vertex, or line segment's start vertex (all
-  1-based); zero for a sprite.
+- `face_index`: mesh face, point vertex, or the draw entry (index-buffer
+  position, or vertex for non-indexed geometry) where a line segment starts,
+  as three.js `index` (all 1-based); zero for a sprite.
 - `instance_id`: 1-based instance for an `InstancedMesh`, otherwise `nothing`.
 - `face`: 1-based vertex indices `(a, b, c)` of the hit triangle (three.js
   `face.a/b/c`); `nothing` for points, lines and sprites.
@@ -699,6 +700,17 @@ end
     ax = akx - sx * akz; ay = aky - sy * akz
     bx = bkx - sx * bkz; by = bky - sy * bkz
     cx = ckx - sx * ckz; cy = cky - sy * ckz
+    # u, v, w, det and t_scaled all scale with the square of these sheared
+    # lateral coordinates, so t is unchanged by rescaling them alone. A triangle far
+    # narrower than its distance along the ray (lateral extent below 2^-300
+    # after the span normalization) is rescaled exactly to keep u, v, w from
+    # underflowing to a spurious det == 0.
+    lateral = max(abs(ax), abs(ay), abs(bx), abs(by), abs(cx), abs(cy))
+    if 0.0 < lateral < 0x1p-300
+        j = -exponent(lateral)
+        ax = ldexp(ax, j); ay = ldexp(ay, j); bx = ldexp(bx, j)
+        by = ldexp(by, j); cx = ldexp(cx, j); cy = ldexp(cy, j)
+    end
     u = cx * by - cy * bx
     v = ax * cy - ay * cx
     w = bx * ay - by * ax
@@ -951,12 +963,16 @@ function _camera_ray(camera::PerspectiveCamera, ndc_x, ndc_y)
 end
 
 function _camera_ray(camera::AbstractCamera, ndc_x, ndc_y)
-    inv_vp = mat4_inverse(projection_matrix(camera) * view_matrix(camera))
+    projection = projection_matrix(camera)
+    inv_vp = mat4_inverse(projection * view_matrix(camera))
     p_near = mat4_transform_point(inv_vp, Vec3(ndc_x, ndc_y, -1.0))
     p_far  = mat4_transform_point(inv_vp, Vec3(ndc_x, ndc_y, 1.0))
-    # Orthographic rays originate at the unprojected near-plane point because
-    # they do not share a camera apex.
-    Ray(_raycaster_vec3(p_near, "origin"), _raycaster_direction(p_far - p_near))
+    # Orthographic rays share no apex; three.js Raycaster.setFromCamera puts
+    # the origin in the camera plane by unprojecting NDC z =
+    # projectionMatrix.elements[14] (view-space z = 0), so surfaces between the
+    # camera and its near plane are hit too and distances start at the camera.
+    origin = mat4_transform_point(inv_vp, Vec3(ndc_x, ndc_y, mat4_get(projection, 3, 4)))
+    Ray(_raycaster_vec3(origin, "origin"), _raycaster_direction(p_far - p_near))
 end
 
 """Aim through screen NDC `(x,y)` and retain the camera for sprite picking."""
@@ -1051,11 +1067,15 @@ function _raycast_lines!(hits,rc::Raycaster,obj,geo::BufferGeometry,wm::Mat4,
         b = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, vi2))
         t, dist, seg_pt = _ray_segment_distance(o, d, a, b)
         if dist <= thr && rc.near <= t <= rc.far
-            # face_index = the segment's start vertex index (three.js index).
-            push!(hits, Intersection(t, seg_pt, obj, vi1, instance_id))
+            # face_index = the segment's first draw entry, which three.js
+            # reports as `index: i` (Line.js checkIntersection); it is the
+            # start vertex for non-indexed geometry.
+            push!(hits, Intersection(t, seg_pt, obj, entry, instance_id))
         end
     end
-    if mode === :line_loop && last_entry - first_entry + 1 > 2
+    # three.js Line.raycast tests a LineLoop's closing segment (last entry back
+    # to the first) for any non-empty range, including one or two vertices.
+    if mode === :line_loop
         vi1 = _draw_vertex_index(geo, last_entry)
         vi2 = _draw_vertex_index(geo, first_entry)
         _ray_lateral_rejects(codes, vi1, vi2) && return hits
@@ -1063,7 +1083,7 @@ function _raycast_lines!(hits,rc::Raycaster,obj,geo::BufferGeometry,wm::Mat4,
         b = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, vi2))
         t, dist, seg_pt = _ray_segment_distance(o, d, a, b)
         if dist <= thr && rc.near <= t <= rc.far
-            push!(hits, Intersection(t, seg_pt, obj, vi1, instance_id))
+            push!(hits, Intersection(t, seg_pt, obj, last_entry, instance_id))
         end
     end
     return hits
