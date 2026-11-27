@@ -325,3 +325,48 @@ audit3b_collapsing_pixel(delta) = audit3b_collapsing_image(delta)[4, 4, 1]
     @test forward < 0
     @test isapprox(reverse_gradient(p -> eps_pixel(p[1]), [1e-8])[1], forward; rtol=1e-9)
 end
+
+# 300 small random triangles on a 96 x 80 image (above the parallel threshold
+# of 4096 pixels), returned as a digest of the image, of a ForwardDiff
+# directional derivative and of the reverse gradient.
+const AUDIT3B_PARALLEL_SCRIPT = raw"""
+using Diff3D, ForwardDiff
+function scene()
+    state = UInt64(12345)
+    next() = (state = state * 6364136223846793005 + 1442695040888963407;
+              Float64(state >> 11) / Float64(UInt64(1) << 53))
+    vertices = Vec3{Float64}[]; faces = NTuple{3,Int}[]; colors = Color3{Float64}[]
+    for f in 1:300
+        cx = 1.8next() - 0.9; cy = 1.8next() - 0.9; z = 1.8next() - 0.9
+        for k in 1:3
+            push!(vertices, Vec3(cx + 0.1(2next() - 1), cy + 0.1(2next() - 1), z + 0.05next()))
+        end
+        push!(faces, (3f - 2, 3f - 1, 3f))
+        push!(colors, Color3(next(), next(), next()))
+    end
+    return vertices, faces, colors
+end
+vertices, faces, colors = scene()
+flat = reduce(vcat, [[v.x, v.y, v.z] for v in vertices])
+render(p) = soft_render(Diff3D._FlatVec3Params{eltype(p),typeof(p)}(p, length(vertices)), faces,
+                        [Color3{eltype(p)}(c.r, c.g, c.b) for c in colors], Mat4{eltype(p)}(),
+                        96, 80, SoftRasterizerConfig(sigma=eltype(p)(0.8), gamma=eltype(p)(0.1)))
+image = render(flat)
+directional = ForwardDiff.derivative(t -> sum(render(flat .+ t .* sin.(1:length(flat)))), 0.0)
+gradient = reverse_gradient(p -> loss_mse(render(p), zeros(80, 96, 3)), flat)
+println(repr(hash((image, directional, gradient))))
+"""
+
+@testset "Soft render output is bit-identical for any thread count" begin
+    # Threading contract (src/soft_rasterizer.jl `_soft_column_chunks`): pixel
+    # columns are split into parallel blocks only when several threads run;
+    # each pixel performs the serial operations, so the image, ForwardDiff
+    # partials and the reverse gradient hash identically with 1 and 3 threads.
+    project = Base.active_project()
+    digests = map((1, 3)) do threads
+        command = `$(Base.julia_cmd()) --startup-file=no -t $threads --project=$project -e $AUDIT3B_PARALLEL_SCRIPT`
+        strip(read(command, String))
+    end
+    @test digests[1] == digests[2]
+    @test !isempty(digests[1])
+end

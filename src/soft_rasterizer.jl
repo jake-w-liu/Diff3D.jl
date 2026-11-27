@@ -202,6 +202,13 @@ Degenerate triangles: a triangle whose doubled screen area `|A|` is below
 `config.eps` (pixel²) has its coverage multiplied by `s(|A| / eps)` with
 `s(t) = t^2 (3 - 2t)`, so a collapsing triangle fades out continuously and a
 zero-area triangle covers nothing; triangles with `|A| >= eps` are unaffected.
+
+Threading: when Julia runs with several threads, images of at least 4096 pixels
+with an isbits scalar type (`Float32`, `Float64`, ForwardDiff duals) are
+rendered in parallel column blocks; the reverse-mode (`ADVar`) pixel stage does
+the same before recording. Each pixel performs the same operations as in a
+serial render, so images and derivatives are bit-identical for any thread count.
+A workspace must not be shared by concurrent calls.
 """
 function soft_render(vertices::AbstractVector{Vec3{Tv}},
                      faces::Vector{NTuple{3,Int}},
@@ -530,16 +537,88 @@ function _soft_render_screen(::Type{T}, screen_tris, n_screen_tris::Int,
     zero_color = Color3(zero_weight, zero_weight, zero_weight)
     image = workspace === nothing ? Array{T}(undef, H, W, 3) :
         _soft_image_buffer!(workspace, H, W)
-    for py in 1:H
-        for px in 1:W
+    # Branch on the tile index so the callee specializes on a concrete type
+    # (a `Union{Nothing,Tuple}` argument would be boxed per call).
+    if tiles === nothing
+        _soft_render_pixels!(image, screen_tris, nothing, n_screen_tris, W, H,
+                             σ, γ, bg, eps, use_relative_depth,
+                             background_logit, zero_weight, zero_color)
+    else
+        _soft_render_pixels!(image, screen_tris, tiles, n_screen_tris, W, H,
+                             σ, γ, bg, eps, use_relative_depth,
+                             background_logit, zero_weight, zero_color)
+    end
+    return image
+end
+
+function _soft_render_pixels!(image::AbstractArray{T,3}, screen_tris, tiles,
+                              n_screen_tris::Int, W::Int, H::Int, σ, γ, bg,
+                              eps, use_relative_depth::Bool, background_logit,
+                              zero_weight, zero_color) where {T}
+    chunks = _soft_column_chunks(T, W, H)
+    if chunks <= 1
+        _soft_render_columns!(image, 1:W, screen_tris, tiles, n_screen_tris, H,
+                              σ, γ, bg, eps, use_relative_depth,
+                              background_logit, zero_weight, zero_color)
+    else
+        _soft_render_columns_parallel!(image, chunks, screen_tris, tiles,
+                                       n_screen_tris, W, H, σ, γ, bg, eps,
+                                       use_relative_depth, background_logit,
+                                       zero_weight, zero_color)
+    end
+    return image
+end
+
+# Threading contract. Every pixel is a pure function of the screen triangles,
+# evaluated by one call of `_soft_pixel_color`, so the pixel loop can be split
+# into column blocks rendered by parallel tasks. Each pixel performs exactly the
+# operations of the serial loop, so the image is bit-identical for every thread
+# count and block split. Blocks are used only when Julia runs with more than
+# one thread, the scalar type is an isbits type (Float32/Float64, ForwardDiff
+# duals; never heap-backed BigFloat or a reverse tape), and the image has at
+# least `_SOFT_PARALLEL_MIN_PIXELS` pixels.
+const _SOFT_PARALLEL_MIN_PIXELS = 4096
+
+function _soft_column_chunks(::Type{T}, W::Int, H::Int) where {T}
+    threads = Threads.nthreads()
+    (threads > 1 && isbitstype(T) && W * H >= _SOFT_PARALLEL_MIN_PIXELS) || return 1
+    # Several blocks per thread balance uneven geometry; blocks stay at least
+    # 8 columns wide so each task writes contiguous image memory.
+    return max(1, min(4 * threads, W ÷ 8))
+end
+
+function _soft_render_columns!(image::AbstractArray{T,3}, columns, screen_tris,
+                               tiles, n_screen_tris::Int, H::Int, σ, γ,
+                               bg, eps, use_relative_depth::Bool,
+                               background_logit, zero_weight,
+                               zero_color) where {T}
+    for px in columns
+        cx = _soft_pixel_center(T, px)
+        for py in 1:H
             color = _soft_pixel_color(screen_tris, tiles, n_screen_tris, px, py,
-                _soft_pixel_center(T, px), _soft_pixel_center(T, py),
+                cx, _soft_pixel_center(T, py),
                 σ, γ, bg, eps, use_relative_depth, background_logit,
                 zero_weight, zero_color)
             image[py, px, 1] = color.r
             image[py, px, 2] = color.g
             image[py, px, 3] = color.b
         end
+    end
+    return image
+end
+
+function _soft_render_columns_parallel!(image, chunks::Int, screen_tris, tiles,
+                                        n_screen_tris::Int, W::Int, H::Int,
+                                        σ, γ, bg, eps, use_relative_depth::Bool,
+                                        background_logit, zero_weight,
+                                        zero_color)
+    @sync for chunk in 1:chunks
+        first_column = div((chunk - 1) * W, chunks) + 1
+        last_column = div(chunk * W, chunks)
+        Threads.@spawn _soft_render_columns!(
+            image, first_column:last_column, screen_tris, tiles,
+            n_screen_tris, H, σ, γ, bg, eps, use_relative_depth,
+            background_logit, zero_weight, zero_color)
     end
     return image
 end

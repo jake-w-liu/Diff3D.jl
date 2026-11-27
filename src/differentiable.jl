@@ -619,15 +619,32 @@ function _soft_render_screen(::Type{ADVar}, screen_tris, n_screen_tris::Int,
         _soft_image_buffer!(workspace, H, W)
     first_output = recording ? length(_ad_tape_stack()[end]) + 1 : 0
     zero_color = Color3(0.0, 0.0, 0.0)
-    for py in 1:H
-        for px in 1:W
-            color = _soft_pixel_color(primal, tiles, n_screen_tris, px, py,
-                _soft_pixel_center(Float64, px), _soft_pixel_center(Float64, py),
-                σ_value, γ_value, bg_value, eps_value, use_relative_depth,
-                background_value, 0.0, zero_color)
-            image[py, px, 1] = _ad_record(color.r, (), ())
-            image[py, px, 2] = _ad_record(color.g, (), ())
-            image[py, px, 3] = _ad_record(color.b, (), ())
+    chunks = _soft_column_chunks(Float64, W, H)
+    if chunks > 1
+        # The Float64 pixel stage is evaluated by parallel tasks (see the
+        # threading contract in soft_rasterizer.jl); the tape stays task-local,
+        # so the image leaves are recorded afterwards in the serial order the
+        # pullback reads.
+        values = Array{Float64}(undef, H, W, 3)
+        _soft_render_columns_parallel!(values, chunks, primal, tiles,
+            n_screen_tris, W, H, σ_value, γ_value, bg_value, eps_value,
+            use_relative_depth, background_value, 0.0, zero_color)
+        @inbounds for py in 1:H, px in 1:W
+            image[py, px, 1] = _ad_record(values[py, px, 1], (), ())
+            image[py, px, 2] = _ad_record(values[py, px, 2], (), ())
+            image[py, px, 3] = _ad_record(values[py, px, 3], (), ())
+        end
+    else
+        for py in 1:H
+            for px in 1:W
+                color = _soft_pixel_color(primal, tiles, n_screen_tris, px, py,
+                    _soft_pixel_center(Float64, px), _soft_pixel_center(Float64, py),
+                    σ_value, γ_value, bg_value, eps_value, use_relative_depth,
+                    background_value, 0.0, zero_color)
+                image[py, px, 1] = _ad_record(color.r, (), ())
+                image[py, px, 2] = _ad_record(color.g, (), ())
+                image[py, px, 3] = _ad_record(color.b, (), ())
+            end
         end
     end
     if recording
