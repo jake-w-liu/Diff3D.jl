@@ -9373,7 +9373,43 @@ const _GLTF_SUPPORTED_EXTENSIONS = Set([
     "KHR_materials_dispersion",
     "KHR_materials_anisotropy",
     "EXT_mesh_gpu_instancing",
+    "KHR_mesh_quantization",
 ])
+
+# Accessor component types (unnormalized, normalized) accepted for vertex and
+# morph-target attributes. KHR_mesh_quantization README, "Extending Mesh
+# Attributes" and "Extending Morph Target Attributes", adds integer types to
+# the glTF 2.0 core table (§3.7.2.1, morph targets §3.7.2.2).
+const _GLTF_CORE_ATTRIBUTE_TYPES = (
+    position = ((5126,), ()),
+    normal = ((5126,), ()),
+    tangent = ((5126,), ()),
+    texcoord = ((5126,), (5121, 5123)),
+    morph = ((5126,), ()),
+)
+const _GLTF_QUANTIZED_ATTRIBUTE_TYPES = (
+    position = ((5126, 5120, 5121, 5122, 5123), (5120, 5121, 5122, 5123)),
+    normal = ((5126,), (5120, 5122)),
+    tangent = ((5126,), (5120, 5122)),
+    texcoord = ((5126, 5120, 5121, 5122, 5123), (5120, 5121, 5122, 5123)),
+    morph_position = ((5126, 5120, 5122), (5120, 5122)),
+    morph = ((5126,), (5120, 5122)),
+)
+
+function _gltf_declares_extension(gltf, name::String)
+    for key in ("extensionsUsed", "extensionsRequired")
+        list = get(gltf, key, Any[])
+        list isa AbstractVector || continue
+        any(entry -> entry isa AbstractString && entry == name, list) && return true
+    end
+    return false
+end
+
+function _gltf_attribute_types(quantized::Bool, kind::Symbol)
+    quantized || return kind === :morph_position ? _GLTF_CORE_ATTRIBUTE_TYPES.morph :
+                        getfield(_GLTF_CORE_ATTRIBUTE_TYPES, kind)
+    return getfield(_GLTF_QUANTIZED_ATTRIBUTE_TYPES, kind)
+end
 
 function _gltf_check_required_extensions(gltf)
     for ext in get(gltf, "extensionsRequired", Any[])
@@ -10598,6 +10634,7 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
     end
     texture_cache = Dict{Any, Texture}()
     material_cache = Dict{Any, AbstractMaterial}()
+    quantized = _gltf_declares_extension(gltf, "KHR_mesh_quantization")
 
     function _gltf_cached_material(mi, vertex_colors::Bool)
         material_key = mi === nothing ? (nothing, vertex_colors) :
@@ -10663,7 +10700,8 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
         position_accessor = _gltf_checked_accessor_index(gltf, attrs["POSITION"],
                                                          "POSITION")
         _gltf_validate_attribute_format(
-            gltf, position_accessor, "POSITION", (5126,), ())
+            gltf, position_accessor, "POSITION",
+            _gltf_attribute_types(quantized, :position)...)
         pos, position_size, nverts = _gltf_accessor(
             gltf, buffers, position_accessor)
         position_size == 3 || error("glTF POSITION accessor must be VEC3")
@@ -10672,7 +10710,8 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
             normal_accessor = _gltf_checked_accessor_index(gltf, attrs["NORMAL"],
                                                            "NORMAL")
             _gltf_validate_attribute_format(
-                gltf, normal_accessor, "NORMAL", (5126,), ())
+                gltf, normal_accessor, "NORMAL",
+                _gltf_attribute_types(quantized, :normal)...)
             normals, normal_size, normal_count = _gltf_accessor(
                 gltf, buffers, normal_accessor)
             _gltf_validate_attribute_shape(
@@ -10684,7 +10723,8 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
             uv_accessor = _gltf_checked_accessor_index(gltf, attrs["TEXCOORD_0"],
                                                        "TEXCOORD_0")
             _gltf_validate_attribute_format(
-                gltf, uv_accessor, "TEXCOORD_0", (5126,), (5121, 5123))
+                gltf, uv_accessor, "TEXCOORD_0",
+                _gltf_attribute_types(quantized, :texcoord)...)
             uvs, uv_size, uv_count = _gltf_accessor(
                 gltf, buffers, uv_accessor)
             _gltf_validate_attribute_shape(
@@ -10715,10 +10755,10 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
             attr_accessor = _gltf_checked_zero_based_index(
                 attrs[gltf_name], length(gltf["accessors"]), "$gltf_name accessor")
             unnormalized_types, normalized_types =
-                gltf_name in ("TEXCOORD_1", "COLOR_0", "WEIGHTS_0") ?
-                    ((5126,), (5121, 5123)) :
-                gltf_name == "JOINTS_0" ? ((5121, 5123), ()) :
-                ((5126,), ())
+                gltf_name == "TEXCOORD_1" ? _gltf_attribute_types(quantized, :texcoord) :
+                gltf_name == "TANGENT" ? _gltf_attribute_types(quantized, :tangent) :
+                gltf_name in ("COLOR_0", "WEIGHTS_0") ? ((5126,), (5121, 5123)) :
+                ((5121, 5123), ())
             _gltf_validate_attribute_format(
                 gltf, attr_accessor, gltf_name,
                 unnormalized_types, normalized_types)
@@ -10739,7 +10779,8 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
                     gltf, target[gltf_name], "morph target $gltf_name")
                 _gltf_validate_attribute_format(
                     gltf, target_accessor, "morph target $gltf_name",
-                    (5126,), ())
+                    _gltf_attribute_types(
+                        quantized, gltf_name == "POSITION" ? :morph_position : :morph)...)
                 data, item_size, attr_count = _gltf_accessor(gltf, buffers, target_accessor)
                 _gltf_validate_attribute_shape(
                     "morph target $gltf_name", item_size, attr_count,
