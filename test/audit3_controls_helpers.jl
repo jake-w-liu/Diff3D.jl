@@ -392,6 +392,11 @@ end
     @test !plain.auto_rotate && plain.auto_rotate_speed == 2.0
     @test_throws ArgumentError OrbitControls(PerspectiveCamera(); auto_rotate_speed=Inf)
     @test_throws ArgumentError orbit_update!(oc, NaN)
+    # The frame delta is validated even when auto-rotation is off.
+    still = OrbitControls(PerspectiveCamera())
+    @test_throws ArgumentError orbit_update!(still, Inf)
+    @test_throws ArgumentError orbit_update!(still, "0.1")
+    @test orbit_update!(still, 1 // 60) === still
 end
 
 @testset "audit3 OrbitControls target radius about the cursor" begin

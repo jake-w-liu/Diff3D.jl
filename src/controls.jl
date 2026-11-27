@@ -624,6 +624,9 @@ turn is added to the residual azimuth velocity instead.
 function orbit_update!(oc::OrbitControls, delta_time=nothing)
     oc.enabled || return oc
     _validate_orbit_runtime(oc)
+    # A frame delta must be a finite real even when auto-rotation is off.
+    delta_time === nothing ||
+        _checked_control_scalar(delta_time, "OrbitControls delta_time")
     if oc.auto_rotate
         # three.js _rotateLeft(angle): sphericalDelta.theta -= angle.
         angle = _orbit_auto_rotation_angle(oc, delta_time)
