@@ -492,6 +492,25 @@ function _orbit_zoom_now!(oc::OrbitControls, factor)
     s = _orbit_spherical(oc)
     _orbit_apply!(oc, Spherical(s.radius * factor, s.phi, s.theta))
 end
+
+# log(floatmax(Float64)): exp of any value in ±this range is finite and nonzero.
+const _ORBIT_MAX_LOG_DOLLY = log(floatmax(Float64))
+
+# Throw, without changing any state, when dollying by `scale` would leave the
+# camera unrepresentable (the orthographic zoom or the perspective placement
+# becomes non-finite or zero after the configured limits).
+function _orbit_check_dolly(oc::OrbitControls, scale::Float64)
+    oc.camera isa OrthographicCamera && (_orbit_ortho_zoom(oc, scale); return nothing)
+    s = _orbit_constrained(oc, _orbit_spherical(oc))
+    q = _orbit_up_quaternion(oc)
+    offset = _orbit_rotate_vector(
+        Quaternion(-q.x, -q.y, -q.z, q.w),
+        spherical_to_cartesian(_orbit_constrained(
+            oc, Spherical(s.radius * scale, s.phi, s.theta))))
+    _checked_control_vec3(_orbit_limited_target(oc, oc.target) + offset,
+                          "OrbitControls camera position")
+    return nothing
+end
 function _camera_pan_basis(camera::AbstractCamera, target::Vec3{Float64})
     fwd = _direction_between(camera.position, target)
     raw_right = cross(fwd, camera.up)
@@ -572,8 +591,15 @@ function orbit_zoom!(oc::OrbitControls, factor)
         # into [min_distance, max_distance] — the same graceful handling the rest
         # of the controller uses.
         f > 0 || return _orbit_zoom_now!(oc, f)
-        zoom_velocity = _checked_control_scalar(
-            oc.v_zoom + log(f), "OrbitControls zoom velocity")
+        # The residual saturates at the largest representable factor, so
+        # exp() of it, or of any damped share of it, stays finite and nonzero.
+        zoom_velocity = clamp(oc.v_zoom + log(f),
+                              -_ORBIT_MAX_LOG_DOLLY, _ORBIT_MAX_LOG_DOLLY)
+        # orbit_update! applies at most the whole residual, so a residual whose
+        # complete dolly already leaves the representable range is rejected
+        # here, as the immediate path rejects that factor, instead of being
+        # queued and making every later update throw.
+        _orbit_check_dolly(oc, exp(zoom_velocity))
         oc.v_zoom = zoom_velocity
         return oc
     end
@@ -1428,36 +1454,197 @@ end
 
 # ========================== Clock ==========================
 
+"""
+    Clock(auto_start::Bool=true)
+
+Frame timer modelled on three.js `Clock` (src/core/Clock.js), in seconds.
+Fields: `start_time` (time of the last start), `last_time` (three.js
+`oldTime`), `elapsed_time` (time accumulated while running), `running` and
+`auto_start`.
+
+`Clock()` starts at construction, so `start_time` is set immediately and the
+first `clock_delta!` returns the time since construction (three.js starts on
+the first `getDelta`, which returns 0). `Clock(false)` is created stopped:
+`clock_delta!` returns 0 until `clock_start!`. A stopped clock with
+`auto_start` set restarts on the next `clock_delta!`, which returns 0, as
+three.js does; `clock_stop!` clears `auto_start`.
+
+Every `now` argument defaults to the current monotonic time in seconds; pass
+it explicitly for deterministic stepping.
+"""
 mutable struct Clock
     start_time::Float64
     last_time::Float64
     running::Bool
+    auto_start::Bool
+    elapsed_time::Float64
 end
 
 @inline _clock_now() = Float64(time_ns()) / 1.0e9
 
-Clock() = (t = _clock_now(); Clock(t, t, true))
+# Positional form kept from 1.0: a running clock whose elapsed time is the
+# span since `start_time` already measured up to `last_time`.
+Clock(start_time::Real, last_time::Real, running::Bool) =
+    Clock(Float64(start_time), Float64(last_time), running, true,
+          Float64(last_time) - Float64(start_time))
+
+function Clock(auto_start::Bool=true)
+    t = _clock_now()
+    return Clock(t, t, auto_start, auto_start, 0.0)
+end
 
 function _validate_clock(c::Clock)
     _checked_control_scalar(c.start_time, "Clock start_time")
     _checked_control_scalar(c.last_time, "Clock last_time")
+    _checked_control_scalar(c.elapsed_time, "Clock elapsed_time")
     return nothing
 end
 
+"""
+    clock_start!(clock[, now]) -> clock
+
+Start (or restart) `clock` at `now`: three.js `Clock.start` sets the start
+and previous times to `now`, zeroes the elapsed time and sets `running`.
+"""
+function clock_start!(c::Clock, now=_clock_now())
+    current = _checked_control_scalar(now, "Clock current time")
+    c.start_time = current
+    c.last_time = current
+    c.elapsed_time = 0.0
+    c.running = true
+    return c
+end
+
+"""
+    clock_stop!(clock[, now]) -> clock
+
+Stop `clock` after accumulating the time up to `now` (three.js `Clock.stop`
+calls `getElapsedTime` first). A stopped clock keeps its elapsed time and
+returns 0 from `clock_delta!`; `auto_start` is cleared, so only
+`clock_start!` runs it again.
+"""
+function clock_stop!(c::Clock, now=_clock_now())
+    clock_delta!(c, now)
+    c.running = false
+    c.auto_start = false
+    return c
+end
+
+"""
+    clock_elapsed(clock[, now]) -> Float64
+
+Seconds the clock has run up to `now`: the accumulated `elapsed_time` plus,
+while running, the span since the last `clock_delta!`. A stopped clock
+returns its accumulated time. Unlike three.js `getElapsedTime`, it does not
+consume the pending delta, so a following `clock_delta!` still measures from
+the previous `clock_delta!`.
+"""
 function clock_elapsed(c::Clock, now=_clock_now())
     _validate_clock(c)
     current = _checked_control_scalar(now, "Clock current time")
+    c.running || return c.elapsed_time
     return _checked_control_scalar(
-        current - c.start_time, "Clock elapsed time")
+        c.elapsed_time + (current - c.last_time), "Clock elapsed time")
 end
 
+"""
+    clock_delta!(clock[, now]) -> Float64
+
+Seconds since the previous `clock_delta!` (or start), as three.js
+`Clock.getDelta`: the time is added to `elapsed_time` and `last_time`
+advances to `now`. A stopped clock returns 0; a stopped clock with
+`auto_start` starts at `now` and returns 0.
+"""
 function clock_delta!(c::Clock, now=_clock_now())
     _validate_clock(c)
     current = _checked_control_scalar(now, "Clock current time")
+    if c.auto_start && !c.running
+        clock_start!(c, current)
+        return 0.0
+    end
+    c.running || return 0.0
     d = _checked_control_scalar(current - c.last_time, "Clock delta")
+    elapsed = _checked_control_scalar(c.elapsed_time + d, "Clock elapsed time")
     c.last_time = current
+    c.elapsed_time = elapsed
     return d
 end
+
+"""
+    FrameTimer(now=current time) -> FrameTimer
+
+Frame timer modelled on three.js `Timer` (src/core/Timer.js), the r183
+replacement for `Clock`, in seconds. Call `timer_update!` once per frame,
+then read the frame's `timer_delta` and the accumulated `timer_elapsed`;
+reading never changes the timer. `time_scale` (three.js `setTimescale`)
+scales every later delta. The Page Visibility hook of three.js
+(`connect`/`disconnect`) has no headless counterpart.
+
+Fields: `start_time` (absolute), `previous_time` and `current_time`
+(relative to `start_time`), `delta`, `elapsed` and `time_scale`.
+"""
+mutable struct FrameTimer
+    start_time::Float64
+    previous_time::Float64
+    current_time::Float64
+    delta::Float64
+    elapsed::Float64
+    time_scale::Float64
+end
+
+FrameTimer(now=_clock_now()) =
+    FrameTimer(_checked_control_scalar(now, "FrameTimer start time"),
+               0.0, 0.0, 0.0, 0.0, 1.0)
+
+"""
+    timer_update!(timer[, timestamp]) -> timer
+
+Advance `timer` to the absolute `timestamp` (seconds, default now), as
+three.js `Timer.update`: the frame delta is the span since the previous
+update (or `timer_reset!`) times `time_scale`, and it is added to the
+elapsed time.
+"""
+function timer_update!(t::FrameTimer, timestamp=_clock_now())
+    now = _checked_control_scalar(timestamp, "FrameTimer timestamp")
+    scale = _checked_control_scalar(t.time_scale, "FrameTimer time_scale")
+    previous = t.current_time
+    current = _checked_control_scalar(now - t.start_time, "FrameTimer current time")
+    delta = _checked_control_scalar((current - previous) * scale, "FrameTimer delta")
+    elapsed = _checked_control_scalar(t.elapsed + delta, "FrameTimer elapsed time")
+    t.previous_time = previous
+    t.current_time = current
+    t.delta = delta
+    t.elapsed = elapsed
+    return t
+end
+
+"""
+    timer_reset!(timer[, now]) -> timer
+
+Measure the next `timer_update!` delta from `now` instead of the previous
+update (three.js `Timer.reset`); the current delta and elapsed time are kept.
+"""
+function timer_reset!(t::FrameTimer, now=_clock_now())
+    current = _checked_control_scalar(now, "FrameTimer current time")
+    t.current_time = _checked_control_scalar(current - t.start_time,
+                                             "FrameTimer current time")
+    return t
+end
+
+"""
+    timer_delta(timer) -> Float64
+
+Scaled seconds between the two latest `timer_update!` calls (three.js
+`Timer.getDelta`); 0 before the first update.
+"""
+timer_delta(t::FrameTimer) = t.delta
+
+"""
+    timer_elapsed(timer) -> Float64
+
+Sum of every scaled frame delta so far (three.js `Timer.getElapsed`).
+"""
+timer_elapsed(t::FrameTimer) = t.elapsed
 
 # ========================== Animation ==========================
 
@@ -1547,16 +1734,23 @@ struct NumberKeyframeTrack <: AbstractKeyframeTrack
     times::Vector{Float64}
     values::Vector{Float64}
     interpolation::Symbol             # :linear | :step | :cubic
+    # Morph target name of a `morphTargetInfluences[name]` path ("" otherwise).
+    # Each node the track drives resolves it in its own `morph_target_names`,
+    # as three.js PropertyBinding.bind looks it up in each bound object's
+    # morphTargetDictionary; `component` is the index on the first node that
+    # names it.
+    morph_name::String
 
     function NumberKeyframeTrack(target::AbstractObject3D, property::Symbol,
                                  component::Int, times::Vector{Float64},
-                                 values::Vector{Float64}, interpolation::Symbol)
+                                 values::Vector{Float64}, interpolation::Symbol,
+                                 morph_name::String="")
         interpolation in (:linear, :step, :cubic) ||
             throw(ArgumentError("unsupported number keyframe interpolation: $interpolation"))
         component >= 0 || throw(ArgumentError("animation component index must be non-negative"))
         _validate_keyframe_values("NumberKeyframeTrack", times, values)
         _validate_finite_keyframe_values("NumberKeyframeTrack", values)
-        new(target, property, component, times, values, interpolation)
+        new(target, property, component, times, values, interpolation, morph_name)
     end
 end
 
@@ -1780,8 +1974,14 @@ function _morph_target_name_index(obj, name::AbstractString)
     return nothing
 end
 
-function _parse_animation_property_path(target::AbstractObject3D,
-                                        path::AbstractString)
+_parse_animation_property_path(target::AbstractObject3D, path::AbstractString) =
+    _parse_animation_property_path_named(target, path)[1:2]
+
+# (property, component, morph name): the name is the bracket text of a
+# morphTargetInfluences path that names a morph target of `target` or one of
+# its descendants, and "" otherwise.
+function _parse_animation_property_path_named(target::AbstractObject3D,
+                                              path::AbstractString)
     p = startswith(path, ".") ? path[2:end] : String(path)
     isempty(p) && throw(ArgumentError("animation property path must not be empty"))
     material_path = startswith(p, "material.")
@@ -1793,16 +1993,36 @@ function _parse_animation_property_path(target::AbstractObject3D,
         index = bracket.captures[2]
         if property === :morph_target_influences
             named = _morph_target_name_index(target, index)
-            named === nothing || return property, named
+            named === nothing || return property, named, String(index)
         end
-        return property, _animation_component_index(index)
+        return property, _animation_component_index(index), ""
     end
     dot = match(r"^(.+)\.([A-Za-z])$", p)
     if dot !== nothing
         return _resolved_animation_property(target, dot.captures[1], material_path),
-               _animation_component_index(dot.captures[2])
+               _animation_component_index(dot.captures[2]), ""
     end
-    return _resolved_animation_property(target, p, material_path), 0
+    return _resolved_animation_property(target, p, material_path), 0, ""
+end
+
+# 1-based influence index that the morph name `name` addresses on `node`:
+# its own morph_target_names entry (the last duplicate, as
+# Mesh.updateMorphTargets builds the dictionary), else the numeric reading of
+# the name (PropertyBinding keeps an unknown name as the array index), else 0
+# (the node has no such morph target and is left unchanged).
+function _node_morph_name_index(node, name::String)
+    if hasproperty(node, :morph_target_names)
+        names = getproperty(node, :morph_target_names)
+        if names isa Vector{String}
+            index = findlast(==(name), names)
+        else
+            index = findlast(==(name), names)
+        end
+        index === nothing || return index
+    end
+    (!isempty(name) && all(isdigit, name)) || return 0
+    value = tryparse(Int, name)
+    return value === nothing || value == typemax(Int) ? 0 : value + 1
 end
 
 function _parse_animation_whole_property_path(target::AbstractObject3D,
@@ -1844,9 +2064,12 @@ end
 function NumberKeyframeTrack(target::AbstractObject3D, property_path::AbstractString,
                              times::Vector{Float64}, values::Vector{Float64};
                              interpolation::Symbol=:linear)
-    property, component = _parse_animation_property_path(target, property_path)
-    NumberKeyframeTrack(target, property, times, values;
-                        interpolation=interpolation, component=component)
+    interpolation in (:linear, :step, :cubic) ||
+        throw(ArgumentError("unsupported number keyframe interpolation: $interpolation"))
+    property, component, morph_name =
+        _parse_animation_property_path_named(target, property_path)
+    NumberKeyframeTrack(target, property, component, times, values, interpolation,
+                        morph_name)
 end
 
 # Dedicated rotation track: quaternion keyframes interpolated with slerp between
@@ -2431,6 +2654,380 @@ function AnimationClip(name::String, tracks::AbstractVector{<:AbstractKeyframeTr
                   clamp_when_finished=clamp_when_finished, time_scale=time_scale)
 end
 
+# ---- Track and clip utilities (three.js KeyframeTrack / AnimationClip /
+# AnimationUtils) ----------------------------------------------------------
+
+# The track with only the keys `idx` (new key vectors; targets are shared).
+_track_subset(tr::KeyframeTrack, idx) =
+    KeyframeTrack(tr.target, tr.property, tr.times[idx], tr.values[idx], tr.interpolation)
+_track_subset(tr::NumberKeyframeTrack, idx) =
+    NumberKeyframeTrack(tr.target, tr.property, tr.component, tr.times[idx],
+                        tr.values[idx], tr.interpolation, tr.morph_name)
+_track_subset(tr::QuaternionKeyframeTrack, idx) =
+    QuaternionKeyframeTrack(tr.target, tr.property, tr.times[idx], tr.values[idx],
+                            tr.interpolation)
+_track_subset(tr::MorphWeightsKeyframeTrack, idx) =
+    MorphWeightsKeyframeTrack(tr.target, tr.property, tr.times[idx],
+                              [copy(v) for v in tr.values[idx]], tr.interpolation)
+_track_subset(tr::CubicSplineKeyframeTrack, idx) =
+    CubicSplineKeyframeTrack(tr.target, tr.property, tr.times[idx], tr.values[idx],
+                             tr.in_tangents[idx], tr.out_tangents[idx])
+_track_subset(tr::CubicSplineQuaternionKeyframeTrack, idx) =
+    CubicSplineQuaternionKeyframeTrack(tr.target, tr.property, tr.times[idx],
+                                       tr.values[idx], tr.in_tangents[idx],
+                                       tr.out_tangents[idx])
+_track_subset(tr::CubicSplineMorphWeightsKeyframeTrack, idx) =
+    CubicSplineMorphWeightsKeyframeTrack(tr.target, tr.property, tr.times[idx],
+                                         [copy(v) for v in tr.values[idx]],
+                                         [copy(v) for v in tr.in_tangents[idx]],
+                                         [copy(v) for v in tr.out_tangents[idx]])
+
+# Whether keys i and j hold the same value, compared like three.js
+# KeyframeTrack.optimize (`!==` on every stored number, tangents included).
+_key_equal(a::Real, b::Real) = a == b
+_key_equal(a::Vec3, b::Vec3) = a.x == b.x && a.y == b.y && a.z == b.z
+_key_equal(a::Quaternion, b::Quaternion) =
+    a.x == b.x && a.y == b.y && a.z == b.z && a.w == b.w
+_key_equal(a::AbstractVector, b::AbstractVector) =
+    length(a) == length(b) && all(k -> a[k] == b[k], eachindex(a, b))
+_track_keys_equal(tr::AbstractKeyframeTrack, i::Int, j::Int) =
+    all(keys -> _key_equal(keys[i], keys[j]), _track_key_vectors(tr))
+
+_track_smooth(tr::Union{KeyframeTrack,NumberKeyframeTrack}) = tr.interpolation === :cubic
+_track_smooth(::AbstractKeyframeTrack) = false
+
+# Key times must stay finite and strictly increasing; a change that breaks
+# that is rejected before any key moves.
+function _set_track_times!(tr::AbstractKeyframeTrack, times::Vector{Float64},
+                           label::String)
+    try
+        _validate_keyframe_times(label, times)
+    catch err
+        err isa ArgumentError || rethrow()
+        throw(ArgumentError("$label: the new key times must be finite and strictly increasing"))
+    end
+    copyto!(tr.times, times)
+    return tr
+end
+
+"""
+    track_shift!(track, time_offset) -> track
+
+Add `time_offset` seconds to every key time of `track`, in place (three.js
+`KeyframeTrack.shift`). Like three.js it changes the time vector itself, so
+tracks that share that vector move together. Throws `ArgumentError`, leaving
+the track unchanged, if the shifted times are not finite and strictly
+increasing.
+"""
+function track_shift!(tr::AbstractKeyframeTrack, time_offset::Real)
+    offset = _checked_control_scalar(time_offset, "track_shift! time_offset")
+    offset == 0.0 && return tr
+    return _set_track_times!(tr, tr.times .+ offset, "track_shift!")
+end
+
+"""
+    track_scale!(track, time_scale) -> track
+
+Multiply every key time of `track` by `time_scale`, in place (three.js
+`KeyframeTrack.scale`); the values, and the tangents of cubic-spline tracks,
+are unchanged, as in three.js. `time_scale` must be positive (Diff3D keys
+stay strictly increasing); otherwise, or if a time overflows, an
+`ArgumentError` is thrown and the track is unchanged.
+"""
+function track_scale!(tr::AbstractKeyframeTrack, time_scale::Real)
+    scale = _checked_control_scalar(time_scale, "track_scale! time_scale")
+    scale > 0.0 || throw(ArgumentError("track_scale! time_scale must be positive"))
+    scale == 1.0 && return tr
+    return _set_track_times!(tr, tr.times .* scale, "track_scale!")
+end
+
+"""
+    track_trim(track, start_time, end_time) -> track
+
+Copy of `track` without the keys before `start_time` or after `end_time`
+(three.js `KeyframeTrack.trim`). At least one key is kept: when no key lies
+in the range, the key at the boundary three.js keeps remains. Returns
+`track` itself when nothing is removed.
+"""
+function track_trim(tr::AbstractKeyframeTrack, start_time::Real, end_time::Real)
+    times = tr.times
+    n = length(times)
+    from = 1
+    while from <= n && times[from] < start_time
+        from += 1
+    end
+    to = n
+    while to >= 1 && times[to] > end_time
+        to -= 1
+    end
+    (from == 1 && to == n) && return tr
+    # three.js keeps one key when the range is empty: to = max(to, 1),
+    # from = to - 1 in its 0-based exclusive bounds.
+    if from > to
+        to = max(to, 1)
+        from = to
+    end
+    return _track_subset(tr, from:to)
+end
+
+"""
+    track_optimize(track) -> track
+
+Copy of `track` without the interior keys that equal both neighbours
+(three.js `KeyframeTrack.optimize`). `:cubic` tracks keep every key, since
+their neighbours shape the curve. The first and last keys always remain.
+Returns `track` itself when no key is removed.
+"""
+function track_optimize(tr::AbstractKeyframeTrack)
+    n = length(tr.times)
+    keep = trues(n)
+    smooth = _track_smooth(tr)
+    for i in 2:(n - 1)
+        smooth && continue
+        keep[i] = !(_track_keys_equal(tr, i, i - 1) && _track_keys_equal(tr, i, i + 1))
+    end
+    all(keep) && return tr
+    return _track_subset(tr, findall(keep))
+end
+
+const _CubicSplineTrack = Union{CubicSplineKeyframeTrack,CubicSplineQuaternionKeyframeTrack,
+                                CubicSplineMorphWeightsKeyframeTrack}
+
+_track_key_vectors(tr::AbstractKeyframeTrack) = (tr.values,)
+_track_key_vectors(tr::_CubicSplineTrack) = (tr.values, tr.in_tangents, tr.out_tangents)
+
+"""
+    track_validate(track) -> Bool
+
+Whether `track` is still a valid track after in-place edits of its vectors,
+like three.js `KeyframeTrack.validate`: it has keys, one value (and tangent)
+per key, and its times are in increasing order. Diff3D tracks are stricter
+than three.js here, as their constructors are: times and values must be
+finite (three.js only rejects NaN) and two keys may not share a time.
+"""
+function track_validate(tr::AbstractKeyframeTrack)
+    times = tr.times
+    isempty(times) && return false
+    for i in eachindex(times)
+        isfinite(times[i]) || return false
+        i > 1 && !(times[i] > times[i - 1]) && return false
+    end
+    for keys in _track_key_vectors(tr)
+        length(keys) == length(times) || return false
+        for v in keys
+            _finite_keyframe_value(v) || return false
+        end
+    end
+    return true
+end
+
+# A clip with the settings of `clip`, new name, duration and tracks.
+_clip_with(clip::AnimationClip, name::String, duration::Real, tracks) =
+    AnimationClip(name, duration, tracks; loop=clip.loop, repetitions=clip.repetitions,
+                  clamp_when_finished=clip.clamp_when_finished,
+                  time_scale=clip.time_scale)
+
+# three.js AnimationClip.resetDuration: the latest last key, starting from 0.
+function _clip_track_duration(tracks)
+    duration = 0.0
+    for track in tracks
+        isempty(track.times) || (duration = max(duration, last(track.times)))
+    end
+    return duration
+end
+
+"""
+    clip_reset_duration(clip) -> AnimationClip
+
+Copy of `clip` whose duration is the time of the latest last key of its
+tracks, and at least 0 (three.js `AnimationClip.resetDuration`).
+"""
+clip_reset_duration(clip::AnimationClip) =
+    _clip_with(clip, clip.name, _clip_track_duration(clip.tracks), clip.tracks)
+
+"""
+    clip_trim(clip) -> AnimationClip
+
+Copy of `clip` with every track trimmed to `[0, clip.duration]` (three.js
+`AnimationClip.trim`, see `track_trim`).
+"""
+clip_trim(clip::AnimationClip) =
+    _clip_with(clip, clip.name, clip.duration,
+               AbstractKeyframeTrack[track_trim(tr, 0.0, clip.duration) for tr in clip.tracks])
+
+"""
+    clip_optimize(clip) -> AnimationClip
+
+Copy of `clip` with every track optimized (three.js `AnimationClip.optimize`,
+see `track_optimize`).
+"""
+clip_optimize(clip::AnimationClip) =
+    _clip_with(clip, clip.name, clip.duration,
+               AbstractKeyframeTrack[track_optimize(tr) for tr in clip.tracks])
+
+"""
+    clip_validate(clip) -> Bool
+
+Whether every track of `clip` passes `track_validate` (three.js
+`AnimationClip.validate`).
+"""
+clip_validate(clip::AnimationClip) = all(track_validate, clip.tracks)
+
+"""
+    clip_find_by_name(clips, name) -> Union{AnimationClip,Nothing}
+
+The first clip of `clips` called `name`, or `nothing` (three.js
+`AnimationClip.findByName` for a clip array).
+"""
+function clip_find_by_name(clips::AbstractVector{<:AnimationClip}, name::AbstractString)
+    for clip in clips
+        clip.name == name && return clip
+    end
+    return nothing
+end
+
+"""
+    clip_subclip(clip, name, start_frame, end_frame, fps=30) -> AnimationClip
+
+Clip of the keys of `clip` whose frame `time * fps` lies in
+`[start_frame, end_frame)`, shifted so the earliest kept key is at time 0,
+with the duration reset (three.js `AnimationUtils.subclip`). Tracks without a
+key in the range are dropped. The loop settings of `clip` are kept.
+"""
+function clip_subclip(clip::AnimationClip, name::AbstractString, start_frame::Real,
+                      end_frame::Real, fps::Real=30)
+    rate = _checked_control_scalar(fps, "clip_subclip fps")
+    first_frame = _checked_control_scalar(start_frame, "clip_subclip start_frame")
+    last_frame = _checked_control_scalar(end_frame, "clip_subclip end_frame")
+    tracks = AbstractKeyframeTrack[]
+    for tr in clip.tracks
+        idx = findall(t -> first_frame <= t * rate < last_frame, tr.times)
+        isempty(idx) || push!(tracks, _track_subset(tr, idx))
+    end
+    if !isempty(tracks)
+        start = minimum(first(tr.times) for tr in tracks)
+        for tr in tracks
+            track_shift!(tr, -start)
+        end
+    end
+    return _clip_with(clip, String(name), _clip_track_duration(tracks), tracks)
+end
+
+"""
+    clip_from_morph_target_sequence(target, name, morph_names, fps; no_loop=false)
+
+Clip that shows the morph targets `morph_names` of `target` (or of its
+descendants, see `NumberKeyframeTrack`) one after another at `fps` frames per
+second (three.js `AnimationClip.CreateFromMorphTargetSequence`): target `i`
+has influence 1 at frame `i - 1` and 0 at its neighbouring frames. Unless
+`no_loop`, a sequence key at frame 0 repeats at the last frame so the loop
+closes. For one or two names three.js stacks equal keys on one frame; those
+become a single key, which samples the same.
+"""
+function clip_from_morph_target_sequence(target::AbstractObject3D, name::AbstractString,
+                                         morph_names::AbstractVector{<:AbstractString},
+                                         fps::Real; no_loop::Bool=false)
+    n = length(morph_names)
+    rate =_checked_control_scalar(fps, "clip_from_morph_target_sequence fps")
+    rate > 0.0 || throw(ArgumentError("clip_from_morph_target_sequence fps must be positive"))
+    tracks = AbstractKeyframeTrack[]
+    for i in 0:(n - 1)
+        keys = [((i + n - 1) % n, 0.0), (i, 1.0), ((i + 1) % n, 0.0)]
+        sort!(keys; by=first, alg=Base.Sort.InsertionSort)   # stable, as getKeyframeOrder
+        # Fewer than three targets put several keys on one frame. three.js
+        # samples the first of them only as the end of the interval before
+        # that frame and the last one from the frame on; both are 0 here, so
+        # one key per frame with the last value gives the same curve and
+        # keeps the times strictly increasing.
+        times = Float64[]
+        values = Float64[]
+        first_values = Float64[]
+        for (frame, value) in keys
+            if !isempty(times) && times[end] == frame
+                values[end] = value
+                continue
+            end
+            push!(times, frame)
+            push!(values, value)
+            push!(first_values, value)
+        end
+        first_values == values || throw(ArgumentError(
+            "clip_from_morph_target_sequence: keys on one frame disagree"))
+        if !no_loop && times[1] == 0.0
+            push!(times, Float64(n))
+            push!(values, values[1])
+        end
+        track = NumberKeyframeTrack(target, "morphTargetInfluences[$(morph_names[i + 1])]",
+                                    times, values)
+        track_scale!(track, 1.0 / rate)
+        push!(tracks, track)
+    end
+    return AnimationClip(String(name), tracks)
+end
+
+"""
+    clips_from_morph_target_sequences(target, fps; no_loop=false) -> Vector{AnimationClip}
+
+One `clip_from_morph_target_sequence` clip per animation found in the morph
+target names of `target` (three.js
+`AnimationClip.CreateClipsFromMorphTargetSequences`): names such as
+`walk_001`, `walk_002`, `run_001` are grouped by the text before their
+trailing digits, in order of first appearance.
+"""
+function clips_from_morph_target_sequences(target::AbstractObject3D, fps::Real;
+                                           no_loop::Bool=false)
+    hasproperty(target, :morph_target_names) || throw(ArgumentError(
+        "clips_from_morph_target_sequences target has no morph target names"))
+    groups = Pair{String,Vector{String}}[]
+    for morph_name in getproperty(target, :morph_target_names)
+        m = match(r"^([A-Za-z0-9_-]*?)([0-9]+)$", morph_name)
+        m === nothing && continue
+        key = String(m.captures[1])
+        k = findfirst(g -> g.first == key, groups)
+        k === nothing ? push!(groups, key => [String(morph_name)]) :
+                        push!(groups[k].second, String(morph_name))
+    end
+    return AnimationClip[clip_from_morph_target_sequence(target, key, names, fps;
+                                                         no_loop=no_loop)
+                         for (key, names) in groups]
+end
+
+"""
+    AnimationMixer(clip; loop=clip.loop, repetitions=clip.repetitions,
+                   clamp_when_finished=clip.clamp_when_finished,
+                   time_scale=clip.time_scale, zero_slope_at_start=true,
+                   zero_slope_at_end=true)
+
+Plays `clip` on its tracks' targets like a three.js `AnimationMixer` driving
+the one action of `clipAction(clip).play()` (src/animation/AnimationAction.js,
+AnimationMixer.js, PropertyMixer.js).
+
+`mixer_update!(mixer, dt)` advances the mixer by `dt * time_scale` seconds
+and steps the action like `AnimationAction._updateTime`: `:repeat` and
+`:pingpong` count every loop crossed in either direction (playing backward
+from zero the first wrap is free), and after `repetitions` loops (`-1`:
+unlimited) or at either end of a `:once` clip the action finishes. With
+`clamp_when_finished` a finished action pauses on its last pose (`paused`
+becomes true); otherwise it is disabled (`enabled` becomes false) and every
+animated property returns to its original value, the value it had when the
+mixer was created or last `mixer_play!`ed (three.js
+`PropertyMixer.saveOriginalState`). A finished action stays finished whatever
+the later `dt`; `mixer_reset!` and `mixer_set_time!` restart it, and
+`mixer_stop!` restores the original values and stops applying the clip.
+
+`zero_slope_at_start`/`zero_slope_at_end` (three.js `zeroSlopeAtStart`/
+`zeroSlopeAtEnd`) select zero-slope (true) or zero-curvature (false) endings
+for `:cubic` tracks at the clip start of the first loop and the clip end of
+the last; `:pingpong` always uses zero slope. As in three.js, a cubic track
+keeps the endings it had when its sample entered the current key interval.
+
+The fields `time` (mixer time), `loop`, `repetitions`, `clamp_when_finished`,
+`time_scale`, `zero_slope_at_start`, `zero_slope_at_end`, `enabled` and
+`paused` may be changed between updates, as on a three.js action; the
+action's clip-local time is `action_time`. Unlike three.js, an enabled
+action writes its sampled values on every update, also when they did not
+change since the previous frame.
+"""
 mutable struct AnimationMixer
     clip::AnimationClip
     time::Float64
@@ -2442,26 +3039,202 @@ mutable struct AnimationMixer
     # read it from the mixer, so dispatching on a track's target type passes
     # only heap references and the per-frame update does not box the time.
     sample_time::Float64
-    # Internal: cubic-track endings for that update (see _animation_cubic_endings).
+    # Internal: the action's interpolant endings (AnimationAction._setEndings).
     ending_start::Symbol
     ending_end::Symbol
+    zero_slope_at_start::Bool
+    zero_slope_at_end::Bool
+    # three.js AnimationAction state: clip-local time, loop count (-1 before
+    # the first time step), enabled/paused, and whether the action is
+    # scheduled (played and not stopped).
+    action_time::Float64
+    loop_count::Int
+    enabled::Bool
+    paused::Bool
+    active::Bool
+    # Internal: whether the last update wrote sampled values (so that the
+    # next update without weight writes the original values back).
+    applied::Bool
+    # Internal: index of the track being applied and the per-track
+    # CubicInterpolant cache (key interval, 0 outside the keys, and the
+    # endings its weights were computed with).
+    track_index::Int
+    cubic_interval::Vector{Int}
+    cubic_ending_start::Vector{Symbol}
+    cubic_ending_end::Vector{Symbol}
+    # Internal: original value of each track's property, or nothing when it
+    # cannot be read (see _track_original).
+    originals::Vector{Any}
 end
-AnimationMixer(clip, time, loop, repetitions, clamp_when_finished, time_scale) =
-    AnimationMixer(clip, time, loop, repetitions, clamp_when_finished, time_scale, 0.0,
-                   :zero_slope, :zero_slope)
+
+function _new_animation_mixer(clip::AnimationClip, loop::Symbol, repetitions::Int,
+                              clamp_when_finished::Bool, time_scale::Float64,
+                              zero_slope_at_start::Bool, zero_slope_at_end::Bool)
+    n = length(clip.tracks)
+    mixer = AnimationMixer(clip, 0.0, loop, repetitions, clamp_when_finished,
+                           time_scale, 0.0,
+                           # AnimationAction's interpolant settings start at
+                           # ZeroCurvatureEnding until its first time step.
+                           :zero_curvature, :zero_curvature,
+                           zero_slope_at_start, zero_slope_at_end,
+                           0.0, -1, true, false, true, false, 0,
+                           zeros(Int, n), fill(:zero_curvature, n),
+                           fill(:zero_curvature, n), Vector{Any}(nothing, n))
+    _save_originals!(mixer)
+    return mixer
+end
+
+# 1.0 positional form: a playing mixer already stepped, without applying the
+# clip, to mixer time `time`.
+function AnimationMixer(clip::AnimationClip, time::Real, loop::Symbol,
+                        repetitions::Integer, clamp_when_finished::Bool,
+                        time_scale::Real)
+    mixer = _new_animation_mixer(clip, _animation_loop_mode(loop),
+                                 _validated_animation_repetitions(repetitions),
+                                 clamp_when_finished,
+                                 _validated_animation_time_scale(time_scale),
+                                 true, true)
+    t = _checked_control_scalar(time, "AnimationMixer time")
+    _update_action_time!(mixer, t)
+    mixer.time = t
+    return mixer
+end
+
 function AnimationMixer(clip::AnimationClip; loop::Union{Symbol,Nothing}=nothing,
                         repetitions::Union{Integer,Nothing}=nothing,
                         clamp_when_finished::Union{Bool,Nothing}=nothing,
-                        time_scale::Union{Real,Nothing}=nothing)
-    AnimationMixer(clip, 0.0,
-                   loop === nothing ? clip.loop : _animation_loop_mode(loop),
-                   repetitions === nothing ? clip.repetitions :
-                   _validated_animation_repetitions(repetitions),
-                   clamp_when_finished === nothing ? clip.clamp_when_finished : clamp_when_finished,
-                   time_scale === nothing ? clip.time_scale :
-                   _validated_animation_time_scale(time_scale))
+                        time_scale::Union{Real,Nothing}=nothing,
+                        zero_slope_at_start::Bool=true,
+                        zero_slope_at_end::Bool=true)
+    _new_animation_mixer(clip,
+                         loop === nothing ? clip.loop : _animation_loop_mode(loop),
+                         repetitions === nothing ? clip.repetitions :
+                         _validated_animation_repetitions(repetitions),
+                         clamp_when_finished === nothing ? clip.clamp_when_finished :
+                         clamp_when_finished,
+                         time_scale === nothing ? clip.time_scale :
+                         _validated_animation_time_scale(time_scale),
+                         zero_slope_at_start, zero_slope_at_end)
 end
 
+# three.js AnimationAction._setEndings (AnimationAction.js:882-917).
+function _set_action_endings!(mixer::AnimationMixer, at_start::Bool, at_end::Bool,
+                              pingpong::Bool)
+    if pingpong
+        mixer.ending_start = :zero_slope
+        mixer.ending_end = :zero_slope
+    else
+        mixer.ending_start = at_start ?
+            (mixer.zero_slope_at_start ? :zero_slope : :zero_curvature) : :wrap_around
+        mixer.ending_end = at_end ?
+            (mixer.zero_slope_at_end ? :zero_slope : :zero_curvature) : :wrap_around
+    end
+    return nothing
+end
+
+# A finishing action pauses on its last pose when clamping, otherwise it is
+# disabled (AnimationAction.js:771-772, 822-823).
+@inline function _finish_action!(mixer::AnimationMixer)
+    mixer.clamp_when_finished ? (mixer.paused = true) : (mixer.enabled = false)
+    return nothing
+end
+
+# Whole loops in `x = time / duration` (three.js `Math.floor`), returned as
+# the Float64 the time is wrapped by and as the loop-count increment
+# |floor(x)|. The increment saturates at 2^53, which keeps its parity (every
+# Float64 at or above 2^53 is even), so the Int conversion cannot throw; the
+# wrapped time still uses the exact floor, as three.js does.
+@inline function _action_loop_delta(x::Float64)
+    loops = floor(x)
+    return loops, Int(min(abs(loops), 2.0^53))
+end
+
+# Loop count plus `n` wraps, saturated instead of overflowing.
+@inline _action_add_loops(count::Int, n::Int) =
+    count > typemax(Int) - n ? typemax(Int) : count + n
+
+# three.js AnimationAction._updateTime (AnimationAction.js:724-880): advance
+# the clip-local time by the scaled `delta` and return the clip time to
+# sample. A zero-length repeating clip samples time 0 (three.js divides by
+# the zero duration there).
+function _update_action_time!(mixer::AnimationMixer, delta::Float64)
+    duration = mixer.clip.duration
+    loop = _animation_loop_mode(mixer.loop)
+    time = _checked_control_scalar(mixer.action_time + delta, "animation time")
+    loop_count = mixer.loop_count
+    pingpong = loop === :pingpong
+    if delta == 0.0
+        loop_count == -1 && return time
+        return pingpong && isodd(loop_count) ? duration - time : time
+    end
+    if loop === :once
+        if loop_count == -1
+            mixer.loop_count = 0
+            _set_action_endings!(mixer, true, true, false)
+        end
+        if time >= duration
+            time = duration
+        elseif time < 0.0
+            time = 0.0
+        else
+            mixer.action_time = time
+            return time
+        end
+        _finish_action!(mixer)
+        mixer.action_time = time
+        return time
+    end
+    repetitions = mixer.repetitions          # negative: unlimited (Infinity)
+    if loop_count == -1
+        if delta >= 0.0
+            loop_count = 0
+            _set_action_endings!(mixer, true, repetitions == 0, pingpong)
+        else
+            # Looping in reverse, the initial transition through zero counts
+            # as a repetition, so the loop count stays at -1.
+            _set_action_endings!(mixer, repetitions == 0, true, pingpong)
+        end
+    end
+    if duration <= 0.0
+        mixer.loop_count = loop_count
+        mixer.action_time = 0.0
+        return 0.0
+    end
+    if time >= duration || time < 0.0
+        loop_delta, wraps = _action_loop_delta(time / duration)
+        time -= duration * loop_delta
+        loop_count = _action_add_loops(loop_count, wraps)
+        if repetitions >= 0 && repetitions - loop_count <= 0
+            _finish_action!(mixer)
+            time = delta > 0.0 ? duration : 0.0
+            # three.js keeps _loopCount at its previous value here, so the
+            # frames after a clamped ping-pong finish can mirror the pose.
+            mixer.action_time = time
+        else
+            if repetitions >= 0 && repetitions - loop_count == 1
+                at_start = delta < 0.0
+                _set_action_endings!(mixer, at_start, !at_start, pingpong)
+            else
+                _set_action_endings!(mixer, false, false, pingpong)
+            end
+            mixer.loop_count = loop_count
+            mixer.action_time = time
+        end
+    else
+        mixer.loop_count = loop_count
+        mixer.action_time = time
+    end
+    return pingpong && isodd(loop_count) ? duration - time : time
+end
+
+# Clip time of an action played from its start up to (scaled) time `t` in
+# frame steps shorter than the clip, in closed form for the exported web
+# player's clipTime; `nothing` once the action finishes unclamped (disabled,
+# so the original values show). While running this is what one
+# _update_action_time! step of `t` gives (mixer_set_time!). After a clamped
+# finish three.js keeps the loop count from before the final wrap
+# (AnimationAction.js:815-829 leaves `_loopCount` unchanged), so later frames
+# mirror a pingpong clip by that count, not by the finishing step's count.
 function _animation_loop_time(t::Real, duration::Real, loop::Symbol,
                               repetitions::Int, clamp_when_finished::Bool)
     duration isa Bool &&
@@ -2469,61 +3242,36 @@ function _animation_loop_time(t::Real, duration::Real, loop::Symbol,
     d = Float64(duration)
     isfinite(d) && d >= 0.0 ||
         throw(ArgumentError("animation duration must be finite and non-negative"))
-    d <= 0.0 && return 0.0
     t isa Bool && throw(ArgumentError("animation time must be finite"))
     x = Float64(t)
     isfinite(x) ||
         throw(ArgumentError("animation time must be finite"))
     loop = _animation_loop_mode(loop)
+    x == 0.0 && return 0.0
     if loop === :once
-        x <= 0.0 && return 0.0
-        x >= d && return clamp_when_finished ? d : 0.0
-        return x
+        0.0 < x < d && return x
+        clamp_when_finished || return nothing
+        return x >= d ? d : 0.0
     end
-    # three.js AnimationAction._updateTime: playing forward finishes on reaching
-    # max(repetitions, 1) loops; playing backward from zero the first wrap below
-    # zero is free (it enters an unmirrored loop), so it finishes only past
-    # -repetitions loops. A clamped finished action holds the pose of its last
-    # running loop.
-    if repetitions >= 0
-        if x >= d * max(repetitions, 1)
-            clamp_when_finished || return 0.0
-            return loop === :pingpong && iseven(max(repetitions, 1)) ? 0.0 : d
-        elseif x < -d * repetitions
-            clamp_when_finished || return 0.0
-            return loop === :pingpong && repetitions > 0 && iseven(repetitions) ? d : 0.0
+    d <= 0.0 && return 0.0
+    time = x
+    loop_count = x > 0.0 ? 0 : -1
+    if time >= d || time < 0.0
+        loop_delta, wraps = _action_loop_delta(time / d)
+        time -= d * loop_delta
+        loop_count = _action_add_loops(loop_count, wraps)
+        if repetitions >= 0 && repetitions - loop_count <= 0
+            clamp_when_finished || return nothing
+            time = x > 0.0 ? d : 0.0
+            # Frame steps wrap one loop at a time, so the kept count is the
+            # finishing count minus one: forward max(repetitions, 1) - 1,
+            # backward (from -1, first wrap free) repetitions - 1. A kept
+            # count of -1 returns the time unmirrored (_updateTime, deltaTime 0).
+            kept = (x > 0.0 ? max(repetitions, 1) : repetitions) - 1
+            return loop === :pingpong && kept >= 0 && isodd(kept) ? d - time : time
         end
     end
-    if loop === :pingpong
-        y = mod(x < 0.0 ? x + d : x, 2d)
-        return y <= d ? y : 2d - y
-    end
-    return mod(x, d)
-end
-
-# Endings of :cubic tracks while the clip plays at unscaled time `time`, as
-# three.js AnimationAction._setEndings sets them (AnimationAction.js:742-917,
-# zeroSlopeAtStart/End at their default true): zero slope for :once and
-# :pingpong; for :repeat zero slope only at the clip start of the first loop
-# and the clip end of the last one (entered when one repetition is pending),
-# and wrap-around across every loop seam. Playing backward from zero, the
-# first wrap below zero leaves loop count 0 and only the start of the final
-# loop gets zero slope. three.js keeps a cached interval's weights until the
-# sample leaves it, so a track whose interval spans a loop seam (two keys)
-# can still use the previous loop's endings there; this follows the endings
-# of the loop being sampled.
-function _animation_cubic_endings(time::Float64, duration::Float64, loop::Symbol,
-                                  repetitions::Int)
-    (loop === :repeat && duration > 0.0) || return :zero_slope, :zero_slope
-    if time >= 0.0
-        k = floor(time / duration)
-        start = k == 0.0 ? :zero_slope : :wrap_around
-        last = repetitions == 0 || (repetitions >= 2 && k == repetitions - 1)
-        return start, last ? :zero_slope : :wrap_around
-    end
-    j = ceil(-time / duration) - 1.0
-    start = repetitions >= 1 && j == repetitions - 1 ? :zero_slope : :wrap_around
-    return start, :wrap_around
+    return loop === :pingpong && isodd(loop_count) ? d - time : time
 end
 
 # Write an interpolated value to a track target. Quaternion samples targeting the
@@ -3024,12 +3772,16 @@ function _write_morph_component_track_tree!(@nospecialize(node), tr::NumberKeyfr
                                             mixer::AnimationMixer)
     wrote = false
     if hasproperty(node, :morph_target_influences)
-        values = getproperty(node, :morph_target_influences)
-        value = Float64(_mixer_track_value(tr, mixer))
-        if values isa Vector{Float64}
-            _write_morph_component_value!(values, tr.component, value)
-        else
-            _write_morph_component_value!(values, tr.component, value)
+        component = isempty(tr.morph_name) ? tr.component :
+            _node_morph_name_index(node, tr.morph_name)
+        if component != 0
+            values = getproperty(node, :morph_target_influences)
+            value = Float64(_mixer_track_value(tr, mixer))
+            if values isa Vector{Float64}
+                _write_morph_component_value!(values, component, value)
+            else
+                _write_morph_component_value!(values, component, value)
+            end
         end
         wrote = true
     end
@@ -3046,15 +3798,32 @@ function _write_morph_component_track_tree!(@nospecialize(node), tr::NumberKeyfr
     return wrote
 end
 
-# Sample `tr` at the mixer's clip time; :cubic tracks use the loop endings
-# chosen for this update.
+# Sample `tr` at the mixer's clip time. A :cubic track evaluates like the
+# action's CubicInterpolant (Interpolant.js:92-248, CubicInterpolant.js:41-155):
+# outside the keys it copies the end value and forgets its interval; inside,
+# it computes its weights with the action's current endings only when the
+# sample enters a different key interval, and keeps them while it stays.
 _mixer_track_value(tr::AbstractKeyframeTrack, mixer::AnimationMixer) =
     _track_value(tr, mixer.sample_time)
 function _mixer_track_value(tr::Union{KeyframeTrack,NumberKeyframeTrack},
                             mixer::AnimationMixer)
     tr.interpolation === :cubic || return _track_value(tr, mixer.sample_time)
-    return _cubic_interpolant_sample(tr.times, tr.values, mixer.sample_time,
-                                     mixer.ending_start, mixer.ending_end)
+    t = mixer.sample_time
+    times = tr.times
+    i = mixer.track_index
+    n = length(times)
+    if t < times[1] || t >= times[n]
+        mixer.cubic_interval[i] = 0
+        return t < times[1] ? tr.values[1] : tr.values[n]
+    end
+    interval = searchsortedlast(times, t)
+    if mixer.cubic_interval[i] != interval
+        mixer.cubic_interval[i] = interval
+        mixer.cubic_ending_start[i] = mixer.ending_start
+        mixer.cubic_ending_end[i] = mixer.ending_end
+    end
+    return _cubic_interpolant_sample(times, tr.values, t, mixer.cubic_ending_start[i],
+                                     mixer.cubic_ending_end[i])
 end
 
 _apply_track!(target, tr::AbstractKeyframeTrack, mixer::AnimationMixer) =
@@ -3078,22 +3847,240 @@ function _apply_track!(target, tr::_MorphWeightsTrack, mixer::AnimationMixer)
     return _write_track_value!(target, tr.property, _track_value(tr, mixer.sample_time))
 end
 
-function _mixer_apply_time!(mixer::AnimationMixer, time::Float64)
-    mixer.sample_time = _animation_loop_time(time,
-                                             mixer.clip.duration,
-                                             mixer.loop,
-                                             mixer.repetitions,
-                                             mixer.clamp_when_finished)
-    mixer.ending_start, mixer.ending_end =
-        _animation_cubic_endings(time, mixer.clip.duration, mixer.loop, mixer.repetitions)
-    for tr in mixer.clip.tracks
-        _apply_track!(tr.target, tr, mixer)
+# ---- Original values (three.js PropertyMixer.saveOriginalState) ----------
+#
+# Each track's original is stored in the form its writer takes, and restored
+# through that writer, so a restore undoes exactly what the track writes.
+# Readers return `nothing` for a property they cannot read; the writer then
+# reports the problem on the first update.
+
+@inline _rotation_track_property(property::Symbol) =
+    property === :rotation || property === :quaternion
+
+function _original_texture(target, property::Symbol)
+    split = _split_texture_track_property(property)
+    split === nothing && return nothing
+    hasproperty(target, :material) || return nothing
+    field, texture_property = split
+    tex = _material_texture_slot(getproperty(target, :material), field)
+    tex isa Texture || return nothing
+    return tex, texture_property
+end
+
+function _original_material_value(target, property::Symbol)
+    hasproperty(target, :material) || return nothing
+    mat = getproperty(target, :material)
+    name = _material_animation_property(property)
+    hasproperty(mat, name) || return nothing
+    return getproperty(mat, name)
+end
+
+_original_vec3(v::Vec3) = Vec3{Float64}(v.x, v.y, v.z)
+_original_vec3(v::Color3) = Vec3{Float64}(v.r, v.g, v.b)
+_original_vec3(::Any) = nothing
+
+_original_scalar(v::Bool) = v ? 1.0 : 0.0
+_original_scalar(v::Real) = Float64(v)
+_original_scalar(::Any) = nothing
+
+_original_component(v::Union{Vec2,Vec3,Euler}, k::Int) =
+    k == 1 ? Float64(v.x) : k == 2 ? Float64(v.y) :
+    (k == 3 && !(v isa Vec2)) ? Float64(v.z) : nothing
+_original_component(v::Quaternion, k::Int) =
+    k == 1 ? v.x : k == 2 ? v.y : k == 3 ? v.z : k == 4 ? v.w : nothing
+_original_component(v::Color3, k::Int) =
+    k == 1 ? v.r : k == 2 ? v.g : k == 3 ? v.b : nothing
+_original_component(::Any, ::Int) = nothing
+
+function _original_texture_value(tex::Texture, texture_property::Symbol)
+    texture_property === :rotation && return tex.rotation
+    texture_property === :matrix_auto_update && return tex.matrix_auto_update
+    return _texture_vec2(tex, texture_property)
+end
+
+# The value of `property` a writer of the given kind reads back: from the
+# target, else the texture slot, else the material (the writers' order).
+function _original_property_value(target, property::Symbol)
+    hasproperty(target, property) && return getproperty(target, property)
+    tex = _original_texture(target, property)
+    tex === nothing || return _original_texture_value(tex[1], tex[2])
+    return _original_material_value(target, property)
+end
+
+function _original_vec3_property(target, property::Symbol)
+    value = _original_property_value(target, property)
+    value isa Vec2 && return Vec3{Float64}(value.x, value.y, 0.0)
+    value isa Union{Bool,Real} && return Vec3{Float64}(_original_scalar(value), 0.0, 0.0)
+    return _original_vec3(value)
+end
+
+function _morph_component_originals(node, tr::NumberKeyframeTrack,
+                                    out::Vector{Tuple{Any,Int,Float64}})
+    if hasproperty(node, :morph_target_influences)
+        k = isempty(tr.morph_name) ? tr.component :
+            _node_morph_name_index(node, tr.morph_name)
+        values = getproperty(node, :morph_target_influences)
+        1 <= k <= length(values) && push!(out, (node, k, Float64(values[k])))
     end
-    mixer.time = time
+    for child in get_children(node)
+        _morph_component_originals(child, tr, out)
+    end
+    return out
+end
+
+function _morph_vector_originals(node, out::Vector{Tuple{Any,Vector{Float64}}})
+    if hasproperty(node, :morph_target_influences)
+        push!(out, (node, collect(Float64, getproperty(node, :morph_target_influences))))
+    end
+    for child in get_children(node)
+        _morph_vector_originals(child, out)
+    end
+    return out
+end
+
+function _track_original(target, tr::Union{KeyframeTrack,CubicSplineKeyframeTrack})
+    tr.property === :rotation &&
+        return hasproperty(target, :rotation) ? getproperty(target, :rotation) : nothing
+    return _original_vec3_property(target, tr.property)
+end
+
+function _track_original(target, tr::NumberKeyframeTrack)
+    if tr.property === :morph_target_influences && tr.component != 0
+        return _morph_component_originals(target, tr, Tuple{Any,Int,Float64}[])
+    elseif tr.property === :quaternion && tr.component != 0
+        return hasproperty(target, :rotation) ? getproperty(target, :rotation) : nothing
+    elseif tr.component == 0
+        return _original_scalar(_original_property_value(target, tr.property))
+    end
+    return _original_component(_original_property_value(target, tr.property),
+                               tr.component)
+end
+
+function _track_original(target, tr::Union{QuaternionKeyframeTrack,
+                                          CubicSplineQuaternionKeyframeTrack})
+    _rotation_track_property(tr.property) &&
+        return hasproperty(target, :rotation) ? getproperty(target, :rotation) : nothing
+    return hasproperty(target, tr.property) ? getproperty(target, tr.property) : nothing
+end
+
+function _track_original(target, tr::_MorphWeightsTrack)
+    if tr.property === :morph_target_influences
+        out = _morph_vector_originals(target, Tuple{Any,Vector{Float64}}[])
+        isempty(out) || return out
+    end
+    hasproperty(target, tr.property) || return nothing
+    value = getproperty(target, tr.property)
+    return value isa AbstractVector ? copy(value) : value
+end
+
+function _restore_rotation!(target, rotation)
+    rotation isa Euler && setproperty!(target, :rotation, rotation)
+    return nothing
+end
+
+_restore_track_original!(target, tr::Union{KeyframeTrack,CubicSplineKeyframeTrack}, orig) =
+    tr.property === :rotation ? _restore_rotation!(target, orig) :
+    (_write_track_value!(target, tr.property, orig::Vec3{Float64}); nothing)
+
+function _restore_track_original!(target, tr::NumberKeyframeTrack, orig)
+    if tr.property === :morph_target_influences && tr.component != 0
+        for (node, k, value) in orig::Vector{Tuple{Any,Int,Float64}}
+            values = getproperty(node, :morph_target_influences)
+            1 <= k <= length(values) && (values[k] = value)
+        end
+    elseif tr.property === :quaternion && tr.component != 0
+        _restore_rotation!(target, orig)
+    elseif tr.component == 0
+        _write_track_value!(target, tr.property, orig::Float64)
+    else
+        _write_track_value!(target, tr.property, tr.component, orig::Float64)
+    end
+    return nothing
+end
+
+function _restore_track_original!(target, tr::Union{QuaternionKeyframeTrack,
+                                                   CubicSplineQuaternionKeyframeTrack},
+                                  orig)
+    _rotation_track_property(tr.property) && return _restore_rotation!(target, orig)
+    setproperty!(target, tr.property, orig)
+    return nothing
+end
+
+function _restore_track_original!(target, tr::_MorphWeightsTrack, orig)
+    if orig isa Vector{Tuple{Any,Vector{Float64}}}
+        for (node, saved) in orig
+            values = getproperty(node, :morph_target_influences)
+            if values isa Vector{Float64} && length(values) == length(saved) &&
+               !_morph_buffer_aliases_track(values, tr)
+                copyto!(values, saved)
+            else
+                setproperty!(node, :morph_target_influences, copy(saved))
+            end
+        end
+        return nothing
+    end
+    setproperty!(target, tr.property, orig isa AbstractVector ? copy(orig) : orig)
+    return nothing
+end
+
+function _save_originals!(mixer::AnimationMixer)
+    for (i, tr) in pairs(mixer.clip.tracks)
+        mixer.originals[i] = _track_original(tr.target, tr)
+    end
     return mixer
 end
 
-"""Set the clip to absolute time `t`, scaled once by `mixer.time_scale`."""
+function _restore_originals!(mixer::AnimationMixer)
+    for (i, tr) in pairs(mixer.clip.tracks)
+        orig = mixer.originals[i]
+        orig === nothing || _restore_track_original!(tr.target, tr, orig)
+    end
+    return mixer
+end
+
+# ---- Action stepping -------------------------------------------------------
+
+function _mixer_apply_tracks!(mixer::AnimationMixer)
+    tracks = mixer.clip.tracks
+    for i in eachindex(tracks)
+        tr = tracks[i]
+        mixer.track_index = i
+        _apply_track!(tr.target, tr, mixer)
+    end
+    return mixer
+end
+
+# One action update (AnimationAction._update with weight 1 and
+# PropertyMixer.apply): a disabled action contributes nothing; the update
+# that disables it writes the original values back.
+function _mixer_step!(mixer::AnimationMixer, delta::Float64)
+    mixer.active || return mixer
+    if mixer.enabled
+        clip_time = _update_action_time!(mixer, mixer.paused ? 0.0 : delta)
+        if mixer.enabled
+            mixer.sample_time = clip_time
+            _mixer_apply_tracks!(mixer)
+            mixer.applied = true
+            return mixer
+        end
+    end
+    # Weight 0: PropertyMixer.apply mixes in the original value, which changes
+    # the property only on the first such update after the clip was applied.
+    mixer.applied && _restore_originals!(mixer)
+    mixer.applied = false
+    return mixer
+end
+
+"""
+    mixer_set_time!(mixer, t) -> mixer
+
+Restart the action and play it to time `t`, scaled once by
+`mixer.time_scale`, applying the pose there: three.js `action.reset()`
+followed by `mixer.setTime(t)` (AnimationMixer.js `setTime` zeroes the
+action time and runs one update of `t`). From a restart, every loop and
+finish rule of `mixer_update!` applies to that single step; a stopped mixer
+only records the time.
+"""
 function mixer_set_time!(mixer::AnimationMixer, t)
     t isa Real && !(t isa Bool) ||
         throw(ArgumentError("mixer_set_time!: time must be finite"))
@@ -3103,9 +4090,20 @@ function mixer_set_time!(mixer::AnimationMixer, t)
     time_scale = _validated_animation_time_scale(mixer.time_scale)
     scaled_time = _checked_control_scalar(
         time * time_scale, "animation time")
-    return _mixer_apply_time!(mixer, scaled_time)
+    _animation_loop_mode(mixer.loop)
+    _reset_action!(mixer)
+    _mixer_step!(mixer, scaled_time)
+    mixer.time = scaled_time
+    return mixer
 end
 
+"""
+    mixer_update!(mixer, dt) -> mixer
+
+Advance the mixer time by `dt * mixer.time_scale` and step the action by
+that amount (three.js `AnimationMixer.update`), applying the sampled pose;
+see `AnimationMixer` for the loop, finish and restore rules.
+"""
 function mixer_update!(mixer::AnimationMixer, dt)
     delta = _checked_control_scalar(dt, "mixer_update!: dt")
     time = _checked_control_scalar(
@@ -3115,7 +4113,88 @@ function mixer_update!(mixer::AnimationMixer, dt)
         delta * time_scale, "AnimationMixer scaled delta")
     next_time = _checked_control_scalar(
         time + scaled_delta, "AnimationMixer updated time")
-    return _mixer_apply_time!(mixer, next_time)
+    _mixer_step!(mixer, scaled_delta)
+    mixer.time = next_time
+    return mixer
+end
+
+function _reset_action!(mixer::AnimationMixer)
+    mixer.paused = false
+    mixer.enabled = true
+    mixer.action_time = 0.0
+    mixer.loop_count = -1
+    return mixer
+end
+
+"""
+    mixer_reset!(mixer) -> mixer
+
+Restart the action without applying anything (three.js
+`AnimationAction.reset`): it is enabled and unpaused again, its clip time is
+0 and its loop count is forgotten. The mixer time and the original values are
+kept.
+"""
+mixer_reset!(mixer::AnimationMixer) = _reset_action!(mixer)
+
+"""
+    mixer_stop!(mixer) -> mixer
+
+Stop the action (three.js `AnimationAction.stop`): every animated property
+gets its original value back, the action is reset, and `mixer_update!` and
+`mixer_set_time!` stop applying the clip until `mixer_play!`.
+"""
+function mixer_stop!(mixer::AnimationMixer)
+    mixer.active && _restore_originals!(mixer)
+    mixer.active = false
+    mixer.applied = false
+    return _reset_action!(mixer)
+end
+
+"""
+    mixer_play!(mixer) -> mixer
+
+Schedule a stopped action again (three.js `AnimationAction.play`): the
+current property values become the originals that a finish or
+`mixer_stop!` restores. A mixer plays from construction, so this only acts
+after `mixer_stop!`.
+"""
+function mixer_play!(mixer::AnimationMixer)
+    mixer.active && return mixer
+    _save_originals!(mixer)
+    mixer.active = true
+    return mixer
+end
+
+"""
+    mixer_is_running(mixer) -> Bool
+
+Whether the action is currently advancing (three.js
+`AnimationAction.isRunning`): scheduled, enabled, not paused and with a
+nonzero `time_scale`.
+"""
+mixer_is_running(mixer::AnimationMixer) =
+    mixer.active && mixer.enabled && !mixer.paused && mixer.time_scale != 0.0
+
+"""
+    mixer_is_scheduled(mixer) -> Bool
+
+Whether the action is scheduled, that is played and not stopped (three.js
+`AnimationAction.isScheduled`); a finished action stays scheduled.
+"""
+mixer_is_scheduled(mixer::AnimationMixer) = mixer.active
+
+"""
+    mixer_set_loop!(mixer, loop[, repetitions]) -> mixer
+
+Set the loop mode (`:repeat`, `:once` or `:pingpong`) and the repetitions
+(`-1` for unlimited, the default), as three.js `AnimationAction.setLoop`.
+"""
+function mixer_set_loop!(mixer::AnimationMixer, loop::Symbol, repetitions::Integer=-1)
+    mode = _animation_loop_mode(loop)
+    reps = _validated_animation_repetitions(repetitions)
+    mixer.loop = mode
+    mixer.repetitions = reps
+    return mixer
 end
 
 # ========================== Helpers ==========================
@@ -3182,32 +4261,74 @@ function AxesHelper(size=1.0)
     LineSegments(geo, LineBasicMaterial(color=Color3(1.0,1.0,1.0)); name="AxesHelper")
 end
 
+# three.js `new Color(hex)` in the linear working space (Color.setHex with
+# ColorManagement converting from sRGB).
+_helper_hex_color(hex::Integer) = Color3(srgb_to_linear(((hex >> 16) & 0xff) / 255),
+                                         srgb_to_linear(((hex >> 8) & 0xff) / 255),
+                                         srgb_to_linear((hex & 0xff) / 255))
+
+# GridHelper.js / PolarGridHelper.js default colours 0x444444 and 0x888888.
+const _HELPER_GRID_COLOR1 = _helper_hex_color(0x444444)
+const _HELPER_GRID_COLOR2 = _helper_hex_color(0x888888)
+
+# Line material and per-vertex colours of a helper: three.js helpers draw
+# with `vertexColors` and a white material; an explicit `color` instead
+# draws every line in that one colour.
+function _helper_line_object(T, pos::Vector{Float64}, colors::Vector{Float64}, color,
+                             name::String; depth_test::Bool=true)
+    geo = _line_geo(pos)
+    if color === nothing
+        set_attribute!(geo, :color, colors, 3)
+        color = Color3(1.0, 1.0, 1.0)
+    end
+    return T(geo, LineBasicMaterial(color=color, depth_test=depth_test,
+                                    depth_write=depth_test); name=name)
+end
+
 """
+    GridHelper(size=10.0, divisions=10; color=nothing,
+               color1=<0x444444>, color2=<0x888888>)
+
 A `divisions`×`divisions` grid of size `size` on the xz-plane, with the
 vertex order of three.js `GridHelper`: for each offset `k` from `-size/2`, a
-line parallel to x and then one parallel to z.
+line parallel to x and then one parallel to z. As in three.js the centre
+lines (present when `divisions` is even) take `color1` and the others
+`color2`, as a per-vertex `:color` attribute; the defaults are three.js's
+`0x444444` and `0x888888` in the linear working space. Passing `color`
+draws every line in that colour instead.
 """
-function GridHelper(size=10.0, divisions=10; color=Color3(0.5,0.5,0.5))
+function GridHelper(size=10.0, divisions=10; color=nothing,
+                    color1=_HELPER_GRID_COLOR1, color2=_HELPER_GRID_COLOR2)
     size = _geometry_finite_float(size, "GridHelper size")
+    color1 = _validated_material_color(color1, :color1)
+    color2 = _validated_material_color(color2, :color2)
     divisions = _clamp_seg(divisions, 1)   # divisions=0 would make step=Inf -> NaN vertices
     lines = _geometry_checked_mul(
         2, _geometry_checked_add(divisions, 1, "GridHelper line count"),
         "GridHelper line count")
-    pos = Vector{Float64}(
-        undef, _helper_line_position_length(lines, "GridHelper"))
+    len = _helper_line_position_length(lines, "GridHelper")
+    pos = Vector{Float64}(undef, len)
+    colors = Vector{Float64}(undef, color === nothing ? len : 0)
     step = size / divisions; half = size / 2
+    center = divisions / 2
     vi = 1
     k = -half
     # GridHelper.js: `k` advances by `k += step`, not `-half + i*step`.
-    for _ in 0:divisions
+    for i in 0:divisions
         _write_line_vertex!(pos, vi, -half, 0.0, k)
         _write_line_vertex!(pos, vi + 1, half, 0.0, k)      # parallel to x
         _write_line_vertex!(pos, vi + 2, k, 0.0, -half)
         _write_line_vertex!(pos, vi + 3, k, 0.0, half)      # parallel to z
+        if color === nothing
+            c = i == center ? color1 : color2
+            for j in 0:3
+                _write_line_color!(colors, vi + j, c)
+            end
+        end
         vi += 4
         k += step
     end
-    LineSegments(_line_geo(pos), LineBasicMaterial(color=color); name="GridHelper")
+    _helper_line_object(LineSegments, pos, colors, color, "GridHelper")
 end
 
 function _box_edge_positions(c1::Vec3, c2::Vec3, c3::Vec3, c4::Vec3,
@@ -3296,103 +4417,184 @@ function CameraHelper(camera::AbstractCamera; color=Color3(1.0,1.0,1.0))
     LineSegments(_line_geo(pos), LineBasicMaterial(color=color); name="CameraHelper")
 end
 
-"""A single segment from a directional light's position toward its target."""
-function DirectionalLightHelper(light::DirectionalLight; color=Color3(1.0,1.0,0.0))
-    p = _light_world_position(light); t = _light_world_target(light)
-    LineSegments(_line_geo(Float64[p.x,p.y,p.z, t.x,t.y,t.z]),
-                 LineBasicMaterial(color=color); name="DirectionalLightHelper")
+# Translation (column 4) of a 4×4 transform.
+@inline _mat4_translation_vec(m::Mat4) =
+    Vec3(mat4_get(m, 1, 4), mat4_get(m, 2, 4), mat4_get(m, 3, 4))
+
+# World matrix of a helper part placed at the origin of `parent` (a light's
+# world matrix) and turned by three.js `Object3D.lookAt(target)`
+# (Object3D.js lookAt): Matrix4.lookAt(target, position, up) gives the world
+# rotation, which is made relative to the parent's rotation
+# (Matrix4.extractRotation), so the parent's scale still applies.
+function _helper_look_at_world(parent::Mat4, target::Vec3)
+    position = _mat4_translation_vec(parent)
+    v = mat4_look_at(target, position, Vec3(0.0, 1.0, 0.0)).e
+    # mat4_look_at returns the transposed (view) rotation: its rows are the
+    # x, y and z axes of the rotation three.js builds.
+    look = Mat4{Float64}((v[1], v[5], v[9], 0.0,
+                          v[2], v[6], v[10], 0.0,
+                          v[3], v[7], v[11], 0.0,
+                          0.0, 0.0, 0.0, 1.0))
+    s1 = _mat4_linear_column_norm(parent, 1)
+    s2 = _mat4_linear_column_norm(parent, 2)
+    s3 = _mat4_linear_column_norm(parent, 3)
+    m(r, c) = mat4_get(parent, r, c)
+    inverse_rotation = Mat4{Float64}((m(1, 1) / s1, m(1, 2) / s2, m(1, 3) / s3, 0.0,
+                                      m(2, 1) / s1, m(2, 2) / s2, m(2, 3) / s3, 0.0,
+                                      m(3, 1) / s1, m(3, 2) / s2, m(3, 3) / s3, 0.0,
+                                      0.0, 0.0, 0.0, 1.0))
+    return parent * inverse_rotation * look
 end
 
-"""Cross-hair lines marking a point light's position."""
-function PointLightHelper(light::PointLight, size=0.5; color=Color3(1.0,1.0,0.0))
-    p = _light_world_position(light)
+"""
+    DirectionalLightHelper(light::DirectionalLight, size=1.0; color=light.color)
+
+Wireframe of three.js `DirectionalLightHelper`: a square of half-width
+`size` at the light, facing its target, and a line from the light to the
+target. Both follow the light's world matrix (so a scaled light scales them)
+and are turned toward the target like `Object3D.lookAt`.
+"""
+function DirectionalLightHelper(light::DirectionalLight, size=1.0; color=light.color)
+    size = _geometry_finite_float(size, "DirectionalLightHelper size")
+    parent = compute_world_matrix(light)::Mat4{Float64}
+    target = _light_world_target(light)
+    world = _helper_look_at_world(parent, target)
+    s = size
+    pos = Vector{Float64}(undef, 30)
+    vi = 1
+    # DirectionalLightHelper.js lightPlane: a Line through these five points.
+    corners = ((-s, s), (s, s), (s, -s), (-s, -s), (-s, s))
+    for k in 1:4
+        a = mat4_transform_point(world, Vec3(corners[k][1], corners[k][2], 0.0))
+        b = mat4_transform_point(world, Vec3(corners[k + 1][1], corners[k + 1][2], 0.0))
+        vi = _write_line_segment!(pos, vi, a, b)
+    end
+    # targetLine: (0,0,0)-(0,0,1) with scale.z = |target - light|.
+    distance = norm(target - _mat4_translation_vec(parent))
+    _write_line_segment!(pos, vi, mat4_transform_point(world, Vec3(0.0, 0.0, 0.0)),
+                         mat4_transform_point(world, Vec3(0.0, 0.0, distance)))
+    LineSegments(_line_geo(pos), LineBasicMaterial(color=color);
+                 name="DirectionalLightHelper")
+end
+
+@inline function _write_triangle_edges!(pos::Vector{Float64}, vi::Int, a::Vec3, b::Vec3, c::Vec3)
+    vi = _write_line_segment!(pos, vi, a, b)
+    vi = _write_line_segment!(pos, vi, b, c)
+    return _write_line_segment!(pos, vi, c, a)
+end
+
+"""
+    PointLightHelper(light::PointLight, size=1.0; color=light.color)
+
+three.js `PointLightHelper`: the wireframe of `SphereGeometry(size, 4, 2)`
+(an octahedron) placed by the light's world matrix, drawn as the three edges
+of each of its eight triangles like a `wireframe` mesh.
+"""
+function PointLightHelper(light::PointLight, size=1.0; color=light.color)
     size = _geometry_finite_float(size, "PointLightHelper size")
-    pos = Float64[p.x-size,p.y,p.z, p.x+size,p.y,p.z,
-                  p.x,p.y-size,p.z, p.x,p.y+size,p.z,
-                  p.x,p.y,p.z-size, p.x,p.y,p.z+size]
+    world = compute_world_matrix(light)::Mat4{Float64}
+    # SphereGeometry.js vertex grid for widthSegments 4, heightSegments 2.
+    grid = ntuple(Val(3)) do row
+        v = (row - 1) / 2
+        ntuple(Val(5)) do column
+            u = (column - 1) / 4
+            mat4_transform_point(world, Vec3(-size * cos(u * (2π)) * sin(v * π),
+                                             size * cos(v * π),
+                                             size * sin(u * (2π)) * sin(v * π)))
+        end
+    end
+    pos = Vector{Float64}(undef, 144)
+    vi = 1
+    # SphereGeometry.js indices: the top row keeps only (b, c, d) and the
+    # bottom row only (a, b, d).
+    for iy in 1:2, ix in 1:4
+        a = grid[iy][ix + 1]; b = grid[iy][ix]
+        c = grid[iy + 1][ix]; d = grid[iy + 1][ix + 1]
+        iy != 1 && (vi = _write_triangle_edges!(pos, vi, a, b, d))
+        iy != 2 && (vi = _write_triangle_edges!(pos, vi, b, c, d))
+    end
     LineSegments(_line_geo(pos), LineBasicMaterial(color=color); name="PointLightHelper")
 end
 
 """
-Cone outline of a spot light: the apex sits at the light position and the base
-circle marks the cone of half-angle `light.angle` at the distance to the target
-(three.js `SpotLightHelper`). Four apex-to-rim spokes plus the base ring.
+    SpotLightHelper(light::SpotLight; color=light.color, segments=32)
+
+three.js `SpotLightHelper`: five lines from the light to `(0,0,1)`,
+`(±1,0,1)` and `(0,±1,1)` and a `segments`-chord circle of radius 1 at
+`z = 1` (three.js uses 32), scaled to the cone width
+`length * tan(light.angle)` and length `light.distance` (1000 when the
+distance is 0), turned toward the target and placed by the light's world
+matrix.
 """
-function SpotLightHelper(light::SpotLight; color=light.color, segments::Int=16)
+function SpotLightHelper(light::SpotLight; color=light.color, segments::Int=32)
     segments = _geometry_nonnegative_int(segments, "SpotLightHelper segments")
-    apex = _light_world_position(light)
-    axis = _light_world_target(light) - apex
-    len = norm(axis)
-    dir = len > 0 ? normalize(axis) : Vec3(0.0, -1.0, 0.0)
-    len = len > 0 ? len : 1.0
-    base = apex + dir * len
-    r = len * tan(light.angle)              # cone base radius at the target plane
-    u, v = _perp_basis(dir)
     total_segments = _geometry_checked_add(
-        segments, 4, "SpotLightHelper segment count")
+        segments, 5, "SpotLightHelper segment count")
     pos = Vector{Float64}(
         undef, _helper_line_position_length(
             total_segments, "SpotLightHelper"))
+    parent = compute_world_matrix(light)::Mat4{Float64}
+    world = _helper_look_at_world(parent, _light_world_target(light))
+    cone_length = light.distance != 0 ? light.distance : 1000.0
+    cone_width = cone_length * tan(light.angle)
+    cone(x, y, z) = mat4_transform_point(
+        world, Vec3(x * cone_width, y * cone_width, z * cone_length))
+    apex = cone(0.0, 0.0, 0.0)
     vi = 1
-    # Base ring.
-    prev = base + u * r
-    for k in 1:segments
-        φ = 2π * k / segments
-        cur = base + (u * (r * cos(φ)) + v * (r * sin(φ)))
-        vi = _write_line_segment!(pos, vi, prev, cur)
-        prev = cur
+    for (x, y) in ((0.0, 0.0), (1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0))
+        vi = _write_line_segment!(pos, vi, apex, cone(x, y, 1.0))
     end
-    # Four spokes from apex to the rim.
-    for φ in (0.0, π/2, π, 3π/2)
-        rim = base + (u * (r * cos(φ)) + v * (r * sin(φ)))
-        vi = _write_line_segment!(pos, vi, apex, rim)
+    for i in 0:segments-1
+        p1 = (i / segments) * π * 2
+        p2 = ((i + 1) / segments) * π * 2
+        vi = _write_line_segment!(pos, vi, cone(cos(p1), sin(p1), 1.0),
+                                  cone(cos(p2), sin(p2), 1.0))
     end
     LineSegments(_line_geo(pos), LineBasicMaterial(color=color); name="SpotLightHelper")
 end
 
-"""
-Small octahedron wireframe at a hemisphere light's position, sized by `size`
-(three.js `HemisphereLightHelper` uses a sphere/octahedron icon). The upper apex
-takes the sky colour, the lower apex the ground colour, stored as a per-vertex
-`:color` attribute.
-"""
-function HemisphereLightHelper(light::HemisphereLight, size=1.0; color=light.color)
-    size = _geometry_finite_float(size, "HemisphereLightHelper size")
-    p = _light_world_position(light); s = size
-    top = Vec3(p.x, p.y+s, p.z); bot = Vec3(p.x, p.y-s, p.z)
-    px = Vec3(p.x+s, p.y, p.z); nx = Vec3(p.x-s, p.y, p.z)
-    pz = Vec3(p.x, p.y, p.z+s); nz = Vec3(p.x, p.y, p.z-s)
-    eq = (px, pz, nx, nz)
-    pos = Vector{Float64}(undef, 72)
-    vi = 1
-    # Equator ring.
-    for k in 1:4
-        vi = _write_line_segment!(pos, vi, eq[k], eq[mod1(k+1, 4)])
-    end
-    # Spokes to the two apices.
-    for e in eq
-        vi = _write_line_segment!(pos, vi, top, e)
-        vi = _write_line_segment!(pos, vi, bot, e)
-    end
-    geo = _line_geo(pos)
-    sky = light.color; grd = light.ground_color
-    cols = Vector{Float64}(undef, 72)
-    blend = _stable_color_lerp(sky, grd, 0.5)
-    # First 4 segments are the (mid-latitude) equator: blend; the remaining
-    # spokes inherit the apex colour (sky for top spokes, ground for bottom).
-    for seg in 1:12
-        c = seg <= 4 ? blend : ((seg - 5) % 2 == 0 ? sky : grd)
-        vi = 2seg - 1
-        _write_line_color!(cols, vi, c)
-        _write_line_color!(cols, vi + 1, c)
-    end
-    set_attribute!(geo, :color, cols, 3)
-    LineSegments(geo, LineBasicMaterial(color=color); name="HemisphereLightHelper")
-end
+# OctahedronGeometry (PolyhedronGeometry with detail 0) emits each face
+# (a, b, c) of these indices as (b, c, a).
+const _OCTAHEDRON_VERTICES = ((1.0, 0.0, 0.0), (-1.0, 0.0, 0.0), (0.0, 1.0, 0.0),
+                              (0.0, -1.0, 0.0), (0.0, 0.0, 1.0), (0.0, 0.0, -1.0))
+const _OCTAHEDRON_FACES = ((1, 3, 5), (1, 5, 4), (1, 4, 6), (1, 6, 3),
+                           (2, 3, 6), (2, 6, 4), (2, 4, 5), (2, 5, 3))
 
-# World-space translation (column 4) of a 4×4 transform.
-@inline _mat4_translation_vec(m::Mat4) =
-    Vec3(mat4_get(m, 1, 4), mat4_get(m, 2, 4), mat4_get(m, 3, 4))
+"""
+    HemisphereLightHelper(light::HemisphereLight, size=1.0; color=nothing)
+
+three.js `HemisphereLightHelper`: the wireframe of `OctahedronGeometry(size)`
+turned by `rotateY(π/2)`, placed by the light's world matrix and turned to
+look at the negated light position, drawn as the three edges of each of its
+eight triangles. Without `color`, the first four faces take the sky colour
+and the last four the ground colour as a per-vertex `:color` attribute;
+`color` draws every line in that one colour instead.
+"""
+function HemisphereLightHelper(light::HemisphereLight, size=1.0; color=nothing)
+    size = _geometry_finite_float(size, "HemisphereLightHelper size")
+    parent = compute_world_matrix(light)::Mat4{Float64}
+    world = _helper_look_at_world(parent, -_mat4_translation_vec(parent))
+    c, s = cos(π * 0.5), sin(π * 0.5)          # geometry.rotateY(Math.PI * 0.5)
+    vertex(i) = begin
+        x, y, z = _OCTAHEDRON_VERTICES[i]
+        mat4_transform_point(world, Vec3((c * x + s * z) * size, y * size,
+                                         (-s * x + c * z) * size))
+    end
+    pos = Vector{Float64}(undef, 144)
+    colors = Vector{Float64}(undef, color === nothing ? 144 : 0)
+    vi = 1
+    for (f, (a, b, cc)) in enumerate(_OCTAHEDRON_FACES)
+        first_vertex = vi
+        vi = _write_triangle_edges!(pos, vi, vertex(b), vertex(cc), vertex(a))
+        if color === nothing
+            face_color = f <= 4 ? light.color : light.ground_color
+            for j in first_vertex:vi-1
+                _write_line_color!(colors, j, face_color)
+            end
+        end
+    end
+    _helper_line_object(LineSegments, pos, colors, color, "HemisphereLightHelper")
+end
 
 function _skeleton_world_matrix!(worlds::Vector{Mat4{Float64}}, computed::Vector{Bool},
                                  bone_index::Dict{UInt,Int}, bones::Vector{Bone},
@@ -3416,11 +4618,20 @@ function _skeleton_world_matrix!(worlds::Vector{Mat4{Float64}}, computed::Vector
 end
 
 """
+    SkeletonHelper(skeleton; color=nothing, color1=Color3(0,0,1), color2=Color3(0,1,0))
+
 Line segments connecting each bone to its parent bone in world space
 (three.js `SkeletonHelper`). Bones whose parent is not itself a bone in the
-skeleton are skipped, matching three.js which only links bone-to-bone.
+skeleton are skipped, matching three.js which only links bone-to-bone. As in
+three.js each segment runs from the bone (`color1`, blue) to its parent
+(`color2`, green) with per-vertex `:color`s, and the material neither tests
+nor writes depth, so the skeleton draws over the mesh. Passing `color` draws
+every segment in that one colour instead.
 """
-function SkeletonHelper(skeleton::Skeleton; color=Color3(0.0, 0.0, 1.0))
+function SkeletonHelper(skeleton::Skeleton; color=nothing,
+                        color1=Color3(0.0, 0.0, 1.0), color2=Color3(0.0, 1.0, 0.0))
+    color1 = _validated_material_color(color1, :color1)
+    color2 = _validated_material_color(color2, :color2)
     bones = skeleton.bones
     n_bones = length(bones)
     pos = Vector{Float64}(
@@ -3437,7 +4648,7 @@ function SkeletonHelper(skeleton::Skeleton; color=Color3(0.0, 0.0, 1.0))
             (par isa Bone && objectid(par) in boneids) || continue
             cw = _mat4_translation_vec(compute_world_matrix(bone))
             pw = _mat4_translation_vec(compute_world_matrix(par))
-            vi = _write_line_segment!(pos, vi, pw, cw)
+            vi = _write_line_segment!(pos, vi, cw, pw)
         end
     else
         bone_index = Dict{UInt,Int}()
@@ -3454,16 +4665,24 @@ function SkeletonHelper(skeleton::Skeleton; color=Color3(0.0, 0.0, 1.0))
             parent_i == 0 && continue
             cw = _mat4_translation_vec(_skeleton_world_matrix!(worlds, computed, bone_index, bones, i))
             pw = _mat4_translation_vec(_skeleton_world_matrix!(worlds, computed, bone_index, bones, parent_i))
-            vi = _write_line_segment!(pos, vi, pw, cw)
+            vi = _write_line_segment!(pos, vi, cw, pw)
         end
     end
     resize!(pos, 3 * (vi - 1))
-    LineSegments(_line_geo(pos), LineBasicMaterial(color=color); name="SkeletonHelper")
+    colors = Vector{Float64}(undef, color === nothing ? length(pos) : 0)
+    if color === nothing
+        for j in 1:2:vi-1
+            _write_line_color!(colors, j, color1)
+            _write_line_color!(colors, j + 1, color2)
+        end
+    end
+    _helper_line_object(LineSegments, pos, colors, color, "SkeletonHelper"; depth_test=false)
 end
 
 """Build a `SkeletonHelper` from the skeleton owned by a `SkinnedMesh`."""
-SkeletonHelper(mesh::SkinnedMesh; color=Color3(0.0, 0.0, 1.0)) =
-    SkeletonHelper(mesh.skeleton; color=color)
+SkeletonHelper(mesh::SkinnedMesh; color=nothing,
+               color1=Color3(0.0, 0.0, 1.0), color2=Color3(0.0, 1.0, 0.0)) =
+    SkeletonHelper(mesh.skeleton; color=color, color1=color1, color2=color2)
 
 """
 Square outline lying in `plane` with side length `size`, plus a segment along the
@@ -3508,11 +4727,17 @@ Polar grid on the xz-plane: `rings` concentric circles out to `radius` and
 `sectors` evenly spaced radial spokes (three.js `PolarGridHelper`). Circles are
 approximated by `circle_segments` chords each. As in three.js, spokes start on
 +z and advance toward +x, a single sector draws no spoke, and rings are listed
-from the outermost inward.
+from the outermost inward. Odd-numbered spokes and rings (counting from 0)
+take `color1` and the others `color2`, as a per-vertex `:color` attribute
+with three.js's defaults `0x444444` and `0x888888`; passing `color` draws
+every line in that one colour instead.
 """
 function PolarGridHelper(radius=10.0, sectors::Int=16, rings::Int=8;
-                         circle_segments::Int=64, color=Color3(0.5, 0.5, 0.5))
+                         circle_segments::Int=64, color=nothing,
+                         color1=_HELPER_GRID_COLOR1, color2=_HELPER_GRID_COLOR2)
     radius = _geometry_finite_float(radius, "PolarGridHelper radius")
+    color1 = _validated_material_color(color1, :color1)
+    color2 = _validated_material_color(color2, :color2)
     sectors = _geometry_nonnegative_int(sectors, "PolarGridHelper sectors")
     rings = _geometry_nonnegative_int(rings, "PolarGridHelper rings")
     circle_segments = _geometry_nonnegative_int(
@@ -3523,15 +4748,20 @@ function PolarGridHelper(radius=10.0, sectors::Int=16, rings::Int=8;
         rings, circle_segments, "PolarGridHelper segment count")
     n_segments = _geometry_checked_add(
         spokes, ring_segments, "PolarGridHelper segment count")
-    pos = Vector{Float64}(
-        undef, _helper_line_position_length(
-            n_segments, "PolarGridHelper"))
+    len = _helper_line_position_length(n_segments, "PolarGridHelper")
+    pos = Vector{Float64}(undef, len)
+    colors = Vector{Float64}(undef, color === nothing ? len : 0)
     vi = 1
     # Radial spokes: angle v = (i / sectors) * 2pi, point (sin v, 0, cos v) * radius.
     for i in 0:spokes-1
         v = (i / sectors) * (2π)
         vi = _write_line_segment!(pos, vi, Vec3(0.0, 0.0, 0.0),
                                   Vec3(sin(v) * radius, 0.0, cos(v) * radius))
+        if color === nothing
+            c = isodd(i) ? color1 : color2
+            _write_line_color!(colors, vi - 2, c)
+            _write_line_color!(colors, vi - 1, c)
+        end
     end
     # Rings from the outside in: r = radius - radius / rings * i.
     # Chord j ends where chord j + 1 starts (the same angle expression), so
@@ -3544,9 +4774,14 @@ function PolarGridHelper(radius=10.0, sectors::Int=16, rings::Int=8;
             current = Vec3(sin(v) * r, 0.0, cos(v) * r)
             vi = _write_line_segment!(pos, vi, previous, current)
             previous = current
+            if color === nothing
+                c = isodd(i) ? color1 : color2
+                _write_line_color!(colors, vi - 2, c)
+                _write_line_color!(colors, vi - 1, c)
+            end
         end
     end
-    LineSegments(_line_geo(pos), LineBasicMaterial(color=color); name="PolarGridHelper")
+    _helper_line_object(LineSegments, pos, colors, color, "PolarGridHelper")
 end
 
 """

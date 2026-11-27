@@ -3767,6 +3767,29 @@ function _web_write_track_json(io::IO, tr::KeyframeTrack, num_buf::Vector{UInt8}
     return nothing
 end
 
+# A named morph track resolves the name on each node it drives (see
+# Diff3D._node_morph_name_index); export that per-object 1-based index.
+function _web_write_morph_components_json(io::IO, target::AbstractObject3D, name::String)
+    write(io, ",\"morphComponents\":{")
+    first = true
+    visit(node) = begin
+        if hasproperty(node, :morph_target_influences)
+            k = _node_morph_name_index(node, name)
+            if k != 0
+                first ? (first = false) : write(io, ',')
+                write(io, '"')
+                _web_print_int(io, node.id)
+                write(io, "\":")
+                _web_print_int(io, k)
+            end
+        end
+        foreach(visit, get_children(node))
+    end
+    visit(target)
+    write(io, '}')
+    return nothing
+end
+
 function _web_write_track_json(io::IO, tr::NumberKeyframeTrack, num_buf::Vector{UInt8})
     write(io, "{\"target\":")
     _web_print_int(io, tr.target.id)
@@ -3774,6 +3797,7 @@ function _web_write_track_json(io::IO, tr::NumberKeyframeTrack, num_buf::Vector{
     _js_write_str(io, _web_track_property_name(tr))
     write(io, ",\"component\":")
     _web_print_int(io, tr.component)
+    isempty(tr.morph_name) || _web_write_morph_components_json(io, tr.target, tr.morph_name)
     write(io, ",\"kind\":\"number\",\"times\":")
     _js_write_array(io, tr.times, num_buf)
     write(io, ",\"values\":")
@@ -5220,18 +5244,18 @@ function _web_write_webgl_html(io::IO, data_json::String, title::String;
   // Interpolant.evaluate still interpolates and GLTFCubicSplineQuaternionInterpolant normalizes
   // (GLTFLoader.js), as Julia's _track_value does.
   function sampleTrack(tr,t,ends){ const times=tr.times; if(times.length===0) return null; const stride=tr.kind==="quat"?4:(tr.kind==="weights"?tr.stride:(tr.kind==="number"?1:3)); if(t<times[0]||(t===times[0]&&!(tr.kind==="quat"&&tr.interpolation==="cubicspline"))) return tr.values.slice(0,stride); if(t>=times[times.length-1]){ const j=times.length-1; return tr.values.slice(j*stride,j*stride+stride); } let i=0; while(i+1<times.length && times[i+1]<=t)i++; if(tr.interpolation==="step") return tr.values.slice(i*stride,i*stride+stride); const hi=Math.min(i+1,times.length-1); const a=times[i], b=times[hi]; const u=b===a?0:(t-a)/(b-a); if(tr.interpolation==="cubic" && tr.kind==="vec3") return catmull3(times,tr.values,i,t,ends); if(tr.interpolation==="cubic" && tr.kind==="number") return catmullN(times,tr.values,i,t,1,ends); const p=tr.values.slice(i*stride,i*stride+stride), q=tr.values.slice(hi*stride,hi*stride+stride); if(tr.interpolation==="cubicspline"){ const h=b-a; const m1=scaleN(tr.outTangents.slice(i*stride,i*stride+stride),h), m2=scaleN(tr.inTangents.slice(hi*stride,hi*stride+stride),h); const r=hermiteN(p,q,m1,m2,u); return tr.kind==="quat"?norm4(r):r; } return tr.kind==="quat"?slerp(p,q,u):(tr.kind==="weights"?mixN(p,q,u):(tr.kind==="number"?[mix(p[0],q[0],u)]:mix3(p,q,u))); }
-  // The clip time Julia's mixer_set_time! samples (_animation_loop_time, controls.jl), which follows
-  // three.js AnimationAction._updateTime (AnimationAction.js:724-880): a loop wraps to its start
-  // (an exact multiple of the duration samples time 0), zero repetitions still play the first
-  // loop, and a negative time scale finishes only past -repetitions loops. floorMod is Julia's
-  // floating-point mod: the remainder takes the divisor's sign.
-  function floorMod(x,m){ const r=x%m; return r===0?0:((r>0)!==(m>0)?r+m:r); }
   // Endings of "cubic" tracks for the loop being played, packed as catmullN reads them: Julia's
   // _animation_cubic_endings (controls.jl), after three.js AnimationAction._setEndings
   // (AnimationAction.js): zero slope for once and pingpong; for repeat, zero slope only at the
   // start of the first loop and the end of the last one, wrap around across every seam.
   function cubicEndings(clip,t){ const d=clip.duration||0, x=t*(clip.timeScale==null?1:clip.timeScale), reps=clip.repetitions==null?-1:clip.repetitions; if((clip.loop||"repeat")!=="repeat"||!(d>0)) return 4; let start, end; if(x>=0){ const k=Math.floor(x/d); start=k===0; end=reps===0||(reps>=2&&k===reps-1); } else { start=reps>=1&&Math.ceil(-x/d)-1===reps-1; end=false; } return (start?3:6)+(end?1:2); }
-  function clipTime(clip,t){ const d=clip.duration||0; if(d<=0) return 0; const x=t*(clip.timeScale==null?1:clip.timeScale), loop=clip.loop||"repeat", reps=clip.repetitions==null?-1:clip.repetitions, clamp=!!clip.clampWhenFinished; if(loop==="once"){ if(x<=0) return 0; if(x>=d) return clamp?d:0; return x; } if(reps>=0){ const r=Math.max(reps,1); if(x>=d*r){ if(!clamp) return 0; return loop==="pingpong"&&r%2===0?0:d; } if(x<-d*reps){ if(!clamp) return 0; return loop==="pingpong"&&reps>0&&reps%2===0?d:0; } } if(loop==="pingpong"){ const y=floorMod(x<0?x+d:x,2*d); return y<=d?y:2*d-y; } return floorMod(x,d); }
+  // Clip time of an action played from its start in frame steps (_animation_loop_time,
+  // controls.jl; three.js AnimationAction._updateTime, AnimationAction.js:724-880). A loop wraps
+  // to its start, every wrap counts as a loop in either direction (the first wrap below zero is
+  // free), and a finished unclamped action is disabled: null, so the clip leaves the exported
+  // (original) pose in place. A clamped finish keeps the loop count from before the final wrap,
+  // which sets the pingpong mirror of the held pose.
+  function clipTime(clip,t){ const d=clip.duration||0, x=t*(clip.timeScale==null?1:clip.timeScale), loop=clip.loop||"repeat", reps=clip.repetitions==null?-1:clip.repetitions, clamp=!!clip.clampWhenFinished; if(x===0) return 0; if(loop==="once"){ if(x>0&&x<d) return x; if(!clamp) return null; return x>=d?d:0; } if(d<=0) return 0; let time=x, lc=x>0?0:-1; if(time>=d||time<0){ const q=Math.floor(time/d), ld=Math.max(-9007199254740992,Math.min(9007199254740992,q)); time-=d*q; lc+=Math.abs(ld); if(reps>=0&&reps-lc<=0){ if(!clamp) return null; time=x>0?d:0; const kept=(x>0?Math.max(reps,1):reps)-1; return loop==="pingpong"&&kept>=0&&kept%2===1?d-time:time; } } return loop==="pingpong"&&lc%2===1?d-time:time; }
   // Math.hypot is a variadic builtin V8 does not inline: per triple it allocated and cost three
   // times this max-scaled length, which is as overflow-safe and rounds within 4 ulps of it.
   function normalizeTriples(a,stride){ for(let b=0;b+2<a.length;b+=stride){ const x=a[b],y=a[b+1],z=a[b+2], ax=Math.abs(x), ay=Math.abs(y), az=Math.abs(z); let l; if(ax===Infinity||ay===Infinity||az===Infinity) l=Infinity; else { const s=Math.max(ax,ay,az); if(!(s>0)) continue; const u=x/s,v=y/s,w=z/s; l=Math.sqrt(u*u+v*v+w*w)*s; } if(l>1e-12){ a[b]=x/l; a[b+1]=y/l; a[b+2]=z/l; } } return a; }
@@ -5347,7 +5371,7 @@ function _web_write_webgl_html(io::IO, data_json::String, title::String;
     }
   }
   function updateBoneGraph(c){ const graph=c.nodeMap||new Map(), bones=new Map(), state=new Map(); for(const o of c.objects) if(o.skin&&o.skin.bones) for(const b of o.skin.bones) bones.set(b.id,b); const resolve=b=>{ const st=state.get(b.id); if(st===2) return b.matrix; if(st===1) return b.baseMatrix; state.set(b.id,1); let parent=b.parentMatrix||M4.ident(); if(b.parentId){ if(bones.has(b.parentId)) parent=resolve(bones.get(b.parentId)); else if(graph.has(b.parentId)){ const p=graph.get(b.parentId); parent=p.transformMatrix||p.matrix; } } b.parentMatrix=parent; b.matrix=M4.mul(parent,M4.trs(b.animPos,b.animQuat,b.animScale)); state.set(b.id,2); return b.matrix; }; for(const b of bones.values()) resolve(b); }
-  function applyAnimations(c,t){ if(!c.materialAnimationMarked) markMaterialAnimation(c); if(c.camera) resetCameraAnim(c.camera); for(const l of c.lights||[]) resetLightAnim(l); for(const n of c.nodes||[]){ for(const state of n.visibilityStates||[]) state.visible=state.baseVisible; n.animPos=n.basePosition.slice(); n.animEuler=n.baseEuler.slice(); n.animScale=n.baseScale.slice(); n.animQuat=n.baseQuaternion.slice(); n.matrix=n.baseMatrix; } for(const o of c.objects){ o.animPos=o.basePosition.slice(); o.animEuler=o.baseEuler.slice(); o.animScale=o.baseScale.slice(); o.animQuat=o.baseQuaternion.slice(); o.matrix=o.baseMatrix; if(o.materialAnimated){ o.materialStamp=(o.materialStamp||0)+1; resetRenderableAnim(o); } else for(const s of o.visibilityStates) s.visible=s.baseVisible; if(o.hasMorphTargets){ o.morphWeights=o.baseMorphWeights.slice(); o.morphDirty=true; } if(o.skin){ o.skinDirty=true; for(const b of o.skin.bones){ b.animPos=b.basePosition.slice(); b.animEuler=b.baseEuler.slice(); b.animScale=b.baseScale.slice(); b.animQuat=b.baseQuaternion.slice(); b.matrix=b.baseMatrix; } } } for(const clip of c.animations){ const ct=clipTime(clip,t), ends=cubicEndings(clip,t); for(const tr of clip.tracks){ const v=sampleTrack(tr,ct,ends); if(v==null) continue; if(tr.property==="morph_target_influences"){ for(const o of (morphById.get(tr.target)||[])){ if((tr.component||0)>0) o.morphWeights[tr.component-1]=v[0]; else o.morphWeights=v.slice(); o.morphDirty=true; } continue; } const lights=lightById.get(tr.target)||[]; if(tr.property==="visible"){ for(const s of (visibilityById.get(tr.target)||[])) s.visible=v[0]>=.5; for(const l of lights) setLightAnim(l,tr.property,v,tr.component||0); continue; } for(const l of lights) setLightAnim(l,tr.property,v,tr.component||0); for(const cam of (cameraById.get(tr.target)||[])) setCameraAnim(cam,tr.property,v,tr.component||0); const objs=objectById.get(tr.target)||[]; for(const o of objs) if(!setRenderableAnim(o,tr.property,v,tr.component||0)) setNodeAnim(o,tr.property,v,tr.component||0); for(const n of (nodeById.get(tr.target)||[])) setNodeAnim(n,tr.property,v,tr.component||0); } } updateTransformGraph(c); updateBoneGraph(c); updateViewAndLightPoses(c); for(const o of c.objects){ updateMorph(o); updateSkin(o); } }
+  function applyAnimations(c,t){ if(!c.materialAnimationMarked) markMaterialAnimation(c); if(c.camera) resetCameraAnim(c.camera); for(const l of c.lights||[]) resetLightAnim(l); for(const n of c.nodes||[]){ for(const state of n.visibilityStates||[]) state.visible=state.baseVisible; n.animPos=n.basePosition.slice(); n.animEuler=n.baseEuler.slice(); n.animScale=n.baseScale.slice(); n.animQuat=n.baseQuaternion.slice(); n.matrix=n.baseMatrix; } for(const o of c.objects){ o.animPos=o.basePosition.slice(); o.animEuler=o.baseEuler.slice(); o.animScale=o.baseScale.slice(); o.animQuat=o.baseQuaternion.slice(); o.matrix=o.baseMatrix; if(o.materialAnimated){ o.materialStamp=(o.materialStamp||0)+1; resetRenderableAnim(o); } else for(const s of o.visibilityStates) s.visible=s.baseVisible; if(o.hasMorphTargets){ o.morphWeights=o.baseMorphWeights.slice(); o.morphDirty=true; } if(o.skin){ o.skinDirty=true; for(const b of o.skin.bones){ b.animPos=b.basePosition.slice(); b.animEuler=b.baseEuler.slice(); b.animScale=b.baseScale.slice(); b.animQuat=b.baseQuaternion.slice(); b.matrix=b.baseMatrix; } } } for(const clip of c.animations){ const ct=clipTime(clip,t), ends=cubicEndings(clip,t); if(ct===null) continue; for(const tr of clip.tracks){ const v=sampleTrack(tr,ct,ends); if(v==null) continue; if(tr.property==="morph_target_influences"){ for(const o of (morphById.get(tr.target)||[])){ const k=tr.morphComponents?(tr.morphComponents[o.id]||0):(tr.component||0); if(k>0) o.morphWeights[k-1]=v[0]; else if(tr.morphComponents) continue; else o.morphWeights=v.slice(); o.morphDirty=true; } continue; } const lights=lightById.get(tr.target)||[]; if(tr.property==="visible"){ for(const s of (visibilityById.get(tr.target)||[])) s.visible=v[0]>=.5; for(const l of lights) setLightAnim(l,tr.property,v,tr.component||0); continue; } for(const l of lights) setLightAnim(l,tr.property,v,tr.component||0); for(const cam of (cameraById.get(tr.target)||[])) setCameraAnim(cam,tr.property,v,tr.component||0); const objs=objectById.get(tr.target)||[]; for(const o of objs) if(!setRenderableAnim(o,tr.property,v,tr.component||0)) setNodeAnim(o,tr.property,v,tr.component||0); for(const n of (nodeById.get(tr.target)||[])) setNodeAnim(n,tr.property,v,tr.component||0); } } updateTransformGraph(c); updateBoneGraph(c); updateViewAndLightPoses(c); for(const o of c.objects){ updateMorph(o); updateSkin(o); } }
   const MAX_DIR=4, MAX_POINT=4, MAX_SPOT=4, MAX_HEMI=4, MAX_RECT=4;
   function padded3(items, limit, fn){ const out=new Array(limit*3).fill(0); for(let i=0;i<Math.min(limit,items.length);i++){ const v=fn(items[i]); out[i*3]=v[0]; out[i*3+1]=v[1]; out[i*3+2]=v[2]; } return out; }
   function padded2(items, limit, fn){ const out=new Array(limit*2).fill(0); for(let i=0;i<Math.min(limit,items.length);i++){ const v=fn(items[i]); out[i*2]=v[0]; out[i*2+1]=v[1]; } return out; }

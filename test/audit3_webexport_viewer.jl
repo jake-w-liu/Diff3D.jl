@@ -44,7 +44,10 @@ end
     # scale never finished.
     @test !occursin("if(r===0) return 0;", source)
     @test !occursin("Math.abs(y)<1e-9?d:y", source)
-    @test occursin("if(x<-d*reps)", source)
+    # Every wrap counts as a loop and a finished unclamped clip is disabled (null): the
+    # one-step AnimationAction._updateTime from a reset action (audit3b, round 2).
+    @test occursin("lc+=Math.abs(ld)", source)
+    @test occursin("if(!clamp) return null;", source)
     grid = vec([(loop, reps, clamp, ts, x) for loop in (:repeat, :pingpong, :once),
             reps in (-1, 0, 1, 2, 3), clamp in (false, true), ts in (1.0, -1.0, 0.5, -0.75),
             x in (0.0, 0.3, 1.7, 2.0, 2.5, 3.9, 4.0, 4.5, 5.5, 6.0, 6.2, 7.9, 9.0, 1e-17, 2.0 - 1e-16)])
@@ -57,8 +60,9 @@ end
     if values !== nothing
         expected = [Diff3D._animation_loop_time(x * ts, 2.0, loop, reps, clamp)
                     for (loop, reps, clamp, ts, x) in grid]
-        # Bitwise: both evaluate the same IEEE operations (Julia's mod is rem plus the divisor).
-        @test Float64.(values) == expected
+        # Bitwise: both evaluate the same IEEE operations; null and nothing mark a clip
+        # that the step disabled.
+        @test [v === nothing ? nothing : Float64(v) for v in values] == expected
         # three.js AnimationMixer.setTime oracle points (node, r186): zero repetitions play
         # the first loop; a repeat at exactly 2 durations samples 0; a reverse clamped repeat
         # with one repetition finishes at 0 once past -1 loop.
