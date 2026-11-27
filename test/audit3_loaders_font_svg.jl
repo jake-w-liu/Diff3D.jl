@@ -197,12 +197,17 @@ end
         """)
     first_element = [p for p in doc.paths if p.element_id == doc.paths[1].element_id]
     second_element = [p for p in doc.paths if p.element_id != doc.paths[1].element_id]
+    # These loops cross each other, where ShapePath.toShapes + Earcut emit
+    # overlapping triangles (oracle triangle-area sums 787.5 and 880.0, the
+    # previous expectations). The audit3b round fills crossing loops exactly
+    # under the fill rule (SVG 1.1 section 11.3) as disjoint pieces; the
+    # areas are the exact rational fill areas 216377841863/367853490 and
+    # 6376182959/8839675 from an independent Venn-cell inclusion-exclusion
+    # over the convex loops (audit3b_svg_loader.jl).
     first_geos = Diff3D._svg_fill_geometries(first_element)
-    @test length(first_geos) == 3
-    @test sum(_audit3_cap_area, first_geos) ≈ 787.5
+    @test sum(_audit3_cap_area, first_geos) ≈ 588.2174500043482
     second_geos = Diff3D._svg_fill_geometries(second_element)
-    @test length(second_geos) == 3
-    @test sum(_audit3_cap_area, second_geos) ≈ 880.0
+    @test sum(_audit3_cap_area, second_geos) ≈ 721.3141839490705
 end
 
 @testset "TextGeometry bevel follows ExtrudeGeometry's layer schedule" begin

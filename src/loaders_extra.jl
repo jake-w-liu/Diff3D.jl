@@ -6387,6 +6387,17 @@ end
 function _svg_clip_area_loop_pieces(loops::Vector{Vector{Vec2{Float64}}},
                                     fill_rule::Symbol,
                                     context::AbstractString)
+    # A self-intersecting loop can have zero net signed area (a bow tie) and
+    # still enclose a region, so only the point count is screened here.
+    clean = Vector{Vec2{Float64}}[]
+    for loop in loops
+        points = _font_loop_points(loop)
+        length(points) >= 3 && push!(clean, points)
+    end
+    if _svg_loops_touch(clean)
+        pieces = _svg_exact_fill_pieces(clean, fill_rule)
+        return isempty(pieces) ? nothing : pieces
+    end
     pieces = Vector{Vec2{Float64}}[]
     for group in _font_fill_groups(loops, fill_rule)
         if isempty(group.holes) && _svg_is_convex_clip_loop(group.outer)
@@ -8923,12 +8934,154 @@ function _svg_fill_geometries(paths::Vector{SVGPath})
               if length(path.points) >= 3 && (path.closed || path.style.fill !== nothing)]
     isempty(closed) && return BufferGeometry[]
     fill_rule = closed[1].style.fill_rule
+    # A self-intersecting loop can have zero net signed area (a bow tie) and
+    # still enclose a region, so only the point count is screened here.
+    loops = Vector{Vec2{Float64}}[]
+    for path in closed
+        loop = _font_loop_points(path.points)
+        length(loop) >= 3 && push!(loops, loop)
+    end
+    if _svg_loops_touch(loops)
+        geo = _svg_pieces_geometry(_svg_exact_fill_pieces(loops, fill_rule))
+        return geo.n_faces > 0 ? [geo] : BufferGeometry[]
+    end
     geos = BufferGeometry[]
-    for group in _font_fill_groups([path.points for path in closed], fill_rule)
+    for group in _font_fill_groups(loops, fill_rule)
         geo = _font_shape_geometry_with_holes(group.outer, group.holes)
         geo.n_faces > 0 && push!(geos, geo)
     end
     return geos
+end
+
+_svg_orient(a::Vec2{Float64}, b::Vec2{Float64}, c::Vec2{Float64}) =
+    (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)
+
+# Whether the closed segments ab and cd meet. Orientations within a tolerance
+# relative to the segment lengths count as touching, so near-degenerate
+# contacts are reported (the caller then takes the exact, always-correct path).
+function _svg_segments_meet(a::Vec2{Float64}, b::Vec2{Float64},
+                            c::Vec2{Float64}, d::Vec2{Float64})
+    eps = 1e-9 * max(1.0, hypot(b.x - a.x, b.y - a.y) * hypot(d.x - c.x, d.y - c.y))
+    o1 = _svg_orient(a, b, c)
+    o2 = _svg_orient(a, b, d)
+    ((o1 > eps && o2 > eps) || (o1 < -eps && o2 < -eps)) && return false
+    o3 = _svg_orient(c, d, a)
+    o4 = _svg_orient(c, d, b)
+    ((o3 > eps && o4 > eps) || (o3 < -eps && o4 < -eps)) && return false
+    # Collinear (or nearly): the projections must overlap.
+    if abs(o1) <= eps && abs(o2) <= eps
+        return max(min(a.x, b.x), min(c.x, d.x)) <= min(max(a.x, b.x), max(c.x, d.x)) + 1e-9 &&
+               max(min(a.y, b.y), min(c.y, d.y)) <= min(max(a.y, b.y), max(c.y, d.y)) + 1e-9
+    end
+    return true
+end
+
+# Whether any two non-adjacent edges of `loops` cross or touch: a loop that
+# intersects itself or another loop, or meets it at a vertex. The containment
+# model of ShapePath.toShapes (`_font_fill_groups`) is exact only for loops
+# that do not meet. Edges are swept in x order.
+function _svg_loops_touch(loops::Vector{Vector{Vec2{Float64}}})
+    edges = NTuple{3,Int}[]  # (loop, edge index, loop length)
+    xmin = Float64[]
+    for (l, loop) in enumerate(loops), i in eachindex(loop)
+        a = loop[i]
+        b = loop[i == length(loop) ? 1 : i + 1]
+        push!(edges, (l, i, length(loop)))
+        push!(xmin, min(a.x, b.x))
+    end
+    order = sortperm(xmin)
+    endpoint(e, second) = (loop = loops[e[1]]; i = e[2];
+                           second ? loop[i == e[3] ? 1 : i + 1] : loop[i])
+    for (position, ei) in enumerate(order)
+        e = edges[ei]
+        a = endpoint(e, false)
+        b = endpoint(e, true)
+        xmax = max(a.x, b.x) + 1e-9
+        ylo = min(a.y, b.y) - 1e-9
+        yhi = max(a.y, b.y) + 1e-9
+        for next in (position + 1):length(order)
+            fi = order[next]
+            xmin[fi] > xmax && break
+            f = edges[fi]
+            if e[1] == f[1]
+                n = e[3]
+                (abs(e[2] - f[2]) == 1 || abs(e[2] - f[2]) == n - 1) && continue
+            end
+            c = endpoint(f, false)
+            d = endpoint(f, true)
+            (max(c.y, d.y) < ylo || min(c.y, d.y) > yhi) && continue
+            _svg_segments_meet(a, b, c, d) && return true
+        end
+    end
+    return false
+end
+
+# Exact fill region of `loops` under `fill_rule` as disjoint convex pieces:
+# the plane is cut into vertical slabs at every vertex and edge intersection,
+# where edges cannot cross, and each run of filled winding numbers between
+# consecutive edge crossings of a slab is one trapezoid (SVG 1.1 section
+# 11.3 fill-rule semantics for self-intersecting and overlapping subpaths).
+function _svg_exact_fill_pieces(loops::Vector{Vector{Vec2{Float64}}},
+                                fill_rule::Symbol)
+    fill_rule === :nonzero || fill_rule === :evenodd ||
+        error("unsupported fill rule $(fill_rule)")
+    xs = _svg_boolean_x_breaks(loops)
+    edges = _svg_loop_edges(loops)
+    pieces = Vector{Vec2{Float64}}[]
+    crossings = NamedTuple{(:y0, :y1, :ym, :dir),Tuple{Float64,Float64,Float64,Int}}[]
+    for i in 1:(length(xs) - 1)
+        x0 = xs[i]
+        x1 = xs[i + 1]
+        x1 - x0 > 1e-9 || continue
+        xm = _stable_midpoint(x0, x1)
+        empty!(crossings)
+        for (a, b) in edges
+            ym = _svg_edge_y_at_x(a, b, xm; strict=true)
+            ym === nothing && continue
+            y0 = _svg_edge_y_at_x(a, b, x0; strict=false)
+            y1 = _svg_edge_y_at_x(a, b, x1; strict=false)
+            (y0 === nothing || y1 === nothing) && continue
+            push!(crossings, (y0=y0, y1=y1, ym=ym, dir=b.x > a.x ? 1 : -1))
+        end
+        sort!(crossings, by=c -> c.ym)
+        winding = 0
+        run_start = 0
+        for j in eachindex(crossings)
+            winding += crossings[j].dir
+            inside = _font_fill_inside(winding, fill_rule)
+            if inside && run_start == 0
+                run_start = j
+            elseif !inside && run_start != 0
+                lower = crossings[run_start]
+                upper = crossings[j]
+                points = _font_loop_points([Vec2(x0, lower.y0), Vec2(x1, lower.y1),
+                                            Vec2(x1, upper.y1), Vec2(x0, upper.y0)])
+                length(points) >= 3 && abs(_font_polygon_area(points)) > 1e-12 &&
+                    push!(pieces, _font_orient_loop(points, true))
+                run_start = 0
+            end
+        end
+    end
+    return pieces
+end
+
+# Fan-triangulated geometry of convex counter-clockwise pieces.
+function _svg_pieces_geometry(pieces::Vector{Vector{Vec2{Float64}}})
+    positions = Float64[]
+    normals = Float64[]
+    uvs = Float64[]
+    indices = Int[]
+    for piece in pieces
+        first_index = length(positions) ÷ 3 + 1
+        for p in piece
+            _font_push_geo_vertex!(positions, normals, uvs, p, 0.0, Vec3(0.0, 0.0, 1.0))
+        end
+        for k in 2:(length(piece) - 1)
+            push!(indices, first_index, first_index + k - 1, first_index + k)
+        end
+    end
+    return BufferGeometry(positions, normals, uvs, indices, length(positions) ÷ 3,
+                          length(indices) ÷ 3)
 end
 
 function _svg_same_fill_mesh_style(a::SVGStyle, b::SVGStyle)

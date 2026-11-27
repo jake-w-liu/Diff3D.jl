@@ -400,3 +400,53 @@ end
     @test length(only(Diff3D._svg_path_points(d, 4)).points) == 1001
     @test _audit3b_path_parse_overhead(d) < 120_000
 end
+
+@testset "SVG fills of crossing loops follow the fill rule exactly" begin
+    # SVG 1.1 section 11.3: a point is filled by the winding number of all
+    # subpaths around it (nonzero) or its parity (evenodd), however they
+    # cross. ShapePath.toShapes + Earcut (three.js r186) assume nested,
+    # non-crossing loops: on 300 random overlapping rectangle/triangle paths
+    # its triangles disagreed with the fill rule in 112 (and overlapped in
+    # 129); Diff3D's toShapes port disagreed in the same 112. Expected areas
+    # are exact rationals from an independent Venn-cell inclusion-exclusion
+    # over the convex loops.
+    doc = _audit3b_svg("""
+        <svg width="100" height="100">
+          <path fill-rule="nonzero" d="M26 1 L36 37 L18 17 Z M10 17 L29 17 L29 38 L10 38 Z M24 15 L33 38 L43 27 Z"/>
+          <path fill-rule="evenodd" d="M49 25 L20 38 L21 0 Z M36 36 L11 47 L5 34 Z M33 22 L61 22 L61 27 L33 27 Z"/>
+          <path fill-rule="nonzero" d="M0 60 L20 60 L20 80 L0 80 Z M10 70 L30 70 L30 90 L10 90 Z"/>
+          <path fill-rule="evenodd" d="M50 60 L70 60 L70 80 L50 80 Z M60 70 L80 70 L80 90 L60 90 Z"/>
+          <path fill-rule="nonzero" d="M0 0 L20 0 L20 20 L0 20 Z M10 10 L10 30 L30 30 L30 10 Z" transform="translate(0 92)"/>
+          <path fill-rule="nonzero" d="M80 0 L90 10 L80 10 L90 0 Z"/>
+        </svg>""")
+    meshes = svg_meshes(doc)
+    @test length(meshes) == 6
+    # 216377841863/367853490 and 6376182959/8839675.
+    @test _audit3b_area(meshes[1].geometry) ≈ 588.2174500043482
+    @test _audit3b_area(meshes[2].geometry) ≈ 721.3141839490705
+    # Two 20x20 squares with a 10x10 overlap. Same winding, nonzero: the
+    # overlap (winding 2) is filled once, 800 - 100.
+    @test _audit3b_area(meshes[3].geometry) ≈ 700.0
+    @test _audit3b_covers(meshes[3].geometry, (15.0, 75.0))
+    # evenodd leaves the overlap empty: 800 - 2 * 100.
+    @test _audit3b_area(meshes[4].geometry) ≈ 600.0
+    @test !_audit3b_covers(meshes[4].geometry, (65.0, 75.0))
+    # Opposite windings cancel under nonzero too: 800 - 2 * 100.
+    @test _audit3b_area(meshes[5].geometry) ≈ 600.0
+    @test !_audit3b_covers(meshes[5].geometry, (15.0, 107.0))
+    # Self-intersecting bow tie (zero net signed area): two triangles of 25.
+    @test _audit3b_area(meshes[6].geometry) ≈ 50.0
+    # Clip content goes through the same exact fill.
+    clipped = _audit3b_svg("""
+        <svg width="100" height="100">
+          <clipPath id="c"><path d="M0 0 L20 0 L20 20 L0 20 Z M10 10 L30 10 L30 30 L10 30 Z"/></clipPath>
+          <rect width="40" height="40" clip-path="url(#c)"/>
+        </svg>""")
+    @test _audit3b_area(svg_geometry(clipped)) ≈ 700.0
+    # Loops that only nest keep the ShapePath.toShapes triangulation: a
+    # square with a hole has the oracle area 400 - 100.
+    nested = _audit3b_svg("""<svg width="100" height="100">
+        <path fill-rule="evenodd" d="M0 0 H20 V20 H0 Z M5 5 H15 V15 H5 Z"/></svg>""")
+    @test !Diff3D._svg_loops_touch([p.points for p in nested.paths])
+    @test _audit3b_area(svg_geometry(nested)) ≈ 300.0
+end
