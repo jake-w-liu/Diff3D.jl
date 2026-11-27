@@ -4357,29 +4357,38 @@ struct _SVGAttributeSelector
     value::String
 end
 
+# Specificities are (ids, classes/attributes/pseudo-classes, types) and compare
+# lexicographically (Selectors Level 4 section 17).
+const _SVGSpecificity = NTuple{3,Int}
+const _SVG_PSEUDO_CLASS_SPECIFICITY = (0, 1, 0)
+
 struct _SVGPseudoSelector
     name::Symbol
     a::Int
     b::Int
     argument::String
-    specificity::Int
+    specificity::_SVGSpecificity
 end
 
 struct _SVGSimpleSelector
     tag::Union{Nothing,String}
-    id::Union{Nothing,String}
+    # Every id selector of the compound (`#a#a` is valid and needs id `a`).
+    ids::Vector{String}
     classes::Vector{String}
     attributes::Vector{_SVGAttributeSelector}
     pseudos::Vector{_SVGPseudoSelector}
-    specificity::Int
+    specificity::_SVGSpecificity
 end
 
+# One selector of a style rule with the declarations of one importance: a rule
+# with both normal and `!important` declarations becomes two of these.
 struct _SVGStyleRule
     chain::Vector{_SVGSimpleSelector}
     combinators::Vector{Symbol}
     declarations::Dict{String,String}
-    specificity::Int
+    specificity::_SVGSpecificity
     order::Int
+    important::Bool
 end
 
 """One parsed SVG primitive or path subpath."""
@@ -4543,14 +4552,27 @@ function _svg_attrs(raw::AbstractString)
     return attrs
 end
 
-function _svg_style_declarations(raw::AbstractString)
-    attrs = Dict{String,String}()
+# Declarations of a style attribute or rule block, split by importance
+# (CSS Cascade 4 section 6.4: `!important` follows the value, optionally
+# separated by whitespace). Later declarations of a property replace earlier
+# ones of the same importance; an important one is never replaced by a normal one.
+function _svg_style_declaration_sets(raw::AbstractString)
+    normal = Dict{String,String}()
+    important = Dict{String,String}()
     for decl in split(raw, ';')
         parts = split(decl, ':'; limit=2)
         length(parts) == 2 || continue
-        attrs[lowercase(strip(parts[1]))] = strip(parts[2])
+        key = lowercase(strip(parts[1]))
+        value = strip(parts[2])
+        m = match(r"^(.*?)\s*!\s*important$"is, value)
+        if m === nothing
+            normal[key] = value
+        else
+            important[key] = strip(m.captures[1])
+            delete!(normal, key)
+        end
     end
-    return attrs
+    return normal, important
 end
 
 function _svg_drop_prefix_bytes(s::String, n::Integer)
@@ -4773,15 +4795,18 @@ function _svg_function_argument(rest::String)
     return nothing
 end
 
+_svg_chain_specificity(chain::Vector{_SVGSimpleSelector}) =
+    reduce(.+, (sel.specificity for sel in chain); init=(0, 0, 0))
+
 function _svg_selector_list_specificity(raw::AbstractString)
     selectors = _svg_split_selector_list(raw)
     selectors === nothing && return nothing
-    specificity = 0
+    specificity = (0, 0, 0)
     for selector in selectors
         parsed = _svg_selector_chain(selector)
         parsed === nothing && return nothing
         chain, _ = parsed
-        specificity = max(specificity, sum(sel.specificity for sel in chain))
+        specificity = max(specificity, _svg_chain_specificity(chain))
     end
     return specificity
 end
@@ -4825,29 +4850,29 @@ function _svg_nth_formula(raw::AbstractString)
     return (a, b)
 end
 
+const _SVG_STRUCTURAL_PSEUDO_CLASSES = Dict(
+    "root" => :root, "first-child" => :first_child, "last-child" => :last_child,
+    "only-child" => :only_child, "first-of-type" => :first_of_type,
+    "last-of-type" => :last_of_type, "only-of-type" => :only_of_type)
+
 function _svg_pseudo_selector(rest::String)
     m = match(r"^:([A-Za-z-]+)", rest)
     m === nothing && return nothing
     name = lowercase(m.captures[1])
     after = _svg_drop_prefix_bytes(rest, ncodeunits(m.match))
-    if name == "root"
+    structural = get(_SVG_STRUCTURAL_PSEUDO_CLASSES, name, nothing)
+    if structural !== nothing
         startswith(after, "(") && return nothing
-        return _SVGPseudoSelector(:root, 0, 0, "", 10), after
-    elseif name == "first-child"
-        startswith(after, "(") && return nothing
-        return _SVGPseudoSelector(:first_child, 0, 0, "", 10), after
-    elseif name == "first-of-type"
-        startswith(after, "(") && return nothing
-        return _SVGPseudoSelector(:first_of_type, 0, 0, "", 10), after
-    elseif name == "nth-child" || name == "nth-of-type"
+        return _SVGPseudoSelector(structural, 0, 0, "", _SVG_PSEUDO_CLASS_SPECIFICITY), after
+    elseif name in ("nth-child", "nth-of-type", "nth-last-child", "nth-last-of-type")
         parsed_arg = _svg_function_argument(after)
         parsed_arg === nothing && return nothing
         content, remainder = parsed_arg
         formula = _svg_nth_formula(content)
         formula === nothing && return nothing
-        symbol = name == "nth-child" ? :nth_child : :nth_of_type
+        symbol = Symbol(replace(name, "-" => "_"))
         a, b = formula
-        return _SVGPseudoSelector(symbol, a, b, "", 10), remainder
+        return _SVGPseudoSelector(symbol, a, b, "", _SVG_PSEUDO_CLASS_SPECIFICITY), remainder
     elseif name == "is" || name == "not" || name == "where"
         parsed_arg = _svg_function_argument(after)
         parsed_arg === nothing && return nothing
@@ -4856,10 +4881,10 @@ function _svg_pseudo_selector(rest::String)
         specificity === nothing && return nothing
         symbol = name == "is" ? :is : (name == "not" ? :not : :where)
         return _SVGPseudoSelector(symbol, 0, 0, String(argument),
-                                  symbol === :where ? 0 : specificity), remainder
+                                  symbol === :where ? (0, 0, 0) : specificity), remainder
     elseif name in _SVG_STATEFUL_PSEUDO_CLASSES
         startswith(after, "(") && return nothing
-        return _SVGPseudoSelector(:stateful, 0, 0, name, 10), after
+        return _SVGPseudoSelector(:stateful, 0, 0, name, _SVG_PSEUDO_CLASS_SPECIFICITY), after
     end
     return nothing
 end
@@ -4871,7 +4896,7 @@ function _svg_simple_selector(selector::AbstractString)
 
     rest = raw
     tag = nothing
-    id = nothing
+    ids = String[]
     classes = String[]
     attributes = _SVGAttributeSelector[]
     pseudos = _SVGPseudoSelector[]
@@ -4906,8 +4931,7 @@ function _svg_simple_selector(selector::AbstractString)
             m === nothing && return nothing
             name = m.match[2:end]
             if prefix == '#'
-                id === nothing || return nothing
-                id = name
+                push!(ids, name)
             else
                 push!(classes, name)
             end
@@ -4915,11 +4939,11 @@ function _svg_simple_selector(selector::AbstractString)
         end
     end
 
-    specificity = (id === nothing ? 0 : 100) + 10 * length(classes) +
-                  10 * length(attributes) +
-                  sum((p.specificity for p in pseudos); init=0) +
-                  (tag === nothing ? 0 : 1)
-    return _SVGSimpleSelector(tag, id, classes, attributes, pseudos, specificity)
+    specificity = reduce(.+, (p.specificity for p in pseudos);
+                         init=(length(ids),
+                               length(classes) + length(attributes),
+                               tag === nothing ? 0 : 1))
+    return _SVGSimpleSelector(tag, ids, classes, attributes, pseudos, specificity)
 end
 
 function _svg_selector_chain(selector::AbstractString)
@@ -4948,20 +4972,30 @@ function _svg_css_rules(raw::AbstractString)
                       "]]>" => "")
         css = replace(css, r"(?s)/\*.*?\*/" => "")
         for block in eachmatch(r"(?s)([^{}]+)\{([^{}]*)\}", css)
-            declarations = Dict(k => v for (k, v) in
-                                _svg_style_declarations(block.captures[2])
-                                if k in _SVG_STYLE_KEYS)
-            isempty(declarations) && continue
-            selectors = _svg_split_selector_list(block.captures[1])
-            selectors === nothing && continue
+            normal, important = _svg_style_declaration_sets(block.captures[2])
+            filter!(kv -> kv.first in _SVG_STYLE_KEYS, normal)
+            filter!(kv -> kv.first in _SVG_STYLE_KEYS, important)
+            isempty(normal) && isempty(important) && continue
+            selector_text = strip(block.captures[1])
+            selectors = _svg_split_selector_list(selector_text)
+            selectors === nothing &&
+                error("SVG <style> selector list $(repr(String(selector_text))) is not supported")
             for selector in selectors
+                # A pseudo-element (`::before`, ...) never matches an SVG
+                # shape or container, so its rule cannot apply.
+                occursin("::", selector) && continue
                 parsed = _svg_selector_chain(selector)
-                parsed === nothing && continue
+                parsed === nothing &&
+                    error("SVG <style> selector $(repr(selector)) is not supported")
                 chain, combinators = parsed
-                specificity = sum(sel.specificity for sel in chain)
+                specificity = _svg_chain_specificity(chain)
                 order += 1
-                push!(rules, _SVGStyleRule(chain, combinators, declarations,
-                                           specificity, order))
+                isempty(normal) ||
+                    push!(rules, _SVGStyleRule(chain, combinators, normal,
+                                               specificity, order, false))
+                isempty(important) ||
+                    push!(rules, _SVGStyleRule(chain, combinators, important,
+                                               specificity, order, true))
             end
         end
     end
@@ -4971,7 +5005,10 @@ end
 function _svg_simple_selector_matches(selector::_SVGSimpleSelector, tag::String,
                                       attrs::AbstractDict)
     selector.tag !== nothing && selector.tag != lowercase(tag) && return false
-    selector.id !== nothing && get(attrs, "id", "") != selector.id && return false
+    if !isempty(selector.ids)
+        element_id = get(attrs, "id", "")
+        all(==(element_id), selector.ids) || return false
+    end
     if !isempty(selector.classes)
         classes = Set(split(get(attrs, "class", "")))
         all(cls -> cls in classes, selector.classes) || return false
@@ -5016,6 +5053,13 @@ end
 # `css` caches the declarations the document's style rules give this element:
 # matching depends only on the fixed context, and the cascade asks for it once
 # per property group (style, display, clip-path, mask, ...).
+# `counts` is shared by all children of one parent; once the document is
+# scanned it holds their totals, which `:last-child` and friends compare with.
+mutable struct _SVGSiblingCounts
+    count::Int
+    type_counts::Dict{String,Int}
+end
+
 mutable struct _SVGElementContext
     tag::String
     attrs::Dict{String,String}
@@ -5023,15 +5067,16 @@ mutable struct _SVGElementContext
     previous_sibling::Union{Nothing,_SVGElementContext}
     child_index::Int
     type_index::Int
-    css::Union{Nothing,Dict{String,String}}
+    counts::_SVGSiblingCounts
+    # Matching (normal, important) declarations; see `_svg_css_attrs`.
+    css::Union{Nothing,NTuple{2,Dict{String,String}}}
 end
 
 mutable struct _SVGSiblingState
     last::Union{Nothing,_SVGElementContext}
-    count::Int
-    type_counts::Dict{String,Int}
+    counts::_SVGSiblingCounts
 end
-_SVGSiblingState() = _SVGSiblingState(nothing,0,Dict{String,Int}())
+_SVGSiblingState() = _SVGSiblingState(nothing, _SVGSiblingCounts(0, Dict{String,Int}()))
 
 const _SVGAncestorStack = Vector{_SVGElementContext}
 const _SVGSiblingStack = Vector{_SVGSiblingState}
@@ -5040,15 +5085,16 @@ function _svg_element_context(tag::String, attrs::AbstractDict,
                               ancestors::_SVGAncestorStack,
                               siblings::_SVGSiblingState)
     parent = isempty(ancestors) ? nothing : ancestors[end]
+    counts = siblings.counts
     return _SVGElementContext(tag,Dict{String,String}(attrs),parent,siblings.last,
-                              siblings.count+1,get(siblings.type_counts,tag,0)+1,
-                              nothing)
+                              counts.count+1,get(counts.type_counts,tag,0)+1,
+                              counts,nothing)
 end
 
 function _svg_record_sibling!(siblings::_SVGSiblingState, context::_SVGElementContext)
     siblings.last = context
-    siblings.count = context.child_index
-    siblings.type_counts[context.tag] = context.type_index
+    siblings.counts.count = context.child_index
+    siblings.counts.type_counts[context.tag] = context.type_index
     return nothing
 end
 
@@ -5076,7 +5122,8 @@ function _svg_selector_list_matches(raw::AbstractString,
         parsed = _svg_selector_chain(selector)
         parsed === nothing && return false
         chain, combinators = parsed
-        rule = _SVGStyleRule(chain, combinators, Dict{String,String}(), 0, 0)
+        rule = _SVGStyleRule(chain, combinators, Dict{String,String}(), (0, 0, 0), 0,
+                             false)
         _svg_rule_matches(rule, context) && return true
     end
     return false
@@ -5090,12 +5137,25 @@ function _svg_pseudo_selector_matches(pseudo::_SVGPseudoSelector,
         return context.parent === nothing
     elseif pseudo.name === :first_child
         return child_index == 1
+    elseif pseudo.name === :last_child
+        return child_index == context.counts.count
+    elseif pseudo.name === :only_child
+        return context.counts.count == 1
     elseif pseudo.name === :nth_child
         return _svg_nth_matches(child_index, pseudo.a, pseudo.b)
+    elseif pseudo.name === :nth_last_child
+        return _svg_nth_matches(context.counts.count - child_index + 1, pseudo.a, pseudo.b)
     elseif pseudo.name === :first_of_type
         return type_index == 1
+    elseif pseudo.name === :last_of_type
+        return type_index == context.counts.type_counts[context.tag]
+    elseif pseudo.name === :only_of_type
+        return context.counts.type_counts[context.tag] == 1
     elseif pseudo.name === :nth_of_type
         return _svg_nth_matches(type_index, pseudo.a, pseudo.b)
+    elseif pseudo.name === :nth_last_of_type
+        return _svg_nth_matches(context.counts.type_counts[context.tag] - type_index + 1,
+                                pseudo.a, pseudo.b)
     elseif pseudo.name === :is || pseudo.name === :where
         return _svg_selector_list_matches(pseudo.argument, context)
     elseif pseudo.name === :not
@@ -5150,15 +5210,20 @@ function _svg_rule_matches(rule::_SVGStyleRule, context::_SVGElementContext)
     return _svg_rule_matches_from(rule,context,length(rule.chain),failed)
 end
 
-# Declarations from `rules` that apply to the element, in cascade order. With
-# a document `context` the result is cached on it (every call for a document
-# passes that document's rules); callers must not mutate it.
+# (normal, important) declarations from `rules` that apply to the element, each
+# resolved by specificity and then source order. With a document `context` the
+# result is cached on it (every call for a document passes that document's
+# rules); callers must not mutate it.
 function _svg_css_attrs(tag::String, attrs::AbstractDict,
                         rules::Vector{_SVGStyleRule},
                         context::Union{Nothing,_SVGElementContext}=nothing)
-    context === nothing &&
-        return _svg_css_matches(rules, _svg_element_context(tag, attrs, _SVGAncestorStack(),
-                                                            _SVGSiblingState()))
+    if context === nothing
+        # A detached element: the only child of no parent.
+        siblings = _SVGSiblingState()
+        detached = _svg_element_context(tag, attrs, _SVGAncestorStack(), siblings)
+        _svg_record_sibling!(siblings, detached)
+        return _svg_css_matches(rules, detached)
+    end
     cached = context.css
     cached === nothing || return cached
     out = _svg_css_matches(rules, context)
@@ -5167,16 +5232,18 @@ function _svg_css_attrs(tag::String, attrs::AbstractDict,
 end
 
 function _svg_css_matches(rules::Vector{_SVGStyleRule}, match_context::_SVGElementContext)
-    out = Dict{String,String}()
-    isempty(rules) && return out
+    normal = Dict{String,String}()
+    important = Dict{String,String}()
+    isempty(rules) && return normal, important
     for rule in sort([rule for rule in rules
                       if _svg_rule_matches(rule, match_context)];
                      by=rule -> (rule.specificity, rule.order))
+        out = rule.important ? important : normal
         for (key, value) in rule.declarations
             out[key] = value
         end
     end
-    return out
+    return normal, important
 end
 
 function _svg_numbers(raw::AbstractString)
@@ -5364,15 +5431,21 @@ function _svg_cascaded_style_attrs(attrs::AbstractDict,
                                    tag::String,
                                    context::Union{Nothing,_SVGElementContext},
                                    keys)
+    # CSS Cascade 4 section 6.4 within the author origin, lowest first:
+    # presentation attributes (SVG 2 section 6.6), normal stylesheet
+    # declarations, the normal style attribute, important stylesheet
+    # declarations, the important style attribute.
     local_attrs = Dict{String,String}()
     for key in keys
         haskey(attrs, key) && (local_attrs[key] = attrs[key])
     end
-    for (key, value) in _svg_css_attrs(tag, attrs, css_rules, context)
-        key in keys && (local_attrs[key] = value)
-    end
-    if haskey(attrs, "style")
-        for (key, value) in _svg_style_declarations(attrs["style"])
+    css_normal, css_important = _svg_css_attrs(tag, attrs, css_rules, context)
+    inline_normal, inline_important = haskey(attrs, "style") ?
+                                      _svg_style_declaration_sets(attrs["style"]) :
+                                      (nothing, nothing)
+    for layer in (css_normal, inline_normal, css_important, inline_important)
+        layer === nothing && continue
+        for (key, value) in layer
             key in keys && (local_attrs[key] = value)
         end
     end
@@ -8422,53 +8495,74 @@ mutable struct _SVGParseState
     active_definitions::Vector{Int}
 end
 
+const _SVG_RENDERED_TAGS = Set(["svg", "g", "defs", "clippath", "mask", "symbol",
+                                "path", "rect", "line", "circle", "ellipse",
+                                "polygon", "polyline", "use"])
+
+# Comments are not markup: tags inside them are neither rendered nor selector
+# siblings (XML 1.0 section 2.5).
+_svg_strip_comments(raw::AbstractString) = replace(String(raw), r"(?s)<!--.*?-->" => "")
+
+# The element tags the parser renders, with the selector context of each
+# opening tag. Every element of the document (including `style`, `title`,
+# `desc`, `text`, `a` and other elements that are not rendered here) is a
+# node of the selector tree, so structural pseudo-classes, sibling and
+# child/descendant combinators see the document's real element tree
+# (Selectors Level 4 sections 13-15).
 function _svg_tags(raw::AbstractString)
     tags = _SVGTag[]
-    for m in eachmatch(r"(?is)<\s*(/)?\s*(svg|g|defs|clipPath|mask|symbol|path|rect|line|circle|ellipse|polygon|polyline|use)\b([^>]*)>",
-                       raw)
-        push!(tags, _SVGTag(m.captures[1] !== nothing, lowercase(m.captures[2]),
-                            _svg_attrs(m.captures[3]),
-                            occursin(r"/\s*>$", m.match)))
+    contexts = Union{Nothing,_SVGElementContext}[]
+    ancestors = _SVGAncestorStack()
+    siblings = _SVGSiblingStack([_SVGSiblingState()])
+    for m in eachmatch(r"<\s*(/)?\s*([A-Za-z_][-A-Za-z0-9_:.]*)([^>]*)>", raw)
+        closing = m.captures[1] !== nothing
+        name = lowercase(m.captures[2])
+        self_closing = occursin(r"/\s*>$", m.match)
+        attrs = _svg_attrs(m.captures[3])
+        context = nothing
+        if closing
+            !isempty(ancestors) && pop!(ancestors)
+            length(siblings) > 1 && pop!(siblings)
+        else
+            context = _svg_element_context(name, attrs, ancestors, siblings[end])
+            _svg_record_sibling!(siblings[end], context)
+            if !self_closing
+                push!(ancestors, context)
+                push!(siblings, _SVGSiblingState())
+            end
+        end
+        name in _SVG_RENDERED_TAGS || continue
+        push!(tags, _SVGTag(closing, name, attrs, self_closing))
+        push!(contexts, context)
     end
-    return tags
+    return tags, contexts
 end
 
-# Selector contexts and element extents depend only on document structure, so
-# they are resolved once; `use` instantiation reuses them, matching CSS
-# selectors against the referenced element's original position in the tree.
+# Element extents depend only on document structure, so they are resolved
+# once; `use` instantiation reuses them (and the selector contexts from
+# `_svg_tags`), matching CSS selectors against the referenced element's
+# original position in the tree.
 function _svg_tag_structure(tags::Vector{_SVGTag})
-    contexts = Vector{Union{Nothing,_SVGElementContext}}(nothing, length(tags))
     closers = collect(eachindex(tags))
     parents = zeros(Int, length(tags))
     ids = Dict{String,Int}()
-    ancestors = _SVGAncestorStack()
-    siblings = _SVGSiblingStack([_SVGSiblingState()])
     open_containers = Int[]
     for (k, tag) in enumerate(tags)
         container = _svg_is_container_tag(tag.name)
         if tag.closing
             container || continue
             !isempty(open_containers) && (closers[pop!(open_containers)] = k)
-            !isempty(ancestors) && pop!(ancestors)
-            length(siblings) > 1 && pop!(siblings)
             continue
         end
-        context = _svg_element_context(tag.name, tag.attrs, ancestors, siblings[end])
-        _svg_record_sibling!(siblings[end], context)
-        contexts[k] = context
         isempty(open_containers) || (parents[k] = open_containers[end])
         haskey(tag.attrs, "id") && get!(ids, tag.attrs["id"], k)
-        if container && !tag.self_closing
-            push!(open_containers, k)
-            push!(ancestors, context)
-            push!(siblings, _SVGSiblingState())
-        end
+        container && !tag.self_closing && push!(open_containers, k)
     end
     # An unclosed container extends to the end of the document.
     for k in open_containers
         closers[k] = length(tags)
     end
-    return contexts, closers, parents, ids
+    return closers, parents, ids
 end
 
 # Presentation style that the element at tag index `k` inherits from its
@@ -8880,14 +8974,15 @@ function _svg_parse(raw::AbstractString; curve_segments::Integer=16,
                     circle_segments::Integer=32)
     segments = _svg_curve_segments(curve_segments)
     circle_n = _svg_circle_segments(circle_segments)
-    root = match(r"(?is)<\s*svg\b([^>]*)>", raw)
+    markup = _svg_strip_comments(raw)
+    root = match(r"(?is)<\s*svg\b([^>]*)>", markup)
     root === nothing && error("SVG document is missing <svg> root")
     root_attrs = _svg_attrs(root.captures[1])
     width, height = _svg_root_size(root_attrs)
     root_reference_bbox = _svg_root_reference_bbox(root_attrs, width, height)
-    css_rules = _svg_css_rules(raw)
-    tags = _svg_tags(raw)
-    contexts, closers, parents, ids = _svg_tag_structure(tags)
+    css_rules = _svg_css_rules(markup)
+    tags, contexts = _svg_tags(markup)
+    closers, parents, ids = _svg_tag_structure(tags)
     viewport = (root_reference_bbox[3] - root_reference_bbox[1],
                 root_reference_bbox[4] - root_reference_bbox[2])
     state = _SVGParseState(tags, contexts, closers, parents, ids, css_rules,

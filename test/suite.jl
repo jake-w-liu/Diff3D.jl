@@ -9960,7 +9960,10 @@ end
         </svg>
         """)
         pseudo_css_svg = load_svg(pseudo_css_path)
-        @test pseudo_css_svg.paths[1].style.fill == Color3(1.0, 0.0, 0.0)
+        # The <style> element is the root's first child, so the <g> is its
+        # second and `g:first-child` does not match (Selectors Level 4
+        # section 14.3; Chromium's computed fill for this document is black).
+        @test pseudo_css_svg.paths[1].style.fill == Color3(0.0, 0.0, 0.0)
         @test pseudo_css_svg.paths[1].style.stroke == Color3(0.0, 0.0, 1.0)
         @test pseudo_css_svg.paths[1].style.stroke_width == 3.0
         @test pseudo_css_svg.paths[2].style.fill_opacity == 0.5

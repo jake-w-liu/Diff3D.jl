@@ -450,3 +450,65 @@ end
     @test !Diff3D._svg_loops_touch([p.points for p in nested.paths])
     @test _audit3b_area(svg_geometry(nested)) ≈ 300.0
 end
+
+_audit3b_srgb(r, g, b) = Diff3D._svg_color("rgb($r,$g,$b)")
+_audit3b_fills(svg) = [p.style.fill for p in _audit3b_svg(svg).paths]
+
+@testset "SVG stylesheets cascade like a CSS engine" begin
+    # Expected fills are Chromium's getComputedStyle(fill) for these exact
+    # documents (headless shell, loaded as image/svg+xml). On 3000 random
+    # documents mixing compound/complex selectors, :is/:not/:where,
+    # structural pseudo-classes, !important, style attributes, presentation
+    # attributes and inheritance, the previous loader disagreed with
+    # Chromium in 293 and failed to load 211; this one agrees on all but the
+    # :empty documents, which it rejects. three.js r186 matches only `.class`
+    # and `#id` rule keys (SVGLoader.js:748-779 parseCSSStylesheet).
+    W = """xmlns="http://www.w3.org/2000/svg" width="100" height="20\""""
+    # Specificity is the tuple (ids, classes, types), not a weighted sum: one
+    # id beats eleven classes (Selectors Level 4 section 17).
+    @test _audit3b_fills("""<svg $W><style>#p { fill: rgb(255,0,0) }
+        .a.a.a.a.a.a.a.a.a.a.a { fill: rgb(0,0,255) }</style>
+        <rect id="p" class="a" width="5" height="5"/></svg>""") == [_audit3b_srgb(255, 0, 0)]
+    # !important outranks specificity and the normal style attribute, and an
+    # important style attribute outranks it (CSS Cascade 4 section 6.4).
+    @test _audit3b_fills("""<svg $W><style>rect { fill: rgb(0,128,0) !important }
+        #p { fill: rgb(255,0,0) }</style>
+        <rect id="p" width="5" height="5" style="fill: rgb(0,0,255)"/>
+        <rect x="10" width="5" height="5" style="fill: rgb(255,255,0) !important"/></svg>""") ==
+          [_audit3b_srgb(0, 128, 0), _audit3b_srgb(255, 255, 0)]
+    # <style> and <title> are elements of the tree: the rect after <style>
+    # is not :first-child, and sibling combinators see both.
+    @test _audit3b_fills("""<svg $W><style>rect:first-child { fill: rgb(255,0,0) }
+        style + rect { fill: rgb(0,0,255) } title ~ circle { fill: rgb(0,128,0) }</style>
+        <rect width="5" height="5"/><title>t</title><circle cx="12" cy="2" r="2"/></svg>""") ==
+          [_audit3b_srgb(0, 0, 255), _audit3b_srgb(0, 128, 0)]
+    # :last-child, :only-of-type, :nth-last-child() and :last-of-type
+    # (Selectors Level 4 sections 14.3-14.4).
+    @test _audit3b_fills("""<svg $W><style>rect:last-child { fill: rgb(255,0,0) }
+        circle:only-of-type { fill: rgb(0,0,255) } :nth-last-child(3) { fill: rgb(0,128,0) }
+        g rect:last-of-type { fill: rgb(9,9,9) }</style>
+        <rect width="5" height="5"/><circle cx="12" cy="2" r="2"/>
+        <rect x="20" width="5" height="5"/><g><rect x="30" width="5" height="5"/></g></svg>""") ==
+          [_audit3b_srgb(0, 0, 0), _audit3b_srgb(0, 0, 255), _audit3b_srgb(0, 0, 0),
+           _audit3b_srgb(9, 9, 9)]
+    # Elements the loader does not render (<a>) are still parents and
+    # siblings; a compound may repeat an id; comments are not markup (XML 1.0
+    # section 2.5), so the commented-out rect is not drawn.
+    @test _audit3b_fills("""<svg $W><style>a > rect { fill: rgb(255,0,0) }
+        a rect + rect { fill: rgb(0,0,255) } #q#q { fill: rgb(0,128,0) }</style>
+        <a href="#x"><rect width="5" height="5"/><rect x="10" width="5" height="5"/></a>
+        <!-- <rect x="40" width="5" height="5"/> -->
+        <rect id="q" x="20" width="5" height="5"/>
+        <rect id="q2" class="b" x="30" width="5" height="5"/></svg>""") ==
+          [_audit3b_srgb(255, 0, 0), _audit3b_srgb(0, 0, 255), _audit3b_srgb(0, 128, 0),
+           _audit3b_srgb(0, 0, 0)]
+    # Selectors the loader cannot evaluate are rejected instead of being
+    # silently dropped (which changed the rendering); pseudo-element rules
+    # never apply to shapes and are skipped.
+    @test_throws r"SVG <style> selector \"rect:empty\" is not supported" _audit3b_svg(
+        """<svg $W><style>rect:empty { fill: red }</style><rect width="5" height="5"/></svg>""")
+    @test_throws r"not supported" _audit3b_svg(
+        """<svg $W><style>g:has(rect) { fill: red }</style><rect width="5" height="5"/></svg>""")
+    @test _audit3b_fills("""<svg $W><style>rect::before { fill: rgb(255,0,0) }</style>
+        <rect width="5" height="5"/></svg>""") == [_audit3b_srgb(0, 0, 0)]
+end
