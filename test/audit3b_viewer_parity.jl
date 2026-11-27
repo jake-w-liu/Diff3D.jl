@@ -61,3 +61,63 @@ end
         @test occursin("<title>a &amp; &lt;b&gt;</title>", read(path, String))
     end
 end
+
+# The viewer's multi-line `const name = {` ... `  };` block.
+function _audit3b_viewer_block(html::AbstractString, name::AbstractString)
+    lines = split(html, '\n')
+    first = findfirst(line -> startswith(line, "  const $name = {"), lines)
+    first === nothing && error("viewer block $name not found")
+    last = findnext(==("  };"), lines, first + 1)
+    return join(lines[first:last], "\n")
+end
+
+@testset "mirrored world matrices draw with clockwise front faces" begin
+    html = _audit3b_viewer_html()
+    # A recording WebGL stub: applySide's calls decide which faces survive culling and which
+    # side gl_FrontFacing reports, so they are compared with three.js state transitions.
+    prelude = """
+    const gl={CULL_FACE:2884,FRONT:1028,BACK:1029,CW:2304,CCW:2305,calls:[],
+      enable(c){this.calls.push(["enable",c]);}, disable(c){this.calls.push(["disable",c]);},
+      cullFace(f){this.calls.push(["cullFace",f]);}, frontFace(f){this.calls.push(["frontFace",f]);}};
+    const glCache={program:null,blend:false,cull:false,cullFace:gl.BACK,frontFace:gl.CCW,depthTest:true,depthMask:true,lineWidth:1};
+    const add=(a,b)=>[a[0]+b[0],a[1]+b[1],a[2]+b[2]], sub=(a,b)=>[a[0]-b[0],a[1]-b[1],a[2]-b[2]], dot=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+    const cross=(a,b)=>[a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+    const norm=a=>{ const l=Math.hypot(a[0],a[1],a[2])||1; return [a[0]/l,a[1]/l,a[2]/l]; };
+    """ * _audit3b_viewer_block(html, "M4")
+    names = filter(n -> occursin("  function $n(", html),
+                   ["setCapability", "objectMirrored", "setFrontFace", "applySide"])
+    mirror = "[-1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]"
+    ident = "[1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]"
+    body = """
+    function state(o){ gl.calls=[]; applySide(o); return {cull:glCache.cull, cullFace:glCache.cullFace, frontFace:glCache.frontFace}; }
+    const out={};
+    for(const side of ["front","back","double"]){
+      out["mirrored-"+side]=state({mode:"triangles",side:side,transformMatrix:$mirror,matrix:$mirror});
+      out["plain-"+side]=state({mode:"triangles",side:side,transformMatrix:$ident,matrix:$ident});
+    }
+    // A split transparent instance bakes a mirroring instance matrix into o.matrix; three.js
+    // tests the InstancedMesh's matrixWorld only.
+    out.instance=state({mode:"triangles",side:"front",transformMatrix:$ident,matrix:$mirror});
+    // A skinned mesh draws with o.matrix = identity and tests its own world matrix.
+    out.skinned=state({mode:"triangles",side:"front",transformMatrix:$mirror,matrix:$ident,skin:{}});
+    out.line=state({mode:"lines",side:"front",transformMatrix:$mirror,matrix:$mirror});
+    console.log(JSON.stringify(out));
+    """
+    r = _audit3b_node_json(html, names, body; prelude)
+    if r !== nothing
+        CW, CCW, FRONT, BACK = 2304, 2305, 1028, 1029
+        # WebGLState.js:754-763: DoubleSide disables culling; flipSided = (side == BackSide)
+        # xor frontFaceCW selects gl.CW. The viewer culls FRONT for BackSide instead of
+        # flipping, so the drawn faces and the !gl_FrontFacing normal flip match three.js.
+        for side in ("front", "back", "double")
+            @test r["mirrored-$side"]["frontFace"] == CW
+            @test r["plain-$side"]["frontFace"] == CCW
+            @test r["mirrored-$side"]["cull"] == (side != "double")
+            side != "double" && @test r["mirrored-$side"]["cullFace"] == (side == "back" ? FRONT : BACK)
+        end
+        @test r["instance"]["frontFace"] == CCW
+        @test r["skinned"]["frontFace"] == CW
+        @test r["line"]["cull"] == false
+    end
+    @test occursin("o.mirrored=M4.orientation3(m)<0", html)
+end

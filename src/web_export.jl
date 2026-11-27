@@ -5309,7 +5309,7 @@ function _web_write_webgl_html(io::IO, data_json::String, title::String;
   // setBlending, setFlipSided/setCullFace, depth test and mask, lineWidth all return when the
   // value is unchanged). resetGLState writes every cached state from known values and records
   // them, so a frame or view never trusts what the context held before it.
-  const glCache={program:null,blend:false,cull:false,cullFace:0,depthTest:true,depthMask:true,lineWidth:1};
+  const glCache={program:null,blend:false,cull:false,cullFace:0,frontFace:0,depthTest:true,depthMask:true,lineWidth:1};
   function useProgram(p){ if(glCache.program!==p){ gl.useProgram(p); glCache.program=p; } }
   // Texture bindings per unit and target, as WebGLState.bindTexture caches them (:1004-1036).
   const boundTextures=[]; let activeTextureUnit=-1;
@@ -5320,7 +5320,18 @@ function _web_write_webgl_html(io::IO, data_json::String, title::String;
   function setDepthTest(on){ setCapability(gl.DEPTH_TEST,"depthTest",on); }
   function setDepthMask(on){ if(glCache.depthMask!==on){ gl.depthMask(on); glCache.depthMask=on; } }
   function setLineWidth(w){ if(glCache.lineWidth!==w){ gl.lineWidth(w); glCache.lineWidth=w; } }
-  function applySide(o){ if(o.mode!=="triangles" || o.side==="double"){ setCapability(gl.CULL_FACE,"cull",false); return; } setCapability(gl.CULL_FACE,"cull",true); const face=o.side==="back"?gl.FRONT:gl.BACK; if(glCache.cullFace!==face){ gl.cullFace(face); glCache.cullFace=face; } }
+  // three.js draws a mesh whose matrixWorld has a negative affine determinant with clockwise
+  // front faces (WebGLRenderer.js:1200 frontFaceCW, WebGLState.js:754-763 setMaterial and
+  // setFlipSided), for every side, so culling and gl_FrontFacing (the double-sided normal flip)
+  // both follow the mirrored winding. It tests the object's world matrix only: an instance or
+  // a split transparent instance (whose o.matrix bakes its instance matrix) is not compensated,
+  // and a skinned mesh tests its own world matrix (transformMatrix), as Julia's
+  // _world_mirrors_faces does. The viewer keeps BackSide as a culled front face with the
+  // fragment shader's !gl_FrontFacing flip, which draws and shades the same faces as three.js's
+  // flipped front face with FLIP_SIDED normals.
+  function objectMirrored(o){ const m=o.transformMatrix||o.matrix; if(o.mirrorSource!==m){ o.mirrorSource=m; o.mirrored=M4.orientation3(m)<0; } return o.mirrored; }
+  function setFrontFace(face){ if(glCache.frontFace!==face){ gl.frontFace(face); glCache.frontFace=face; } }
+  function applySide(o){ if(o.mode!=="triangles"){ setCapability(gl.CULL_FACE,"cull",false); return; } setFrontFace(objectMirrored(o)?gl.CW:gl.CCW); if(o.side==="double"){ setCapability(gl.CULL_FACE,"cull",false); return; } setCapability(gl.CULL_FACE,"cull",true); const face=o.side==="back"?gl.FRONT:gl.BACK; if(glCache.cullFace!==face){ gl.cullFace(face); glCache.cullFace=face; } }
   // The fixed-function state a draw depends on is written from known values at the top of each
   // frame and around each view's shadow pass, instead of trusting whatever the context holds:
   // three.js writes all of it but depth range and sample coverage in WebGLState.reset
@@ -5340,7 +5351,7 @@ function _web_write_webgl_html(io::IO, data_json::String, title::String;
     gl.blendEquation(gl.FUNC_ADD); gl.blendColor(0,0,0,0); gl.blendFuncSeparate(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA,gl.ONE,gl.ONE_MINUS_SRC_ALPHA);
     gl.enable(gl.DEPTH_TEST); gl.disable(gl.BLEND);
     gl.viewport(0,0,canvas.width,canvas.height); gl.scissor(0,0,canvas.width,canvas.height);
-    glCache.program=null; glCache.blend=false; glCache.cull=false; glCache.cullFace=gl.BACK; glCache.depthTest=true; glCache.depthMask=true; glCache.lineWidth=1;
+    glCache.program=null; glCache.blend=false; glCache.cull=false; glCache.cullFace=gl.BACK; glCache.frontFace=gl.CCW; glCache.depthTest=true; glCache.depthMask=true; glCache.lineWidth=1;
     boundTextures.length=0; activeTextureUnit=-1; genericAttribs.length=0;
   }
   function webLineWidth(w){ const lo=Math.max(lineWidthRange[0]||1,0.000001), hi=Math.max(lineWidthRange[1]||lo,lo), x=Number.isFinite(w)?w:1; return Math.min(Math.max(x,lo),hi); }
