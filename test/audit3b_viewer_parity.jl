@@ -120,6 +120,13 @@ end
         @test r["line"]["cull"] == false
     end
     @test occursin("o.mirrored=M4.orientation3(m)<0", html)
+    # The vertex shader keeps tangent handedness by the orientation of every matrix that
+    # transforms the tangent; the clockwise front face already undoes a mirrored world matrix,
+    # so that part must not count twice. Without this, browser_rendering.jl's model_tangent
+    # (a normal-mapped plane scaled by (-2, 1, 0.5)) shaded with the opposite bitangent: its
+    # centre read dark where the baked reference and three.js r186 (72.7 of 255) are lit.
+    @test occursin("aTangent.w*linearOrientation(tangentTransform)*(uFrontFaceCW>0.5?-1.0:1.0)", html)
+    @test occursin("if(o.mode===\"triangles\") uniform1f(p,\"uFrontFaceCW\",objectMirrored(o)?1:0);", html)
 end
 
 const _AUDIT3B_VEC_PRELUDE = """
