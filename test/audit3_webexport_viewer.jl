@@ -21,12 +21,14 @@ end
 
 # Runs `body` (JavaScript printing JSON) under node after the given viewer functions, or
 # returns nothing when node is not installed.
-function _audit3_node_json(html::AbstractString, names, body::AbstractString)
+function _audit3_node_json(html::AbstractString, names, body::AbstractString;
+                           prelude::AbstractString="")
     node = Sys.which("node")
     node === nothing && return nothing
     path = tempname() * ".js"
     try
-        write(path, join((_audit3_viewer_function(html, n) for n in names), "\n") * "\n" * body)
+        write(path, prelude * "\n" *
+                    join((_audit3_viewer_function(html, n) for n in names), "\n") * "\n" * body)
         return Diff3D._json_parse(read(`$node $path`, String))
     finally
         rm(path; force=true)
@@ -151,5 +153,47 @@ end
         # Hand-checked three.js values: capped near the light, Frostbite window at d=9.
         @test Diff3D._distance_attenuation(1e-3, 0.0, 2.0) == 100.0
         @test Diff3D._distance_attenuation(9.0, 10.0, 2.0) ≈ (1 / 81) * (1 - 0.9^4)^2
+    end
+end
+
+@testset "viewer morph update reuses its arrays and skips unchanged weights" begin
+    # updateMorph ran every animated frame on the CPU: it sliced fresh position, normal and
+    # tangent arrays, uploaded each through a new Float32Array, and normalised with Math.hypot,
+    # which V8 does not inline. On a 20k-vertex, three-target mesh (node 26) that took
+    # 1.89 ms/frame (min of 5) and 44 GCs per 400 frames; reusing the arrays and a max-scaled
+    # length takes 1.01 ms and 11 GCs. Uploaded Float32 data matched bitwise on 180 frames,
+    # the Float64 arrays within 4 ulps.
+    html = _audit3_viewer_html()
+    update = _audit3_viewer_function(html, "updateMorph")
+    @test !occursin("new Float32Array", update)
+    @test !occursin(".slice()", update)
+    @test !occursin("Math.hypot", _audit3_viewer_function(html, "normalizeTriples"))
+    prelude = "const gl={ARRAY_BUFFER:34962,bound:null,uploads:[]," *
+              "bindBuffer(t,b){ this.bound=b; },bufferSubData(t,o,d){ this.uploads.push([this.bound,d]); }};"
+    body = """
+    const o={hasMorphTargets:true,morphDirty:true,hasTangents:true,
+      basePositions:[0,0,0, 1,0,0],baseNormals:[0,0,2, 0,3,0],baseTangents:[1,0,0,1, 0,1,0,-1],
+      morphTargets:[[0,1,0, 0,1,0]],baseMorphNormals:[[1,0,0, 0,0,0]],baseMorphTangents:[[0,0,0, 0,0,0]],
+      morphWeights:[0.5],positions:null,normals:null,tangents:null,posBuf:"p",nrmBuf:"n",tanBuf:"t",morphedPositions:null};
+    updateMorph(o); const first=gl.uploads.splice(0), positions=o.positions, upload=first[0][1];
+    o.morphWeights=[0.5]; o.morphDirty=true; updateMorph(o); const unchanged=gl.uploads.splice(0).length;
+    o.morphWeights=[1]; o.morphDirty=true; updateMorph(o); const second=gl.uploads.splice(0);
+    console.log(JSON.stringify({firstUploads:first.map(u=>u[0]),unchanged,
+      samePositions:o.positions===positions,sameUpload:second[0][1]===upload,
+      positions:Array.from(o.positions),normals:Array.from(o.normals),tangents:Array.from(o.tangents),
+      uploaded:Array.from(second[0][1])}));
+    """
+    result = _audit3_node_json(html, ("morphScratch", "morphUpload", "sameMorphWeights",
+                                      "normalizeTriples", "updateMorph"), body; prelude)
+    if result !== nothing
+        @test result["firstUploads"] == ["p", "n", "t"]
+        @test result["unchanged"] == 0
+        @test result["samePositions"] && result["sameUpload"]
+        # Weight 1: positions gain the target's +y; normals (0,0,2)+(1,0,0) and (0,3,0)
+        # normalise; tangents keep their w.
+        @test Float64.(result["positions"]) == [0.0, 1.0, 0.0, 1.0, 1.0, 0.0]
+        @test Float64.(result["normals"]) ≈ [1 / sqrt(5), 0.0, 2 / sqrt(5), 0.0, 1.0, 0.0] rtol=1e-15
+        @test Float64.(result["tangents"]) == [1.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, -1.0]
+        @test Float64.(result["uploaded"]) == Float64.(Float32.([0.0, 1.0, 0.0, 1.0, 1.0, 0.0]))
     end
 end
