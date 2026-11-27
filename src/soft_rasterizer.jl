@@ -75,6 +75,8 @@ struct _SoftScreenTriangle{T}
     s2::Vec3{T}
     s3::Vec3{T}
     color::Color3{T}
+    depth::T       # mean NDC depth of the three vertices
+    logit::T       # depth softmax logit -depth/γ (depth when 1/γ overflows)
     min_x::Int
     max_x::Int
     min_y::Int
@@ -274,18 +276,18 @@ function soft_render(vertices::AbstractVector{Vec3{Tv}},
         s3 = _soft_project_clip_to_screen(c3, T(W), T(H))
         n_screen_tris = _soft_store_screen_triangle!(
             screen_tris, n_screen_tris, max_screen_tris,
-            s1, s2, s3, cols[fi], σ, eps, W, H)
+            s1, s2, s3, cols[fi], σ, γ, eps, use_relative_depth, W, H)
         if n_clipped >= 4
             s4 = _soft_project_clip_to_screen(c4, T(W), T(H))
             n_screen_tris = _soft_store_screen_triangle!(
                 screen_tris, n_screen_tris, max_screen_tris,
-                s1, s3, s4, cols[fi], σ, eps, W, H)
+                s1, s3, s4, cols[fi], σ, γ, eps, use_relative_depth, W, H)
         end
         if n_clipped == 5
             s5 = _soft_project_clip_to_screen(c5, T(W), T(H))
             n_screen_tris = _soft_store_screen_triangle!(
                 screen_tris, n_screen_tris, max_screen_tris,
-                s1, s4, s5, cols[fi], σ, eps, W, H)
+                s1, s4, s5, cols[fi], σ, γ, eps, use_relative_depth, W, H)
         end
     end
     # Heap-backed scalar slots can retain an earlier differentiation graph.
@@ -293,123 +295,49 @@ function soft_render(vertices::AbstractVector{Vec3{Tv}},
         resize!(screen_tris, n_screen_tris)
     end
     n_screen_tris == 0 && return _soft_background_image(T, H, W, bg, workspace)
-    # Pixel-independent scalars are formed once, so heap-backed AD types do not
-    # record or allocate them per pixel.
-    background_logit = use_relative_depth ? one(T) : -one(T) / γ
-    zero_weight = zero(T)
-    zero_color = Color3(zero_weight, zero_weight, zero_weight)
+    return _soft_render_screen(T, screen_tris, n_screen_tris, W, H,
+                               σ, γ, bg, eps, use_relative_depth, workspace)
+end
 
-    if n_screen_tris <= 8
-        # Tiny face sets need no spatial index: scanning directly avoids the CSR
-        # tile buffers that dominate small inverse-rendering problems.
-        image = workspace === nothing ? Array{T}(undef, H, W, 3) :
-            _soft_image_buffer!(workspace, H, W)
-        for py in 1:H
-            for px in 1:W
-                cx = _soft_pixel_center(T, px)
-                cy = _soft_pixel_center(T, py)
+# --------------------------------------------------------------------------
+# Spatial acceleration: uniform tile grid.
+#
+# A face contributes to pixel (px, py) iff
+#   tri.min_x <= px <= tri.max_x && tri.min_y <= py <= tri.max_y.
+# Each valid face is binned into every tile its bbox overlaps, so the per-pixel
+# loop only visits the faces registered to that pixel's tile. A pixel in tile
+# (tx, ty) lies inside the tile's pixel span, so any face whose bbox covers
+# that pixel also overlaps the tile and is registered to it. The tile list is
+# thus a superset of the covering faces in ascending face order; the unchanged
+# per-pixel bbox test rejects the extras, so the retained faces and their order
+# equal those of an all-faces scan and the floating-point result is unchanged.
+# Bounds come from the integer bbox stored with each triangle, so binning adds
+# no differentiable path.
+# --------------------------------------------------------------------------
+const _SOFT_TILE = 16
+const _SOFT_DIRECT_SCAN_MAX = 8
 
-                # Preserve the legacy logit max when representable. Otherwise
-                # `m` is the minimum depth, seeded by the z=+1 background.
-                m = background_logit
-                any_face = false
-                for fi in 1:n_screen_tris
-                    tri = screen_tris[fi]
-                    tri.valid || continue
-                    !(tri.min_x <= px <= tri.max_x && tri.min_y <= py <= tri.max_y) && continue
-                    z_face = _mean3_scaled(
-                        tri.s1.z, tri.s2.z, tri.s3.z)
-                    if use_relative_depth
-                        z_face < m && (m = z_face)
-                    else
-                        e_f = -z_face / γ
-                        e_f > m && (m = e_f)
-                    end
-                    any_face = true
-                end
+@inline _soft_tile_of(p::Int) = (p - 1) ÷ _SOFT_TILE + 1
 
-                total_weight = zero_weight
-                average_color = zero_color
-                if any_face
-                    for fi in 1:n_screen_tris
-                        tri = screen_tris[fi]
-                        tri.valid || continue
-                        !(tri.min_x <= px <= tri.max_x && tri.min_y <= py <= tri.max_y) && continue
-
-                        d = _signed_distance_to_triangle_area(cx, cy,
-                            tri.s1.x, tri.s1.y, tri.s2.x, tri.s2.y, tri.s3.x, tri.s3.y,
-                            tri.area)
-                        coverage = sigmoid_approx(d / σ)
-                        z_face = _mean3_scaled(
-                            tri.s1.z, tri.s2.z, tri.s3.z)
-                        depth_weight = use_relative_depth ?
-                            _soft_relative_depth_weight(m, z_face, γ) :
-                            exp(-z_face / γ - m)
-
-                        w = coverage * depth_weight
-                        next_weight = total_weight + w
-                        average_color = iszero(_primal_value(total_weight)) ? tri.color :
-                            _stable_color_lerp(
-                                average_color, tri.color, w / next_weight)
-                        total_weight = next_weight
-                    end
-                end
-
-                w_bg = (use_relative_depth ?
-                    _soft_relative_depth_weight(m, one(T), γ) :
-                    exp(background_logit - m)) + eps
-                denom = total_weight + w_bg
-                color = iszero(_primal_value(total_weight)) ? bg :
-                    _stable_color_lerp(
-                        average_color, bg, w_bg / denom)
-                image[py, px, 1] = color.r
-                image[py, px, 2] = color.g
-                image[py, px, 3] = color.b
-            end
-        end
-        return image
-    end
-
-    # --------------------------------------------------------------------
-    # Spatial acceleration: uniform tile grid.
-    #
-    # The original per-pixel cost is O(pixels x faces) because every pixel
-    # scans all faces and rejects those whose margin-expanded bbox does not
-    # cover it. We bin each face into every tile its bbox overlaps, then the
-    # per-pixel loop only visits the faces registered to that pixel's tile.
-    #
-    # Numerical equivalence: a face contributes to pixel (px, py) iff
-    #   tri.min_x <= px <= tri.max_x && tri.min_y <= py <= tri.max_y.
-    # A pixel in tile (tx, ty) lies inside the tile's pixel span, so any face
-    # whose bbox covers that pixel also overlaps the tile and is therefore
-    # registered to it. The tile list is thus a SUPERSET of the covering
-    # faces; the unchanged inner bbox test rejects the extras. The retained
-    # faces, their order (ascending face index per tile), coverage, and depth
-    # weights are identical to the all-faces scan, so the floating-point
-    # result and the gradients that flow through it are unchanged. Tile bounds
-    # are taken from the Float64-precision (or Dual-value) screen bbox already
-    # stored in screen_tris, so binning introduces no new differentiable path.
-    # --------------------------------------------------------------------
-    TILE = 16
-    n_tx = cld(W, TILE)
-    n_ty = cld(H, TILE)
+# Two-pass CSR build: allocation is O(faces + tile-overlap entries) and every
+# per-tile list is contiguous and index-ordered. Returns `(offsets, faces,
+# tiles_x)`; tile (tx, ty) owns `faces[offsets[t]:offsets[t+1]-1]` with
+# t = (ty - 1) * tiles_x + tx.
+function _soft_build_tiles(screen_tris::AbstractVector, n_screen_tris::Int,
+                           W::Int, H::Int, workspace)
+    n_tx = cld(W, _SOFT_TILE)
+    n_ty = cld(H, _SOFT_TILE)
     n_tiles = _render_checked_mul(n_tx, n_ty, "soft_render tile count")
-    @inline tile_index(tx, ty) = (ty - 1) * n_tx + tx
-    @inline tile_x_of(px) = (px - 1) ÷ TILE + 1
-    @inline tile_y_of(py) = (py - 1) ÷ TILE + 1
-
-    # Bucket faces into tiles. Two-pass CSR build keeps allocation O(faces +
-    # tile-overlap entries) and gives contiguous, index-ordered per-tile lists.
     tile_counts = workspace === nothing ? zeros(Int, n_tiles) :
         _soft_int_buffer!(workspace.tile_counts, n_tiles)
     fill!(tile_counts, 0)
     for fi in 1:n_screen_tris
         tri = screen_tris[fi]
         tri.valid || continue
-        tx0 = tile_x_of(tri.min_x); tx1 = tile_x_of(tri.max_x)
-        ty0 = tile_y_of(tri.min_y); ty1 = tile_y_of(tri.max_y)
+        tx0 = _soft_tile_of(tri.min_x); tx1 = _soft_tile_of(tri.max_x)
+        ty0 = _soft_tile_of(tri.min_y); ty1 = _soft_tile_of(tri.max_y)
         for ty in ty0:ty1, tx in tx0:tx1
-            tile_counts[tile_index(tx, ty)] += 1
+            tile_counts[(ty - 1) * n_tx + tx] += 1
         end
     end
     tile_offsets = workspace === nothing ? Vector{Int}(undef, n_tiles + 1) :
@@ -427,106 +355,114 @@ function soft_render(vertices::AbstractVector{Vec3{Tv}},
     for fi in 1:n_screen_tris
         tri = screen_tris[fi]
         tri.valid || continue
-        tx0 = tile_x_of(tri.min_x); tx1 = tile_x_of(tri.max_x)
-        ty0 = tile_y_of(tri.min_y); ty1 = tile_y_of(tri.max_y)
+        tx0 = _soft_tile_of(tri.min_x); tx1 = _soft_tile_of(tri.max_x)
+        ty0 = _soft_tile_of(tri.min_y); ty1 = _soft_tile_of(tri.max_y)
         for ty in ty0:ty1, tx in tx0:tx1
-            t = tile_index(tx, ty)
+            t = (ty - 1) * n_tx + tx
             tile_faces[tile_cursor[t]] = fi
             tile_cursor[t] += 1
         end
     end
+    return tile_offsets, tile_faces, n_tx
+end
 
-    # Render each pixel
+# Candidate faces of pixel (px, py): the tile list, or every face for tiny
+# face sets that skip the spatial index.
+@inline function _soft_pixel_face_range(tiles, n_screen_tris::Int, px::Int, py::Int)
+    tiles === nothing && return 1, n_screen_tris
+    tile_offsets, _, n_tx = tiles
+    t = (_soft_tile_of(py) - 1) * n_tx + _soft_tile_of(px)
+    return tile_offsets[t], tile_offsets[t + 1] - 1
+end
+
+@inline _soft_pixel_face(tiles, k::Int) = tiles === nothing ? k : tiles[2][k]
+
+@inline _soft_covers(tri, px::Int, py::Int) =
+    tri.valid && tri.min_x <= px <= tri.max_x && tri.min_y <= py <= tri.max_y
+
+# SoftRas aggregation for one pixel. The foreground face weights and a
+# background weight (a virtual surface at the far plane z=+1, hence exponent
+# -1/γ) form a softmax over {faces, background}, stabilized by the maximum
+# logit `m`. A covered pixel approaches the nearest face colour as σ,γ -> 0
+# (recovering the hard rasterizer); an uncovered pixel reduces exactly to the
+# background. The eps floor keeps the denominator strictly positive.
+#
+# When 1/γ is not representable, pass 1 tracks the minimum depth instead and
+# pass 2 exponentiates only non-positive relative depth deltas. Both forms
+# include the z=+1 background and are mathematically equivalent; the relative
+# form avoids Inf-Inf.
+@inline function _soft_pixel_color(screen_tris, tiles, n_screen_tris::Int,
+                                   px::Int, py::Int, cx, cy, σ, γ, bg, eps,
+                                   use_relative_depth::Bool, background_logit,
+                                   zero_weight, zero_color)
+    face_lo, face_hi = _soft_pixel_face_range(tiles, n_screen_tris, px, py)
+    m = background_logit
+    any_face = false
+    for k in face_lo:face_hi
+        tri = screen_tris[_soft_pixel_face(tiles, k)]
+        _soft_covers(tri, px, py) || continue
+        if use_relative_depth
+            tri.depth < m && (m = tri.depth)
+        else
+            tri.logit > m && (m = tri.logit)
+        end
+        any_face = true
+    end
+
+    total_weight = zero_weight
+    average_color = zero_color
+    if any_face
+        for k in face_lo:face_hi
+            tri = screen_tris[_soft_pixel_face(tiles, k)]
+            _soft_covers(tri, px, py) || continue
+            d = _signed_distance_to_triangle_area(cx, cy,
+                tri.s1.x, tri.s1.y, tri.s2.x, tri.s2.y, tri.s3.x, tri.s3.y,
+                tri.area)
+            coverage = sigmoid_approx(d / σ)
+            depth_weight = use_relative_depth ?
+                _soft_relative_depth_weight(m, tri.depth, γ) :
+                exp(tri.logit - m)
+            w = coverage * depth_weight
+            next_weight = total_weight + w
+            average_color = iszero(_primal_value(total_weight)) ? tri.color :
+                _stable_color_lerp(average_color, tri.color, w / next_weight)
+            total_weight = next_weight
+        end
+    end
+
+    w_bg = (use_relative_depth ?
+        _soft_relative_depth_weight(m, one(m), γ) :
+        exp(background_logit - m)) + eps
+    denom = total_weight + w_bg
+    return iszero(_primal_value(total_weight)) ? bg :
+        _stable_color_lerp(average_color, bg, w_bg / denom)
+end
+
+function _soft_render_screen(::Type{T}, screen_tris, n_screen_tris::Int,
+                             W::Int, H::Int, σ, γ, bg::Color3{T}, eps::T,
+                             use_relative_depth::Bool, workspace) where {T}
+    # Tiny face sets need no spatial index: scanning directly avoids the CSR
+    # tile buffers that dominate small inverse-rendering problems.
+    tiles = n_screen_tris <= _SOFT_DIRECT_SCAN_MAX ? nothing :
+        _soft_build_tiles(screen_tris, n_screen_tris, W, H, workspace)
+    # Pixel-independent scalars are formed once, so heap-backed AD types do not
+    # record or allocate them per pixel.
+    background_logit = use_relative_depth ? one(T) : -one(T) / γ
+    zero_weight = zero(T)
+    zero_color = Color3(zero_weight, zero_weight, zero_weight)
     image = workspace === nothing ? Array{T}(undef, H, W, 3) :
         _soft_image_buffer!(workspace, H, W)
     for py in 1:H
-        ty = tile_y_of(py)
         for px in 1:W
-            cx = _soft_pixel_center(T, px)
-            cy = _soft_pixel_center(T, py)
-
-            t = tile_index(tile_x_of(px), ty)
-            face_lo = tile_offsets[t]
-            face_hi = tile_offsets[t + 1] - 1
-
-            # Soft aggregation over faces uses the legacy max-subtracted logits
-            # whenever 1/γ is representable. For smaller γ, pass 1 tracks the
-            # minimum depth directly and pass 2 exponentiates only non-positive
-            # relative depth deltas. Both forms include the z=+1 background and
-            # are mathematically equivalent; the relative form avoids Inf-Inf.
-            m = background_logit
-            any_face = false
-            for k in face_lo:face_hi
-                fi = tile_faces[k]
-                tri = screen_tris[fi]
-                !(tri.min_x <= px <= tri.max_x && tri.min_y <= py <= tri.max_y) && continue
-                z_face = _mean3_scaled(
-                    tri.s1.z, tri.s2.z, tri.s3.z)
-                if use_relative_depth
-                    z_face < m && (m = z_face)
-                else
-                    e_f = -z_face / γ
-                    e_f > m && (m = e_f)
-                end
-                any_face = true
-            end
-
-            # Pass 2: stabilized weights weight_f = coverage_f * exp(e_f - m).
-            total_weight = zero_weight
-            average_color = zero_color
-            if any_face
-                for k in face_lo:face_hi
-                    fi = tile_faces[k]
-                    tri = screen_tris[fi]
-                    !(tri.min_x <= px <= tri.max_x && tri.min_y <= py <= tri.max_y) && continue
-
-                    # Signed distance to triangle (minimum distance to any edge)
-                    d = _signed_distance_to_triangle_area(cx, cy,
-                        tri.s1.x, tri.s1.y, tri.s2.x, tri.s2.y, tri.s3.x, tri.s3.y,
-                        tri.area)
-
-                    # Soft coverage via sigmoid
-                    coverage = sigmoid_approx(d / σ)
-
-                    # Stabilized depth-based weighting
-                    z_face = _mean3_scaled(
-                        tri.s1.z, tri.s2.z, tri.s3.z)
-                    depth_weight = if use_relative_depth
-                        _soft_relative_depth_weight(m, z_face, γ)
-                    else
-                        e_f = -z_face / γ
-                        exp(e_f - m)
-                    end
-
-                    w = coverage * depth_weight
-                    next_weight = total_weight + w
-                    average_color = iszero(_primal_value(total_weight)) ? tri.color :
-                        _stable_color_lerp(
-                            average_color, tri.color, w / next_weight)
-                    total_weight = next_weight
-                end
-            end
-
-            # SoftRas partition-of-unity blend: the foreground face weights and a
-            # background weight (a virtual surface at the far plane z=+1, hence
-            # exponent -1/γ, stabilized by the same max m) form a softmax over
-            # {faces, background}. A covered pixel approaches the nearest face
-            # colour as σ,γ -> 0 (recovering the hard rasterizer); an uncovered
-            # pixel (total_weight -> 0) reduces exactly to the background. The eps
-            # floor keeps the denominator strictly positive without a discrete branch.
-            w_bg = (use_relative_depth ?
-                _soft_relative_depth_weight(m, one(T), γ) :
-                exp(background_logit - m)) + eps
-            denom = total_weight + w_bg
-            color = iszero(_primal_value(total_weight)) ? bg :
-                _stable_color_lerp(
-                    average_color, bg, w_bg / denom)
+            color = _soft_pixel_color(screen_tris, tiles, n_screen_tris, px, py,
+                _soft_pixel_center(T, px), _soft_pixel_center(T, py),
+                σ, γ, bg, eps, use_relative_depth, background_logit,
+                zero_weight, zero_color)
             image[py, px, 1] = color.r
             image[py, px, 2] = color.g
             image[py, px, 3] = color.b
         end
     end
-
     return image
 end
 
@@ -750,8 +686,12 @@ end
 end
 
 function _soft_screen_triangle(s1::Vec3{T}, s2::Vec3{T}, s3::Vec3{T},
-                               color::Color3{T}, σ, eps, W::Int, H::Int) where {T}
+                               color::Color3{T}, σ, γ, eps,
+                               use_relative_depth::Bool, W::Int, H::Int) where {T}
     area = edge_function(s1.x, s1.y, s2.x, s2.y, s3.x, s3.y)
+    # Pixel-independent depth terms are formed once per triangle.
+    depth = _mean3_scaled(s1.z, s2.z, s3.z)
+    logit = use_relative_depth ? depth : -depth / γ
 
     # The sigmoid tail extends with sigma. Do not impose a fixed pixel cap here:
     # very soft silhouettes are expected to influence distant pixels.
@@ -773,7 +713,7 @@ function _soft_screen_triangle(s1::Vec3{T}, s2::Vec3{T}, s3::Vec3{T},
         bmax_y = 0
     end
     valid = finite && abs(area) > eps && bmax_x >= bmin_x && bmax_y >= bmin_y
-    return _SoftScreenTriangle(s1, s2, s3, color,
+    return _SoftScreenTriangle(s1, s2, s3, color, depth, logit,
                                bmin_x, bmax_x, bmin_y, bmax_y,
                                area, valid)
 end
@@ -781,12 +721,13 @@ end
 @inline function _soft_store_screen_triangle!(
         screen_tris::Vector{_SoftScreenTriangle{T}}, n::Int, max_n::Int,
         s1::Vec3{T}, s2::Vec3{T}, s3::Vec3{T}, color::Color3{T},
-        σ, eps, W::Int, H::Int) where {T}
+        σ, γ, eps, use_relative_depth::Bool, W::Int, H::Int) where {T}
     if n == length(screen_tris)
         resize!(screen_tris, min(max_n, max(n + 1, 2n)))
     end
     n += 1
-    @inbounds screen_tris[n] = _soft_screen_triangle(s1, s2, s3, color, σ, eps, W, H)
+    @inbounds screen_tris[n] = _soft_screen_triangle(
+        s1, s2, s3, color, σ, γ, eps, use_relative_depth, W, H)
     return n
 end
 
