@@ -9,8 +9,19 @@
 # Subdivide each base triangle into (detail+1)² faces and project to a sphere
 # of the given radius. Vertices are non-indexed (3 per face).
 
-_polyhedron_bary(A::Vec3, B::Vec3, C::Vec3, cols::Int, p::Int, q::Int) =
-    A * ((cols - p - q) / cols) + B * (p / cols) + C * (q / cols)
+# Vector3.lerp: `x + (target.x - x) * alpha`.
+@inline _polyhedron_lerp(a::Vec3{Float64}, b::Vec3{Float64}, alpha::Float64) =
+    Vec3(a.x + (b.x - a.x) * alpha, a.y + (b.y - a.y) * alpha, a.z + (b.z - a.z) * alpha)
+
+# PolyhedronGeometry.js:113-140 `subdivideFace` grid point v[i][j]: row `i`
+# runs from lerp(a, c, i / cols) to lerp(b, c, i / cols) in `cols - i` steps.
+@inline function _polyhedron_grid(a::Vec3{Float64}, b::Vec3{Float64}, c::Vec3{Float64},
+                                  cols::Int, i::Int, j::Int)
+    aj = _polyhedron_lerp(a, c, i / cols)
+    j == 0 && i == cols && return aj
+    bj = _polyhedron_lerp(b, c, i / cols)
+    return _polyhedron_lerp(aj, bj, j / (cols - i))
+end
 
 # three.js PolyhedronGeometry `azimuth`: angle about +y measured from -x.
 @inline _polyhedron_azimuth(v::Vec3) = atan(v.z, -v.x)
@@ -90,20 +101,22 @@ function PolyhedronGeometry(base_verts::Vector{<:Vec3}, base_faces::Vector{NTupl
     flat = detail == 0
     for (i1, i2, i3) in base_faces
         A = verts[i1]; B = verts[i2]; C = verts[i3]
-        for i in 0:cols-1, j in 0:(cols-1-i)
-            vi, out = _polyhedron_emit_triangle!(
-                positions, normals, uvs, indices, vi, out,
-                _polyhedron_bary(A, B, C, cols, i, j),
-                _polyhedron_bary(A, B, C, cols, i + 1, j),
-                _polyhedron_bary(A, B, C, cols, i, j + 1),
-                radius, flat)
-            if j < cols - 1 - i
+        # PolyhedronGeometry.js:142-164 emits each grid row's triangles in
+        # this order and corner order.
+        for i in 0:(cols - 1), j in 0:(2 * (cols - i) - 2)
+            k = j ÷ 2
+            if iseven(j)
                 vi, out = _polyhedron_emit_triangle!(
                     positions, normals, uvs, indices, vi, out,
-                    _polyhedron_bary(A, B, C, cols, i + 1, j),
-                    _polyhedron_bary(A, B, C, cols, i + 1, j + 1),
-                    _polyhedron_bary(A, B, C, cols, i, j + 1),
-                    radius, flat)
+                    _polyhedron_grid(A, B, C, cols, i, k + 1),
+                    _polyhedron_grid(A, B, C, cols, i + 1, k),
+                    _polyhedron_grid(A, B, C, cols, i, k), radius, flat)
+            else
+                vi, out = _polyhedron_emit_triangle!(
+                    positions, normals, uvs, indices, vi, out,
+                    _polyhedron_grid(A, B, C, cols, i, k + 1),
+                    _polyhedron_grid(A, B, C, cols, i + 1, k + 1),
+                    _polyhedron_grid(A, B, C, cols, i + 1, k), radius, flat)
             end
         end
     end
@@ -590,7 +603,9 @@ function LatheGeometry(points::Vector{<:Vec2}; segments=12, phi_start=0.0, phi_l
     _validate_lathe_points(points)
     phi_start = _geometry_finite_scalar(phi_start, "LatheGeometry phi_start")
     phi_length = _geometry_finite_scalar(phi_length, "LatheGeometry phi_length")
-    segments = _clamp_seg(segments, 3, "LatheGeometry segments")   # clamp so 0 can't make i/segments NaN
+    # LatheGeometry.js:56 accepts any segment count >= 1; 0 would make
+    # i / segments NaN, so it is raised to 1.
+    segments = _clamp_seg(segments, 1, "LatheGeometry segments")
     phi_length = clamp(phi_length, zero(phi_length), 2π)          # three.js clamps the sweep
 
     n_verts = _geometry_checked_mul(
@@ -634,12 +649,13 @@ function LatheGeometry(points::Vector{<:Vec2}; segments=12, phi_start=0.0, phi_l
     for i in 0:segments-1, j in 0:np-2
         a = i*np + j + 1; b = (i+1)*np + j + 1
         c = (i+1)*np + j + 2; d = i*np + j + 2
+        # LatheGeometry.js:176-177 emits (a, b, d) and (c, d, b).
         indices[out] = a
         indices[out + 1] = b
         indices[out + 2] = d
-        indices[out + 3] = b
-        indices[out + 4] = c
-        indices[out + 5] = d
+        indices[out + 3] = c
+        indices[out + 4] = d
+        indices[out + 5] = b
         out += 6
     end
     BufferGeometry(positions, normals, uvs, indices, n_verts, n_faces)
@@ -792,9 +808,1061 @@ function TubeGeometry(path::Vector{<:Vec3}; radius=1.0, radial_segments=8, close
     BufferGeometry(positions, normals, uvs, indices, n_verts, n_faces)
 end
 
+# ========================== Curves (three.js extras) ==========================
+# Curve.js, curves/*.js, CurvePath.js, Path.js, Shape.js. Curves evaluate in
+# Float64; arc lengths are recomputed on demand (three.js caches them, which
+# does not change any result).
+
+"""
+    Curve{P}
+
+Abstract parametric curve with points of type `P` (`Vec2{Float64}` or
+`Vec3{Float64}`), the counterpart of three.js `Curve`. Every curve supports
+[`get_point`](@ref), [`get_point_at`](@ref), [`get_points`](@ref),
+[`get_spaced_points`](@ref), [`get_length`](@ref), [`get_lengths`](@ref),
+[`get_u_to_t_mapping`](@ref), [`get_tangent`](@ref) and
+[`get_tangent_at`](@ref); 3D curves also support
+[`compute_frenet_frames`](@ref) and [`TubeGeometry`](@ref). `t` is the curve
+parameter and `u ∈ [0, 1]` the fraction of arc length, approximated as in
+three.js from 200 chords.
+
+Implementations: [`LineCurve`](@ref), [`LineCurve3`](@ref),
+[`QuadraticBezierCurve`](@ref), [`QuadraticBezierCurve3`](@ref),
+[`CubicBezierCurve`](@ref), [`CubicBezierCurve3`](@ref),
+[`EllipseCurve`](@ref) (and [`ArcCurve`](@ref)), [`SplineCurve`](@ref),
+[`CatmullRomCurve`](@ref), and the composite [`CurvePath`](@ref),
+[`Path`](@ref) and [`Shape`](@ref).
+"""
+abstract type Curve{P} end
+
+const _CURVE_ARC_LENGTH_DIVISIONS = 200
+
+_curve_vec2(p::Vec2, label::String) =
+    Vec2(_geometry_finite_float(p.x, label), _geometry_finite_float(p.y, label))
+_curve_vec3(p::Vec3, label::String) =
+    Vec3(_geometry_finite_float(p.x, label), _geometry_finite_float(p.y, label),
+         _geometry_finite_float(p.z, label))
+
+"""
+    LineCurve(v1::Vec2, v2::Vec2)
+
+Straight 2D segment from `v1` to `v2` (three.js `LineCurve`). Its parameter is
+already arc length, so `get_point_at` equals `get_point`.
+"""
+struct LineCurve <: Curve{Vec2{Float64}}
+    v1::Vec2{Float64}
+    v2::Vec2{Float64}
+    LineCurve(v1::Vec2, v2::Vec2) =
+        new(_curve_vec2(v1, "LineCurve v1"), _curve_vec2(v2, "LineCurve v2"))
+end
+
+"""
+    LineCurve3(v1::Vec3, v2::Vec3)
+
+Straight 3D segment from `v1` to `v2` (three.js `LineCurve3`); see
+[`LineCurve`](@ref).
+"""
+struct LineCurve3 <: Curve{Vec3{Float64}}
+    v1::Vec3{Float64}
+    v2::Vec3{Float64}
+    LineCurve3(v1::Vec3, v2::Vec3) =
+        new(_curve_vec3(v1, "LineCurve3 v1"), _curve_vec3(v2, "LineCurve3 v2"))
+end
+
+"""
+    QuadraticBezierCurve(v0::Vec2, v1::Vec2, v2::Vec2)
+
+2D quadratic Bézier curve with control point `v1` (three.js
+`QuadraticBezierCurve`).
+"""
+struct QuadraticBezierCurve <: Curve{Vec2{Float64}}
+    v0::Vec2{Float64}
+    v1::Vec2{Float64}
+    v2::Vec2{Float64}
+    QuadraticBezierCurve(v0::Vec2, v1::Vec2, v2::Vec2) =
+        new(_curve_vec2(v0, "QuadraticBezierCurve v0"), _curve_vec2(v1, "QuadraticBezierCurve v1"),
+            _curve_vec2(v2, "QuadraticBezierCurve v2"))
+end
+
+"""
+    QuadraticBezierCurve3(v0::Vec3, v1::Vec3, v2::Vec3)
+
+3D quadratic Bézier curve (three.js `QuadraticBezierCurve3`).
+"""
+struct QuadraticBezierCurve3 <: Curve{Vec3{Float64}}
+    v0::Vec3{Float64}
+    v1::Vec3{Float64}
+    v2::Vec3{Float64}
+    QuadraticBezierCurve3(v0::Vec3, v1::Vec3, v2::Vec3) =
+        new(_curve_vec3(v0, "QuadraticBezierCurve3 v0"), _curve_vec3(v1, "QuadraticBezierCurve3 v1"),
+            _curve_vec3(v2, "QuadraticBezierCurve3 v2"))
+end
+
+"""
+    CubicBezierCurve(v0::Vec2, v1::Vec2, v2::Vec2, v3::Vec2)
+
+2D cubic Bézier curve with control points `v1`, `v2` (three.js
+`CubicBezierCurve`).
+"""
+struct CubicBezierCurve <: Curve{Vec2{Float64}}
+    v0::Vec2{Float64}
+    v1::Vec2{Float64}
+    v2::Vec2{Float64}
+    v3::Vec2{Float64}
+    CubicBezierCurve(v0::Vec2, v1::Vec2, v2::Vec2, v3::Vec2) =
+        new(_curve_vec2(v0, "CubicBezierCurve v0"), _curve_vec2(v1, "CubicBezierCurve v1"),
+            _curve_vec2(v2, "CubicBezierCurve v2"), _curve_vec2(v3, "CubicBezierCurve v3"))
+end
+
+"""
+    CubicBezierCurve3(v0::Vec3, v1::Vec3, v2::Vec3, v3::Vec3)
+
+3D cubic Bézier curve (three.js `CubicBezierCurve3`).
+"""
+struct CubicBezierCurve3 <: Curve{Vec3{Float64}}
+    v0::Vec3{Float64}
+    v1::Vec3{Float64}
+    v2::Vec3{Float64}
+    v3::Vec3{Float64}
+    CubicBezierCurve3(v0::Vec3, v1::Vec3, v2::Vec3, v3::Vec3) =
+        new(_curve_vec3(v0, "CubicBezierCurve3 v0"), _curve_vec3(v1, "CubicBezierCurve3 v1"),
+            _curve_vec3(v2, "CubicBezierCurve3 v2"), _curve_vec3(v3, "CubicBezierCurve3 v3"))
+end
+
+"""
+    EllipseCurve(ax=0, ay=0, x_radius=1, y_radius=1, start_angle=0, end_angle=2π,
+                 clockwise=false, rotation=0)
+
+2D ellipse arc centred at `(ax, ay)` from `start_angle` to `end_angle`
+radians, counterclockwise unless `clockwise`, rotated by `rotation` about its
+centre (three.js `EllipseCurve`, including its handling of the sweep: angles
+equal within machine epsilon give a point, a sweep that is a multiple of 2π a
+full turn).
+"""
+struct EllipseCurve <: Curve{Vec2{Float64}}
+    ax::Float64
+    ay::Float64
+    x_radius::Float64
+    y_radius::Float64
+    start_angle::Float64
+    end_angle::Float64
+    clockwise::Bool
+    rotation::Float64
+    function EllipseCurve(ax::Real=0.0, ay::Real=0.0, x_radius::Real=1.0, y_radius::Real=1.0,
+                          start_angle::Real=0.0, end_angle::Real=2π, clockwise::Bool=false,
+                          rotation::Real=0.0)
+        f(value, label) = _geometry_finite_float(value, "EllipseCurve $label")
+        return new(f(ax, "ax"), f(ay, "ay"), f(x_radius, "x_radius"), f(y_radius, "y_radius"),
+                   f(start_angle, "start_angle"), f(end_angle, "end_angle"), clockwise,
+                   f(rotation, "rotation"))
+    end
+end
+
+"""
+    ArcCurve(ax, ay, radius, start_angle, end_angle, clockwise=false)
+
+Circular arc (three.js `ArcCurve`): the [`EllipseCurve`](@ref) with both radii
+equal to `radius`.
+"""
+ArcCurve(ax::Real, ay::Real, radius::Real, start_angle::Real, end_angle::Real,
+         clockwise::Bool=false) =
+    EllipseCurve(ax, ay, radius, radius, start_angle, end_angle, clockwise)
+
+"""
+    SplineCurve(points::AbstractVector{<:Vec2})
+
+2D uniform Catmull–Rom spline through `points` (three.js `SplineCurve`); the
+end segments repeat the end points as their outer neighbours. Needs at least
+one point.
+"""
+struct SplineCurve <: Curve{Vec2{Float64}}
+    points::Vector{Vec2{Float64}}
+    function SplineCurve(points::AbstractVector{<:Vec2})
+        isempty(points) && throw(ArgumentError("SplineCurve needs at least one point"))
+        return new([_curve_vec2(p, "SplineCurve point") for p in points])
+    end
+end
+
+"""
+    CurvePath{P}(curves=Curve{P}[]; auto_close=false)
+    CurvePath(curves::AbstractVector{<:Curve{P}}; auto_close=false)
+
+A sequence of connected curves treated as one curve, parametrized by arc
+length over its pieces (three.js `CurvePath`). Append pieces with
+`add!(path, curve)` and close it with [`close_path!`](@ref). With
+`auto_close`, `get_points` and `get_spaced_points` repeat the first point at
+the end.
+"""
+mutable struct CurvePath{P} <: Curve{P}
+    curves::Vector{Curve{P}}
+    auto_close::Bool
+end
+CurvePath{P}(curves::AbstractVector=Curve{P}[]; auto_close::Bool=false) where {P} =
+    CurvePath{P}(Vector{Curve{P}}(curves), auto_close)
+CurvePath(curves::AbstractVector{<:Curve{P}}; auto_close::Bool=false) where {P} =
+    CurvePath{P}(curves; auto_close=auto_close)
+
+"""
+    Path(points=nothing)
+
+A 2D [`CurvePath`](@ref) built with pen commands (three.js `Path`):
+[`move_to!`](@ref), [`line_to!`](@ref), [`quadratic_curve_to!`](@ref),
+[`bezier_curve_to!`](@ref), [`spline_thru!`](@ref), [`arc!`](@ref),
+[`absarc!`](@ref), [`ellipse!`](@ref) and [`absellipse!`](@ref), each of which
+appends a curve from the current point and returns the path. `Path(points)`
+starts at `points[1]` and adds a line to each further point.
+"""
+mutable struct Path <: Curve{Vec2{Float64}}
+    curves::Vector{Curve{Vec2{Float64}}}
+    auto_close::Bool
+    current_point::Vec2{Float64}
+    function Path(points::Union{Nothing,AbstractVector{<:Vec2}}=nothing)
+        path = new(Curve{Vec2{Float64}}[], false, Vec2(0.0, 0.0))
+        points === nothing || set_from_points!(path, points)
+        return path
+    end
+end
+
+"""
+    Shape(points=nothing)
+
+A closed 2D outline with optional holes (three.js `Shape`): a [`Path`](@ref)
+plus `holes::Vector{Path}`. [`extract_points`](@ref) samples both, and
+`ShapeGeometry(shape)` / `ExtrudeGeometry(shape)` build meshes from it.
+"""
+mutable struct Shape <: Curve{Vec2{Float64}}
+    curves::Vector{Curve{Vec2{Float64}}}
+    auto_close::Bool
+    current_point::Vec2{Float64}
+    holes::Vector{Path}
+    function Shape(points::Union{Nothing,AbstractVector{<:Vec2}}=nothing)
+        shape = new(Curve{Vec2{Float64}}[], false, Vec2(0.0, 0.0), Path[])
+        points === nothing || set_from_points!(shape, points)
+        return shape
+    end
+end
+
+const _CompositeCurve = Union{CurvePath,Path,Shape}
+const _PenPath = Union{Path,Shape}
+
+_curve_point_type(::Curve{P}) where {P} = P
+
+# ---- point evaluation (Interpolations.js) ----
+
+@inline function _catmull_rom_scalar(t::Float64, p0::Float64, p1::Float64, p2::Float64, p3::Float64)
+    v0 = (p2 - p0) * 0.5
+    v1 = (p3 - p1) * 0.5
+    t2 = t * t
+    t3 = t * t2
+    return (2 * p1 - 2 * p2 + v0 + v1) * t3 + (-3 * p1 + 3 * p2 - 2 * v0 - v1) * t2 + v0 * t + p1
+end
+
+@inline function _quadratic_bezier(t::Float64, p0::Float64, p1::Float64, p2::Float64)
+    k = 1 - t
+    return k * k * p0 + 2 * (1 - t) * t * p1 + t * t * p2
+end
+
+@inline function _cubic_bezier(t::Float64, p0::Float64, p1::Float64, p2::Float64, p3::Float64)
+    k = 1 - t
+    return k * k * k * p0 + 3 * k * k * t * p1 + 3 * (1 - t) * t * t * p2 + t * t * t * p3
+end
+
+_curve_t(t, label::String="curve parameter") = _geometry_finite_float(t, label)
+
+"""
+    get_point(curve, t)
+
+Point of `curve` at parameter `t` (three.js `Curve.getPoint`). Most curves
+accept any finite `t`, extrapolating beyond `[0, 1]` as three.js does; a
+[`CurvePath`](@ref) needs `t ∈ [0, 1]`.
+"""
+function get_point end
+
+function get_point(c::Union{LineCurve,LineCurve3}, t::Real)
+    t = _curve_t(t)
+    # LineCurve.js:49-61: t === 1 returns v2 exactly.
+    t == 1 && return c.v2
+    return (c.v2 - c.v1) * t + c.v1
+end
+
+get_point(c::QuadraticBezierCurve, t::Real) = (t = _curve_t(t);
+    Vec2(_quadratic_bezier(t, c.v0.x, c.v1.x, c.v2.x), _quadratic_bezier(t, c.v0.y, c.v1.y, c.v2.y)))
+get_point(c::QuadraticBezierCurve3, t::Real) = (t = _curve_t(t);
+    Vec3(_quadratic_bezier(t, c.v0.x, c.v1.x, c.v2.x), _quadratic_bezier(t, c.v0.y, c.v1.y, c.v2.y),
+         _quadratic_bezier(t, c.v0.z, c.v1.z, c.v2.z)))
+get_point(c::CubicBezierCurve, t::Real) = (t = _curve_t(t);
+    Vec2(_cubic_bezier(t, c.v0.x, c.v1.x, c.v2.x, c.v3.x),
+         _cubic_bezier(t, c.v0.y, c.v1.y, c.v2.y, c.v3.y)))
+get_point(c::CubicBezierCurve3, t::Real) = (t = _curve_t(t);
+    Vec3(_cubic_bezier(t, c.v0.x, c.v1.x, c.v2.x, c.v3.x), _cubic_bezier(t, c.v0.y, c.v1.y, c.v2.y, c.v3.y),
+         _cubic_bezier(t, c.v0.z, c.v1.z, c.v2.z, c.v3.z)))
+
+function get_point(c::EllipseCurve, t::Real)
+    t = _curve_t(t)
+    # EllipseCurve.js:123-170.
+    two_pi = π * 2
+    delta = c.end_angle - c.start_angle
+    same_points = abs(delta) < eps(Float64)
+    while delta < 0
+        delta += two_pi
+    end
+    while delta > two_pi
+        delta -= two_pi
+    end
+    if delta < eps(Float64)
+        delta = same_points ? 0.0 : two_pi
+    end
+    if c.clockwise && !same_points
+        delta = delta == two_pi ? -two_pi : delta - two_pi
+    end
+    angle = c.start_angle + t * delta
+    x = c.ax + c.x_radius * cos(angle)
+    y = c.ay + c.y_radius * sin(angle)
+    if c.rotation != 0
+        cr = cos(c.rotation)
+        sr = sin(c.rotation)
+        tx = x - c.ax
+        ty = y - c.ay
+        x = tx * cr - ty * sr + c.ax
+        y = tx * sr + ty * cr + c.ay
+    end
+    return Vec2(x, y)
+end
+
+function get_point(c::SplineCurve, t::Real)
+    t = _curve_t(t)
+    points = c.points
+    n = length(points)
+    # SplineCurve.js:53-71 (0-based indices, clamped as there).
+    p = (n - 1) * t
+    int_point = floor(p)
+    weight = p - int_point
+    i = Int(int_point)
+    0 <= i <= n - 1 || throw(ArgumentError("SplineCurve parameter must lie in [0, 1]"))
+    p0 = points[(i == 0 ? i : i - 1) + 1]
+    p1 = points[i + 1]
+    p2 = points[(i > n - 2 ? n - 1 : i + 1) + 1]
+    p3 = points[(i > n - 3 ? n - 1 : i + 2) + 1]
+    return Vec2(_catmull_rom_scalar(weight, p0.x, p1.x, p2.x, p3.x),
+                _catmull_rom_scalar(weight, p0.y, p1.y, p2.y, p3.y))
+end
+
+
+function _curve_lengths(c::_CompositeCurve)
+    isempty(c.curves) && throw(ArgumentError("$(nameof(typeof(c))) has no curves"))
+    lengths = Vector{Float64}(undef, length(c.curves))
+    sum = 0.0
+    for (i, curve) in enumerate(c.curves)
+        sum += get_length(curve)
+        lengths[i] = sum
+    end
+    return lengths
+end
+
+function get_point(c::_CompositeCurve, t::Real)
+    t = _curve_t(t)
+    curve_lengths = _curve_lengths(c)
+    # CurvePath.js:90-117: the first piece whose cumulative length reaches
+    # t * length, at the matching arc-length fraction of that piece.
+    d = t * curve_lengths[end]
+    for (i, total) in enumerate(curve_lengths)
+        if total >= d
+            curve = c.curves[i]
+            segment_length = get_length(curve)
+            u = segment_length == 0 ? 0.0 : 1 - (total - d) / segment_length
+            return get_point_at(curve, u)
+        end
+    end
+    throw(ArgumentError("$(nameof(typeof(c))) parameter must lie in [0, 1]"))
+end
+
+# ---- arc length (Curve.js:144-266) ----
+
+"""
+    get_lengths(curve, divisions=200) -> Vector{Float64}
+
+Cumulative chord lengths of `curve` sampled at `t = 0:1/divisions:1`
+(three.js `Curve.getLengths`); the first entry is 0 and the last the length.
+"""
+function get_lengths(c::Curve, divisions::Integer=_CURVE_ARC_LENGTH_DIVISIONS)
+    n = _geometry_positive_int(divisions, "get_lengths divisions")
+    lengths = Vector{Float64}(undef, n + 1)
+    lengths[1] = 0.0
+    last = get_point(c, 0.0)
+    sum = 0.0
+    for p in 1:n
+        current = get_point(c, p / n)
+        sum += _curve_distance(current, last)
+        lengths[p + 1] = sum
+        last = current
+    end
+    return lengths
+end
+
+# Vector{2,3}.distanceTo: sqrt of the summed squared differences.
+@inline _curve_distance(a::Vec2, b::Vec2) = (dx = a.x - b.x; dy = a.y - b.y; sqrt(dx * dx + dy * dy))
+@inline _curve_distance(a::Vec3, b::Vec3) =
+    (dx = a.x - b.x; dy = a.y - b.y; dz = a.z - b.z; sqrt(dx * dx + dy * dy + dz * dz))
+
+"""
+    get_length(curve)
+
+Arc length of `curve` (three.js `Curve.getLength`): the last of
+[`get_lengths`](@ref), or for a [`CurvePath`](@ref) the sum of its pieces'
+lengths.
+"""
+get_length(c::Curve) = get_lengths(c)[end]
+get_length(c::_CompositeCurve) = _curve_lengths(c)[end]
+
+"""
+    get_u_to_t_mapping(curve, u, distance=nothing)
+
+Parameter `t` at which the arc length from the start is `u` times the length
+of `curve`, or `distance` when given and non-zero (three.js
+`Curve.getUtoTmapping`): a binary search in [`get_lengths`](@ref) and linear
+interpolation within the chord. `u` must lie in `[0, 1]` (three.js returns
+`NaN` outside), and a given distance in `[0, length]`.
+"""
+function get_u_to_t_mapping(c::Curve, u::Real, distance::Union{Nothing,Real}=nothing)
+    u = _curve_t(u, "get_u_to_t_mapping u")
+    lengths = get_lengths(c)
+    il = length(lengths)
+    total = lengths[il]
+    target = distance === nothing || iszero(distance) ? u * total :
+             _geometry_finite_float(distance, "get_u_to_t_mapping distance")
+    0 <= target <= total ||
+        throw(ArgumentError("get_u_to_t_mapping needs u in [0, 1] and distance in [0, length]"))
+    low, high = 0, il - 1
+    while low <= high
+        i = low + (high - low) ÷ 2
+        comparison = lengths[i + 1] - target
+        if comparison < 0
+            low = i + 1
+        elseif comparison > 0
+            high = i - 1
+        else
+            high = i
+            break
+        end
+    end
+    i = high
+    lengths[i + 1] == target && return i / (il - 1)
+    before = lengths[i + 1]
+    after = lengths[i + 2]
+    return (i + (target - before) / (after - before)) / (il - 1)
+end
+
+"""
+    get_point_at(curve, u)
+
+Point at arc-length fraction `u ∈ [0, 1]` (three.js `Curve.getPointAt`).
+"""
+get_point_at(c::Curve, u::Real) = get_point(c, get_u_to_t_mapping(c, u))
+get_point_at(c::Union{LineCurve,LineCurve3}, u::Real) = get_point(c, u)
+
+"""
+    get_points(curve, divisions=5)
+
+`divisions + 1` points at evenly spaced parameters `t` (three.js
+`Curve.getPoints`). For a [`CurvePath`](@ref), [`Path`](@ref) or
+[`Shape`](@ref) the default is 12 and each piece is sampled at its own
+resolution (`2divisions` for ellipses, one segment for lines,
+`divisions * length(points)` for splines, else `divisions`), skipping a point
+equal to the previous one; with `auto_close` the first point is appended when
+the path is open.
+"""
+function get_points(c::Curve, divisions::Integer=5)
+    n = _geometry_positive_int(divisions, "get_points divisions")
+    return [get_point(c, d / n) for d in 0:n]
+end
+
+_curve_resolution(::EllipseCurve, divisions::Int) = 2divisions
+_curve_resolution(::Union{LineCurve,LineCurve3}, divisions::Int) = 1
+_curve_resolution(c::SplineCurve, divisions::Int) = divisions * length(c.points)
+_curve_resolution(::Curve, divisions::Int) = divisions
+
+function get_points(c::_CompositeCurve, divisions::Integer=12)
+    P = _curve_point_type(c)
+    n = _geometry_positive_int(divisions, "get_points divisions")
+    points = P[]
+    for curve in c.curves
+        for point in get_points(curve, _curve_resolution(curve, n))
+            # CurvePath.js:197-201 skips consecutive duplicates.
+            !isempty(points) && points[end] == point && continue
+            push!(points, point)
+        end
+    end
+    if c.auto_close && length(points) > 1 && points[end] != points[1]
+        push!(points, points[1])
+    end
+    return points
+end
+
+"""
+    get_spaced_points(curve, divisions=5)
+
+`divisions + 1` points at evenly spaced arc length (three.js
+`Curve.getSpacedPoints`). A [`CurvePath`](@ref) uses 40 divisions by default,
+samples its own parameter (already arc length over the pieces) and appends the
+first point when `auto_close` is set.
+"""
+function get_spaced_points(c::Curve, divisions::Integer=5)
+    n = _geometry_positive_int(divisions, "get_spaced_points divisions")
+    return [get_point_at(c, d / n) for d in 0:n]
+end
+
+function get_spaced_points(c::_CompositeCurve, divisions::Integer=40)
+    P = _curve_point_type(c)
+    n = _geometry_positive_int(divisions, "get_spaced_points divisions")
+    points = P[get_point(c, i / n) for i in 0:n]
+    c.auto_close && push!(points, points[1])
+    return points
+end
+
+# Vector.normalize divides by `length() || 1`.
+@inline function _curve_normalize(v::Vec2)
+    len = sqrt(v.x * v.x + v.y * v.y)
+    iszero(len) && return v
+    inverse = 1 / len
+    return Vec2(v.x * inverse, v.y * inverse)
+end
+@inline function _curve_normalize(v::Vec3)
+    len = sqrt(v.x * v.x + v.y * v.y + v.z * v.z)
+    iszero(len) && return v
+    inverse = 1 / len
+    return Vec3(v.x * inverse, v.y * inverse, v.z * inverse)
+end
+
+"""
+    get_tangent(curve, t)
+
+Unit tangent at parameter `t` (three.js `Curve.getTangent`): the normalized
+difference of the points at `t ± 1e-4`, clamped to `[0, 1]`. Lines return
+their direction.
+"""
+function get_tangent(c::Curve, t::Real)
+    t = _curve_t(t)
+    delta = 0.0001
+    t1 = max(t - delta, 0.0)
+    t2 = min(t + delta, 1.0)
+    return _curve_normalize(get_point(c, t2) - get_point(c, t1))
+end
+get_tangent(c::Union{LineCurve,LineCurve3}, t::Real) = _curve_normalize(c.v2 - c.v1)
+
+"""
+    get_tangent_at(curve, u)
+
+Unit tangent at arc-length fraction `u` (three.js `Curve.getTangentAt`).
+"""
+get_tangent_at(c::Curve, u::Real) = get_tangent(c, get_u_to_t_mapping(c, u))
+get_tangent_at(c::Union{LineCurve,LineCurve3}, u::Real) = get_tangent(c, u)
+
+# Matrix4.makeRotationAxis applied to a point (Matrix4.js:1040-1067).
+@inline function _rotate_about_axis(p::Vec3{Float64}, axis::Vec3{Float64}, angle::Float64)
+    c = cos(angle)
+    s = sin(angle)
+    t = 1 - c
+    x, y, z = axis.x, axis.y, axis.z
+    tx, ty = t * x, t * y
+    m11, m12, m13 = tx * x + c, tx * y - s * z, tx * z + s * y
+    m21, m22, m23 = tx * y + s * z, ty * y + c, ty * z - s * x
+    m31, m32, m33 = tx * z - s * y, ty * z + s * x, t * z * z + c
+    return Vec3(m11 * p.x + m12 * p.y + m13 * p.z,
+                m21 * p.x + m22 * p.y + m23 * p.z,
+                m31 * p.x + m32 * p.y + m33 * p.z)
+end
+
+# Vector3.crossVectors.
+@inline _curve_cross(a::Vec3{Float64}, b::Vec3{Float64}) =
+    Vec3(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x)
+@inline _curve_dot(a::Vec3{Float64}, b::Vec3{Float64}) = a.x * b.x + a.y * b.y + a.z * b.z
+
+"""
+    compute_frenet_frames(curve::Curve{Vec3{Float64}}, segments, closed=false)
+
+Rotation-minimizing frames at `u = i / segments` for `i = 0:segments` (three.js
+`Curve.computeFrenetFrames`): tangents from [`get_tangent_at`](@ref), an
+initial normal perpendicular to the tangent's smallest component, normals
+carried along by the rotation between consecutive tangents, and for a closed
+curve a twist spread evenly so the last frame meets the first. Returns a named
+tuple `(tangents, normals, binormals)` of `Vector{Vec3{Float64}}`.
+"""
+function compute_frenet_frames(c::Curve{Vec3{Float64}}, segments::Integer, closed::Bool=false)
+    n = _geometry_positive_int(segments, "compute_frenet_frames segments")
+    tangents = [get_tangent_at(c, i / n) for i in 0:n]
+    normals = Vector{Vec3{Float64}}(undef, n + 1)
+    binormals = Vector{Vec3{Float64}}(undef, n + 1)
+    # Curve.js:330-356: start from the axis of the tangent's smallest component.
+    minimum_component = floatmax(Float64)
+    t0 = tangents[1]
+    normal = Vec3(0.0, 0.0, 0.0)
+    abs(t0.x) <= minimum_component && (minimum_component = abs(t0.x); normal = Vec3(1.0, 0.0, 0.0))
+    abs(t0.y) <= minimum_component && (minimum_component = abs(t0.y); normal = Vec3(0.0, 1.0, 0.0))
+    abs(t0.z) <= minimum_component && (normal = Vec3(0.0, 0.0, 1.0))
+    vec = _curve_normalize(_curve_cross(t0, normal))
+    normals[1] = _curve_cross(t0, vec)
+    binormals[1] = _curve_cross(t0, normals[1])
+    for i in 2:(n + 1)
+        normals[i] = normals[i - 1]
+        vec = _curve_cross(tangents[i - 1], tangents[i])
+        if sqrt(_curve_dot(vec, vec)) > eps(Float64)
+            vec = _curve_normalize(vec)
+            theta = acos(clamp(_curve_dot(tangents[i - 1], tangents[i]), -1.0, 1.0))
+            normals[i] = _rotate_about_axis(normals[i], vec, theta)
+        end
+        binormals[i] = _curve_cross(tangents[i], normals[i])
+    end
+    if closed
+        theta = acos(clamp(_curve_dot(normals[1], normals[n + 1]), -1.0, 1.0)) / n
+        _curve_dot(tangents[1], _curve_cross(normals[1], normals[n + 1])) > 0 && (theta = -theta)
+        for i in 2:(n + 1)
+            normals[i] = _rotate_about_axis(normals[i], tangents[i], theta * (i - 1))
+            binormals[i] = _curve_cross(tangents[i], normals[i])
+        end
+    end
+    return (tangents=tangents, normals=normals, binormals=binormals)
+end
+
+# ---- composite curves and pen commands ----
+
+# CurvePath.add. No docstring here: `add!` is the scene-graph function, whose
+# documentation comes from docs.jl only while the binding has none; the
+# CurvePath docstring describes this method.
+function add!(c::_CompositeCurve, curve::Curve)
+    curve isa Curve{_curve_point_type(c)} ||
+        throw(ArgumentError("add! needs a curve of the path's dimension"))
+    push!(c.curves, curve)
+    return c
+end
+
+"""
+    close_path!(path) -> path
+
+Append a line from the end of the last curve to the start of the first when
+they differ (three.js `CurvePath.closePath`).
+"""
+function close_path!(c::_CompositeCurve)
+    P = _curve_point_type(c)
+    isempty(c.curves) && throw(ArgumentError("close_path! needs at least one curve"))
+    start_point = get_point(c.curves[1], 0.0)
+    end_point = get_point(c.curves[end], 1.0)
+    if start_point != end_point
+        push!(c.curves, P <: Vec2 ? LineCurve(end_point, start_point) :
+                                    LineCurve3(end_point, start_point))
+    end
+    return c
+end
+
+"""
+    set_from_points!(path::Union{Path,Shape}, points) -> path
+
+Move to `points[1]` and draw lines through the remaining points (three.js
+`Path.setFromPoints`).
+"""
+function set_from_points!(path::_PenPath, points::AbstractVector{<:Vec2})
+    isempty(points) && throw(ArgumentError("set_from_points! needs at least one point"))
+    move_to!(path, points[1].x, points[1].y)
+    for i in 2:length(points)
+        line_to!(path, points[i].x, points[i].y)
+    end
+    return path
+end
+
+"""
+    move_to!(path, x, y) -> path
+
+Set the current point without drawing (three.js `Path.moveTo`).
+"""
+function move_to!(path::_PenPath, x::Real, y::Real)
+    path.current_point = _curve_vec2(Vec2(x, y), "move_to! point")
+    return path
+end
+
+"""
+    line_to!(path, x, y) -> path
+
+Append a [`LineCurve`](@ref) from the current point to `(x, y)` (three.js
+`Path.lineTo`).
+"""
+function line_to!(path::_PenPath, x::Real, y::Real)
+    target = _curve_vec2(Vec2(x, y), "line_to! point")
+    push!(path.curves, LineCurve(path.current_point, target))
+    path.current_point = target
+    return path
+end
+
+"""
+    quadratic_curve_to!(path, cpx, cpy, x, y) -> path
+
+Append a [`QuadraticBezierCurve`](@ref) with control point `(cpx, cpy)`
+ending at `(x, y)` (three.js `Path.quadraticCurveTo`).
+"""
+function quadratic_curve_to!(path::_PenPath, cpx::Real, cpy::Real, x::Real, y::Real)
+    target = _curve_vec2(Vec2(x, y), "quadratic_curve_to! point")
+    push!(path.curves, QuadraticBezierCurve(path.current_point, Vec2(cpx, cpy), target))
+    path.current_point = target
+    return path
+end
+
+"""
+    bezier_curve_to!(path, cp1x, cp1y, cp2x, cp2y, x, y) -> path
+
+Append a [`CubicBezierCurve`](@ref) ending at `(x, y)` (three.js
+`Path.bezierCurveTo`).
+"""
+function bezier_curve_to!(path::_PenPath, cp1x::Real, cp1y::Real, cp2x::Real, cp2y::Real,
+                          x::Real, y::Real)
+    target = _curve_vec2(Vec2(x, y), "bezier_curve_to! point")
+    push!(path.curves, CubicBezierCurve(path.current_point, Vec2(cp1x, cp1y), Vec2(cp2x, cp2y), target))
+    path.current_point = target
+    return path
+end
+
+"""
+    spline_thru!(path, points) -> path
+
+Append a [`SplineCurve`](@ref) from the current point through `points`
+(three.js `Path.splineThru`).
+"""
+function spline_thru!(path::_PenPath, points::AbstractVector{<:Vec2})
+    isempty(points) && throw(ArgumentError("spline_thru! needs at least one point"))
+    curve = SplineCurve(vcat([path.current_point], [Vec2{Float64}(p.x, p.y) for p in points]))
+    push!(path.curves, curve)
+    path.current_point = curve.points[end]
+    return path
+end
+
+"""
+    absellipse!(path, ax, ay, x_radius, y_radius, start_angle, end_angle,
+                clockwise=false, rotation=0) -> path
+
+Append an [`EllipseCurve`](@ref) centred at `(ax, ay)`, first drawing a line
+to its start when the path already has curves and the start differs from the
+current point (three.js `Path.absellipse`).
+"""
+function absellipse!(path::_PenPath, ax::Real, ay::Real, x_radius::Real, y_radius::Real,
+                     start_angle::Real, end_angle::Real, clockwise::Bool=false,
+                     rotation::Real=0.0)
+    curve = EllipseCurve(ax, ay, x_radius, y_radius, start_angle, end_angle, clockwise, rotation)
+    if !isempty(path.curves)
+        first_point = get_point(curve, 0.0)
+        first_point == path.current_point || line_to!(path, first_point.x, first_point.y)
+    end
+    push!(path.curves, curve)
+    path.current_point = get_point(curve, 1.0)
+    return path
+end
+
+"""
+    ellipse!(path, ax, ay, x_radius, y_radius, start_angle, end_angle,
+             clockwise=false, rotation=0) -> path
+
+[`absellipse!`](@ref) with the centre relative to the current point (three.js
+`Path.ellipse`).
+"""
+ellipse!(path::_PenPath, ax::Real, ay::Real, x_radius::Real, y_radius::Real,
+         start_angle::Real, end_angle::Real, clockwise::Bool=false, rotation::Real=0.0) =
+    absellipse!(path, ax + path.current_point.x, ay + path.current_point.y, x_radius,
+                y_radius, start_angle, end_angle, clockwise, rotation)
+
+"""
+    absarc!(path, ax, ay, radius, start_angle, end_angle, clockwise=false) -> path
+
+Circular [`absellipse!`](@ref) (three.js `Path.absarc`).
+"""
+absarc!(path::_PenPath, ax::Real, ay::Real, radius::Real, start_angle::Real,
+        end_angle::Real, clockwise::Bool=false) =
+    absellipse!(path, ax, ay, radius, radius, start_angle, end_angle, clockwise)
+
+"""
+    arc!(path, ax, ay, radius, start_angle, end_angle, clockwise=false) -> path
+
+[`absarc!`](@ref) with the centre relative to the current point (three.js
+`Path.arc`).
+"""
+arc!(path::_PenPath, ax::Real, ay::Real, radius::Real, start_angle::Real,
+     end_angle::Real, clockwise::Bool=false) =
+    absarc!(path, ax + path.current_point.x, ay + path.current_point.y, radius,
+            start_angle, end_angle, clockwise)
+
+"""
+    get_points_holes(shape::Shape, divisions=12) -> Vector{Vector{Vec2{Float64}}}
+
+`get_points(hole, divisions)` for each hole (three.js `Shape.getPointsHoles`).
+"""
+get_points_holes(shape::Shape, divisions::Integer=12) =
+    [get_points(hole, divisions) for hole in shape.holes]
+
+"""
+    extract_points(shape::Shape, divisions=12)
+
+Sampled outline and holes as `(shape=points, holes=hole_points)` (three.js
+`Shape.extractPoints`).
+"""
+extract_points(shape::Shape, divisions::Integer=12) =
+    (shape=get_points(shape, divisions), holes=get_points_holes(shape, divisions))
+
+"""
+    TubeGeometry(path::Curve{Vec3{Float64}}; tubular_segments=64, radius=1,
+                 radial_segments=8, closed=false)
+
+Tube of `radius` around a 3D curve, as three.js `TubeGeometry` builds it:
+`tubular_segments + 1` rings at evenly spaced arc length
+([`get_point_at`](@ref)), oriented by [`compute_frenet_frames`](@ref), each
+with `radial_segments + 1` vertices at angle `v = 2πj / radial_segments` in
+the direction `normalize(-cos(v) N + sin(v) B)`. A closed tube reuses the
+first ring's position and frame for its last ring. UVs are
+`(i / tubular_segments, j / radial_segments)`.
+"""
+function TubeGeometry(path::Curve{Vec3{Float64}}; tubular_segments::Integer=64,
+                      radius::Real=1.0, radial_segments::Integer=8, closed::Bool=false)
+    ts = _geometry_positive_int(tubular_segments, "TubeGeometry tubular_segments")
+    rs = _geometry_positive_int(radial_segments, "TubeGeometry radial_segments")
+    r = _geometry_finite_float(radius, "TubeGeometry radius")
+    frames = compute_frenet_frames(path, ts, closed)
+    row = _geometry_checked_add(rs, 1, "TubeGeometry radial_segments")
+    n_vertices = _geometry_checked_mul(ts + 1, row, "TubeGeometry vertex count")
+    n_faces = _geometry_checked_mul(2ts, rs, "TubeGeometry face count")
+    position_len, uv_len, index_len = _geometry_mesh_buffer_lengths(n_vertices, n_faces, "TubeGeometry")
+    positions = Vector{Float64}(undef, position_len)
+    normals = Vector{Float64}(undef, position_len)
+    uvs = Vector{Float64}(undef, uv_len)
+    # TubeGeometry.js:100-160.
+    for i in 0:ts
+        k = closed && i == ts ? 0 : i
+        center = get_point_at(path, k / ts)
+        n_frame = frames.normals[k + 1]
+        b_frame = frames.binormals[k + 1]
+        for j in 0:rs
+            v = j / rs * π * 2
+            s = sin(v)
+            c = -cos(v)
+            normal = _curve_normalize(Vec3(c * n_frame.x + s * b_frame.x, c * n_frame.y + s * b_frame.y,
+                                           c * n_frame.z + s * b_frame.z))
+            vi = i * row + j + 1
+            positions[3vi - 2] = center.x + r * normal.x
+            positions[3vi - 1] = center.y + r * normal.y
+            positions[3vi] = center.z + r * normal.z
+            normals[3vi - 2] = normal.x
+            normals[3vi - 1] = normal.y
+            normals[3vi] = normal.z
+            uvs[2vi - 1] = i / ts
+            uvs[2vi] = j / rs
+        end
+    end
+    indices = Vector{Int}(undef, index_len)
+    out = 1
+    for j in 1:ts, i in 1:rs
+        a = row * (j - 1) + (i - 1) + 1
+        b = row * j + (i - 1) + 1
+        c = row * j + i + 1
+        d = row * (j - 1) + i + 1
+        indices[out:out + 5] .= (a, b, d, b, c, d)
+        out += 6
+    end
+    return BufferGeometry(positions, normals, uvs, indices, n_vertices, n_faces)
+end
+
+"""
+    ShapeGeometry(shape::Shape; curve_segments=12)
+
+Flat triangulated [`Shape`](@ref) with its holes, sampled by
+[`extract_points`](@ref) with `curve_segments` divisions per curve (three.js
+`ShapeGeometry(shapes, curveSegments)`), then built as
+`ShapeGeometry(points; holes)`.
+"""
+function ShapeGeometry(shape::Shape; curve_segments::Integer=12)
+    points = extract_points(shape, _geometry_positive_int(curve_segments, "ShapeGeometry curve_segments"))
+    return ShapeGeometry(points.shape; holes=points.holes)
+end
+
+"""
+    ExtrudeGeometry(shape::Shape; curve_segments=12, kwargs...)
+
+[`ExtrudeGeometry`](@ref) of a [`Shape`](@ref) sampled by
+[`extract_points`](@ref) with `curve_segments` divisions per curve (three.js
+option `curveSegments`); its holes become the `holes` keyword and the other
+keywords are passed on.
+"""
+function ExtrudeGeometry(shape::Shape; curve_segments::Integer=12, kwargs...)
+    haskey(kwargs, :holes) && throw(ArgumentError("ExtrudeGeometry(::Shape) takes its holes from shape.holes"))
+    points = extract_points(shape, _geometry_positive_int(curve_segments, "ExtrudeGeometry curve_segments"))
+    return ExtrudeGeometry(points.shape; holes=points.holes, kwargs...)
+end
+
+"""
+    ShapePath(; fill_rule=:nonzero)
+
+A set of 2D sub-paths drawn with pen commands, typically from SVG or font
+outlines (three.js `ShapePath`). [`move_to!`](@ref) starts a new sub-path
+([`Path`](@ref)); [`line_to!`](@ref), [`quadratic_curve_to!`](@ref),
+[`bezier_curve_to!`](@ref) and [`spline_thru!`](@ref) extend the current one.
+[`to_shapes`](@ref) sorts the sub-paths into outlines and holes by `fill_rule`
+(`:nonzero` or `:evenodd`, three.js `userData.style.fillRule`).
+"""
+mutable struct ShapePath
+    sub_paths::Vector{Path}
+    current_path::Union{Nothing,Path}
+    fill_rule::Symbol
+    function ShapePath(; fill_rule::Symbol=:nonzero)
+        fill_rule in (:nonzero, :evenodd) ||
+            throw(ArgumentError("ShapePath fill_rule must be :nonzero or :evenodd"))
+        return new(Path[], nothing, fill_rule)
+    end
+end
+
+function move_to!(sp::ShapePath, x::Real, y::Real)
+    path = Path()
+    push!(sp.sub_paths, path)
+    sp.current_path = path
+    move_to!(path, x, y)
+    return sp
+end
+
+function _shape_path_current(sp::ShapePath)
+    sp.current_path === nothing && throw(ArgumentError("ShapePath needs move_to! before drawing"))
+    return sp.current_path
+end
+line_to!(sp::ShapePath, x::Real, y::Real) = (line_to!(_shape_path_current(sp), x, y); sp)
+quadratic_curve_to!(sp::ShapePath, cpx::Real, cpy::Real, x::Real, y::Real) =
+    (quadratic_curve_to!(_shape_path_current(sp), cpx, cpy, x, y); sp)
+bezier_curve_to!(sp::ShapePath, cp1x::Real, cp1y::Real, cp2x::Real, cp2y::Real, x::Real, y::Real) =
+    (bezier_curve_to!(_shape_path_current(sp), cp1x, cp1y, cp2x, cp2y, x, y); sp)
+spline_thru!(sp::ShapePath, points::AbstractVector{<:Vec2}) =
+    (spline_thru!(_shape_path_current(sp), points); sp)
+
+# ShapeUtils.area: half the signed shoelace sum, positive counterclockwise.
+function _curve_polygon_area(points::Vector{Vec2{Float64}})
+    n = length(points)
+    a = 0.0
+    p = n
+    for q in 1:n
+        a += points[p].x * points[q].y - points[q].x * points[p].y
+        p = q
+    end
+    return a * 0.5
+end
+
+# ShapePath.js toShapes `pointInPolygon` (crossing test).
+function _curve_point_in_polygon(p::Vec2{Float64}, polygon::Vector{Vec2{Float64}})
+    inside = false
+    n = length(polygon)
+    j = n
+    for i in 1:n
+        a = polygon[i]
+        b = polygon[j]
+        if (a.y > p.y) != (b.y > p.y) && p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x
+            inside = !inside
+        end
+        j = i
+    end
+    return inside
+end
+
+# ShapePath.js toShapes `getInteriorPoint`: the box centre, or the midpoint of
+# the first two crossings of its horizontal line.
+function _curve_interior_point(polygon::Vector{Vec2{Float64}}, lo::Vec2{Float64}, hi::Vec2{Float64})
+    point = Vec2((lo.x + hi.x) * 0.5, (lo.y + hi.y) * 0.5)
+    _curve_point_in_polygon(point, polygon) && return point
+    y = point.y
+    intercepts = Float64[]
+    n = length(polygon)
+    for i in 1:n
+        a = polygon[i]
+        b = polygon[mod1(i + 1, n)]
+        if (a.y > y) != (b.y > y)
+            push!(intercepts, a.x + (y - a.y) * (b.x - a.x) / (b.y - a.y))
+        end
+    end
+    if length(intercepts) > 1
+        sort!(intercepts)
+        point = Vec2((intercepts[1] + intercepts[2]) / 2, y)
+    end
+    return point
+end
+
+mutable struct _ShapePathEntry
+    path::Path
+    points::Vector{Vec2{Float64}}
+    lo::Vec2{Float64}
+    hi::Vec2{Float64}
+    interior::Vec2{Float64}
+    abs_area::Float64
+    winding::Int
+    container::Union{Nothing,_ShapePathEntry}
+    exclude::Bool
+    role::Symbol
+end
+
+"""
+    to_shapes(shape_path::ShapePath) -> Vector{Shape}
+
+Sort the sub-paths into [`Shape`](@ref)s with holes (three.js
+`ShapePath.toShapes`). Sub-paths with fewer than three points (at 12
+divisions) or zero area are dropped. Working from the largest area down, each
+sub-path is nested in the smallest larger sub-path whose bounding box contains
+its box and whose outline contains its interior point; the winding numbers
+then decide under `fill_rule` whether it is filled. A filled sub-path inside a
+hole or at the top level becomes an outline, any other filled one a hole of
+its container. The shapes share the sub-paths' curves.
+"""
+function to_shapes(sp::ShapePath)
+    inside = sp.fill_rule === :nonzero ? (w -> w != 0) : (w -> isodd(w))
+    entries = _ShapePathEntry[]
+    for path in sp.sub_paths
+        isempty(path.curves) && continue
+        points = get_points(path)
+        length(points) < 3 && continue
+        area = _curve_polygon_area(points)
+        area == 0 && continue
+        lo = Vec2(minimum(p -> p.x, points), minimum(p -> p.y, points))
+        hi = Vec2(maximum(p -> p.x, points), maximum(p -> p.y, points))
+        push!(entries, _ShapePathEntry(path, points, lo, hi, _curve_interior_point(points, lo, hi),
+                                       abs(area), area < 0 ? -1 : 1, nothing, false, :none))
+    end
+    # Array.prototype.sort is stable, like sort! with a stable algorithm.
+    sort!(entries; by=e -> e.abs_area, rev=true, alg=Base.Sort.DEFAULT_STABLE)
+    for (i, entry) in enumerate(entries)
+        container_winding = 0
+        for j in (i - 1):-1:1
+            candidate = entries[j]
+            (candidate.lo.x <= entry.lo.x && entry.hi.x <= candidate.hi.x &&
+             candidate.lo.y <= entry.lo.y && entry.hi.y <= candidate.hi.y) || continue
+            _curve_point_in_polygon(entry.interior, candidate.points) || continue
+            entry.container = candidate.exclude ? candidate.container : candidate
+            container_winding = candidate.winding
+            entry.winding += container_winding
+            break
+        end
+        inside(entry.winding) == inside(container_winding) && (entry.exclude = true)
+    end
+    for entry in entries
+        entry.exclude && continue
+        entry.role = entry.container === nothing || entry.container.role === :hole ? :outer : :hole
+    end
+    shapes = Shape[]
+    shape_of = IdDict{_ShapePathEntry,Shape}()
+    for entry in entries
+        (entry.exclude || entry.role !== :outer) && continue
+        shape = Shape()
+        shape.curves = entry.path.curves
+        push!(shapes, shape)
+        shape_of[entry] = shape
+    end
+    for entry in entries
+        (entry.exclude || entry.role !== :hole) && continue
+        shape = get(shape_of, entry.container, nothing)
+        shape === nothing && continue
+        hole = Path()
+        hole.curves = entry.path.curves
+        push!(shape.holes, hole)
+    end
+    return shapes
+end
+
 # ========================== CatmullRomCurve ==========================
 
-struct CatmullRomCurve
+struct CatmullRomCurve <: Curve{Vec3{Float64}}
     points::Vector{Vec3{Float64}}
     curve_type::Symbol
     closed::Bool
@@ -960,7 +2028,14 @@ end
     curve.curve_type === :catmullrom &&
         return _catmull_rom_uniform(p0, p1, p2, p3, local_t, curve.tension)
     alpha = curve.curve_type === :centripetal ? 0.5 : 1.0
-    return _catmull_rom_nonuniform(p0, p1, p2, p3, local_t, alpha)
+    result = _catmull_rom_nonuniform(p0, p1, p2, p3, local_t, alpha)
+    _catmull_rom_finite(result) && return result
+    # Differences of control points near floatmax overflow although the curve
+    # between them is finite. The centripetal and chordal parameterizations
+    # are invariant under uniform scaling, and scaling by a power of two is
+    # exact, so evaluate a quarter-size copy and scale the result back.
+    q = 0.25
+    return _catmull_rom_nonuniform(p0 * q, p1 * q, p2 * q, p3 * q, local_t, alpha) * 4.0
 end
 
 # three.js CatmullRomCurve3.getPoint extrapolates the missing neighbour of an
@@ -1063,6 +2138,9 @@ function catmull_rom_point(curve::CatmullRomCurve, t::Real)
     after = segment + 2 <= n ? points[segment + 2] : nothing
     return _catmull_rom_open_end_segment(curve, before, p1, p2, after, local_t)
 end
+
+# Curve interface: CatmullRomCurve3.getPoint.
+get_point(c::CatmullRomCurve, t::Real) = catmull_rom_point(c, t)
 
 function catmull_rom_points(curve::CatmullRomCurve; segments::Integer=200)
     segs = _geometry_positive_int(segments, "catmull_rom_points segments")
@@ -1711,107 +2789,198 @@ function NURBSCurveGeometry(curve::NURBSCurve; segments::Integer=200)
     return BufferGeometry(positions, Float64[], Float64[], Int[], n_vertices, 0)
 end
 
-function _parametric_normals(positions::Vector{Float64}, indices::Vector{Int}, nvertices::Int)
-    normals = Vector{Float64}(undef, 3 * nvertices)
-    geometry = BufferGeometry(positions, normals, Float64[], indices,
-                              nvertices, length(indices) ÷ 3)
-    return _compute_vertex_normals!(normals, geometry, Vec3(0.0, 0.0, 0.0))
+function _parametric_point(fn::F, u::Float64, v::Float64, label::String) where {F}
+    p = fn(u, v)
+    p isa Vec3 || throw(ArgumentError(string(label, " callback must return Vec3")))
+    x, y, z = Float64(p.x), Float64(p.y), Float64(p.z)
+    isfinite(x) && isfinite(y) && isfinite(z) ||
+        throw(ArgumentError(string(label, " callback returned a non-finite point")))
+    return Vec3(x, y, z)
 end
 
-function ParametricGeometry(fn::Function, slices::Integer=20, stacks::Integer=20)
-    us = _geometry_positive_int(slices, "ParametricGeometry slices")
-    vs = _geometry_positive_int(stacks, "ParametricGeometry stacks")
+# ParametricGeometry.js:64-118: positions, finite-difference normals and UVs
+# on a (slices + 1) x (stacks + 1) grid, then the (a, b, d), (b, c, d) faces.
+function _parametric_geometry(fn::F, slices, stacks, label::String) where {F}
+    us = _geometry_positive_int(slices, string(label, " slices"))
+    vs = _geometry_positive_int(stacks, string(label, " stacks"))
     row = us + 1
-    nvertices = _geometry_checked_mul(
-        row, vs + 1, "ParametricGeometry vertex count")
-    nfaces = _geometry_checked_mul(2 * us, vs, "ParametricGeometry face count")
-    position_len, uv_len, index_len =
-        _geometry_mesh_buffer_lengths(nvertices, nfaces, "ParametricGeometry")
+    nvertices = _geometry_checked_mul(row, vs + 1, string(label, " vertex count"))
+    nfaces = _geometry_checked_mul(2 * us, vs, string(label, " face count"))
+    position_len, uv_len, index_len = _geometry_mesh_buffer_lengths(nvertices, nfaces, label)
     positions = Vector{Float64}(undef, position_len)
+    normals = Vector{Float64}(undef, position_len)
     uvs = Vector{Float64}(undef, uv_len)
-    for j in 0:vs, i in 0:us
-        u = i / us
-        v = j / vs
-        p = fn(u, v)
-        p isa Vec3 || throw(ArgumentError("ParametricGeometry callback must return Vec3"))
-        x = _geometry_finite_float(p.x, "ParametricGeometry callback returned a non-finite point")
-        y = _geometry_finite_float(p.y, "ParametricGeometry callback returned a non-finite point")
-        z = _geometry_finite_float(p.z, "ParametricGeometry callback returned a non-finite point")
-        vi = j * row + i + 1
+    eps = 0.00001
+    for i in 0:vs, j in 0:us
+        v = i / vs
+        u = j / us
+        p0 = _parametric_point(fn, u, v, label)
+        # ParametricGeometry.js:85-111: one-sided differences, backward where
+        # u - EPS >= 0 and forward otherwise (likewise for v), then
+        # cross(pu, pv).normalize().
+        backward_u = u - eps >= 0
+        backward_v = v - eps >= 0
+        p1u = _parametric_point(fn, backward_u ? u - eps : u + eps, v, label)
+        p1v = _parametric_point(fn, u, backward_v ? v - eps : v + eps, label)
+        pu = backward_u ? p0 - p1u : p1u - p0
+        pv = backward_v ? p0 - p1v : p1v - p0
+        cx = pu.y * pv.z - pu.z * pv.y
+        cy = pu.z * pv.x - pu.x * pv.z
+        cz = pu.x * pv.y - pu.y * pv.x
+        length_squared = cx * cx + cy * cy + cz * cz
+        if isfinite(length_squared) && length_squared >= floatmin(Float64)
+            inverse = 1 / sqrt(length_squared)
+            n = Vec3(cx * inverse, cy * inverse, cz * inverse)
+        else
+            # The differences or their cross product overflow or underflow
+            # (three.js would give NaN or a zero normal there): form the same
+            # cross product of (p1u - p0, p1v - p0) with rescaling, flipping
+            # it once for each backward difference.
+            n = triangle_normal(Triangle(p0, p1u, p1v))
+            backward_u == backward_v || (n = -n)
+        end
+        vi = i * row + j + 1
         pbase = 3vi - 2
-        ubase = 2vi - 1
-        positions[pbase] = x
-        positions[pbase + 1] = y
-        positions[pbase + 2] = z
-        uvs[ubase] = u
-        uvs[ubase + 1] = 1.0 - v
+        positions[pbase] = p0.x
+        positions[pbase + 1] = p0.y
+        positions[pbase + 2] = p0.z
+        normals[pbase] = n.x
+        normals[pbase + 1] = n.y
+        normals[pbase + 2] = n.z
+        uvs[2vi - 1] = u
+        uvs[2vi] = v
     end
     indices = Vector{Int}(undef, index_len)
     out = 1
-    for j in 0:(vs - 1), i in 0:(us - 1)
-        a = j * row + i + 1
+    for i in 0:(vs - 1), j in 0:(us - 1)
+        a = i * row + j + 1
         b = a + 1
-        c = a + row
-        d = c + 1
+        c = (i + 1) * row + j + 2
+        d = c - 1
         indices[out] = a
         indices[out + 1] = b
         indices[out + 2] = d
-        indices[out + 3] = a
-        indices[out + 4] = d
-        indices[out + 5] = c
+        indices[out + 3] = b
+        indices[out + 4] = c
+        indices[out + 5] = d
         out += 6
     end
-    normals = _parametric_normals(positions, indices, nvertices)
     return BufferGeometry(positions, normals, uvs, indices, nvertices, nfaces)
 end
 
+"""
+    ParametricGeometry(fn, slices=8, stacks=8)
+
+Triangle geometry sampled from `fn(u, v) -> Vec3` on a regular grid of
+`u = j / slices`, `v = i / stacks` (three.js `ParametricGeometry`, including
+its defaults). Rows of constant `v` are stored in order of `u`; the UV of each
+vertex is `(u, v)`, and each grid cell is split into the triangles `(a, b, d)`
+and `(b, c, d)` with `a = (u, v)`, `b = (u + du, v)`, `c = (u + du, v + dv)`,
+`d = (u, v + dv)`. Normals are `cross(∂p/∂u, ∂p/∂v)` normalized, with the
+tangents approximated by one-sided differences of step `1e-5` (backward where
+`u - 1e-5 >= 0`, else forward; likewise for `v`), so they are continuous
+across seams of closed surfaces. A zero cross product gives a zero normal;
+where the differences overflow or underflow, the same direction is formed with
+rescaling (three.js would produce `NaN` or zero there).
+
+`fn` must return a `Vec3` with finite coordinates at every sample, including
+the difference samples, or an `ArgumentError` is thrown. See
+[`ParametricFunctions`](@ref) for three.js's example surfaces.
+"""
+ParametricGeometry(fn::Function, slices::Integer=8, stacks::Integer=8) =
+    _parametric_geometry(fn, slices, stacks, "ParametricGeometry")
+
+"""
+    NURBSSurfaceGeometry(surface::NURBSSurface; slices=20, stacks=20)
+
+Triangle geometry of a NURBS surface: [`ParametricGeometry`](@ref) over
+`(u, v) -> nurbs_point(surface, u, v)`, which is how three.js's NURBS example
+builds its surface (`new ParametricGeometry(getSurfacePoint, 20, 20)`).
+"""
 function NURBSSurfaceGeometry(surface::NURBSSurface; slices::Integer=20,
                               stacks::Integer=20)
-    us = _geometry_positive_int(slices, "NURBSSurfaceGeometry slices")
-    vs = _geometry_positive_int(stacks, "NURBSSurfaceGeometry stacks")
-    row = us + 1
-    nvertices = _geometry_checked_mul(
-        row, vs + 1, "NURBSSurfaceGeometry vertex count")
-    nfaces = _geometry_checked_mul(
-        2 * us, vs, "NURBSSurfaceGeometry face count")
-    position_len, uv_len, index_len =
-        _geometry_mesh_buffer_lengths(
-            nvertices, nfaces, "NURBSSurfaceGeometry")
-    positions = Vector{Float64}(undef, position_len)
-    uvs = Vector{Float64}(undef, uv_len)
     basis_u = _nurbs_basis_scratch(surface.degree_u)
     basis_v = _nurbs_basis_scratch(surface.degree_v)
-    for j in 0:vs, i in 0:us
-        u = i / us
-        v = j / vs
-        p = _nurbs_point(surface, u, v, basis_u, basis_v)
-        vi = j * row + i + 1
-        pbase = 3vi - 2
-        ubase = 2vi - 1
-        positions[pbase] = p.x
-        positions[pbase + 1] = p.y
-        positions[pbase + 2] = p.z
-        uvs[ubase] = u
-        uvs[ubase + 1] = 1.0 - v
-    end
-    indices = Vector{Int}(undef, index_len)
-    out = 1
-    for j in 0:(vs - 1), i in 0:(us - 1)
-        a = j * row + i + 1
-        b = a + 1
-        c = a + row
-        d = c + 1
-        indices[out] = a
-        indices[out + 1] = b
-        indices[out + 2] = d
-        indices[out + 3] = a
-        indices[out + 4] = d
-        indices[out + 5] = c
-        out += 6
-    end
-    normals = _parametric_normals(positions, indices, nvertices)
-    return BufferGeometry(positions, normals, uvs, indices, nvertices, nfaces)
+    point(u, v) = _nurbs_point(surface, u, v, basis_u, basis_v)
+    return _parametric_geometry(point, slices, stacks, "NURBSSurfaceGeometry")
 end
+
+"""
+    ParametricFunctions
+
+three.js's example parametric surfaces (`examples/jsm/geometries/ParametricFunctions.js`)
+as `(u, v) -> Vec3` functions for [`ParametricGeometry`](@ref):
+`ParametricFunctions.klein`, `ParametricFunctions.plane`,
+`ParametricFunctions.mobius` and `ParametricFunctions.mobius3d`.
+"""
+module ParametricFunctions
+
+using ..Diff3D: Vec3
+
+"""
+    ParametricFunctions.klein(v, u)
+
+Klein bottle (three.js `ParametricFunctions.klein`; note its `(v, u)`
+argument order, kept from three.js).
+"""
+function klein(v::Real, u::Real)
+    u *= π
+    v *= 2π
+    u = u * 2
+    if u < π
+        x = 3 * cos(u) * (1 + sin(u)) + (2 * (1 - cos(u) / 2)) * cos(u) * cos(v)
+        z = -8 * sin(u) - 2 * (1 - cos(u) / 2) * sin(u) * cos(v)
+    else
+        x = 3 * cos(u) * (1 + sin(u)) + (2 * (1 - cos(u) / 2)) * cos(v + π)
+        z = -8 * sin(u)
+    end
+    y = -2 * (1 - cos(u) / 2) * sin(v)
+    return Vec3(x, y, z)
+end
+
+"""
+    ParametricFunctions.plane(u, v)
+
+The unit square in the xz plane, `Vec3(u, 0, v)` (three.js
+`ParametricFunctions.plane`).
+"""
+plane(u::Real, v::Real) = Vec3(u, zero(u), v)
+
+"""
+    ParametricFunctions.mobius(u, t)
+
+Möbius strip of radius 2 and width 1 (three.js `ParametricFunctions.mobius`).
+"""
+function mobius(u::Real, t::Real)
+    u = u - 0.5
+    v = 2π * t
+    a = 2
+    x = cos(v) * (a + u * cos(v / 2))
+    y = sin(v) * (a + u * cos(v / 2))
+    z = u * sin(v / 2)
+    return Vec3(x, y, z)
+end
+
+"""
+    ParametricFunctions.mobius3d(u, t)
+
+Möbius band with an elliptical cross-section (three.js
+`ParametricFunctions.mobius3d`).
+"""
+function mobius3d(u::Real, t::Real)
+    u *= π
+    t *= 2π
+    u = u * 2
+    phi = u / 2
+    major, a, b = 2.25, 0.125, 0.65
+    x = a * cos(t) * cos(phi) - b * sin(t) * sin(phi)
+    z = a * cos(t) * sin(phi) + b * sin(t) * cos(phi)
+    y = (major + x) * sin(u)
+    x = (major + x) * cos(u)
+    return Vec3(x, y, z)
+end
+
+end # module ParametricFunctions
 
 # ========================== Shape / Extrude ==========================
 # A Shape is a simple polygon in the xy-plane (Vector{Vec2}). ShapeGeometry
@@ -3148,4 +4317,295 @@ function _edges_geometry_keyed(geo::BufferGeometry, cosT::Float64,
         record_active[r] && _push_segment!(positions, geo, record_index0[r], record_index1[r])
     end
     BufferGeometry(positions, Float64[], Float64[], Int[], length(positions) ÷ 3, 0)
+end
+
+# ========================== Geometry addons ==========================
+# three.js examples/jsm/geometries: RoundedBoxGeometry, BoxLineGeometry,
+# DecalGeometry.
+
+# Vector3.angleTo: acos of the clamped normalized dot product, or pi / 2 when
+# either vector is zero.
+@inline function _angle_between(a::Vec3{Float64}, b::Vec3{Float64})
+    denominator = sqrt((a.x * a.x + a.y * a.y + a.z * a.z) * (b.x * b.x + b.y * b.y + b.z * b.z))
+    iszero(denominator) && return π / 2
+    return acos(clamp((a.x * b.x + a.y * b.y + a.z * b.z) / denominator, -1.0, 1.0))
+end
+
+@inline _axis_component(v::Vec3, axis::Int) = axis == 1 ? v.x : axis == 2 ? v.y : v.z
+
+# RoundedBoxGeometry.js:6-43 `getUv`.
+function _rounded_box_uv(face_dir::Vec3{Float64}, normal::Vec3{Float64}, uv_axis::Int,
+                         projection_axis::Int, radius::Float64, side_length::Float64)
+    total_arc_length = 2π * radius / 4
+    center_length = max(side_length - 2 * radius, 0.0)
+    half_arc = π / 4
+    projected = Vec3(projection_axis == 1 ? 0.0 : normal.x, projection_axis == 2 ? 0.0 : normal.y,
+                     projection_axis == 3 ? 0.0 : normal.z)
+    projected = Vec3(_normalize_components(projected.x, projected.y, projected.z)...)
+    arc_uv_ratio = 0.5 * total_arc_length / (total_arc_length + center_length)
+    arc_angle_ratio = 1.0 - (_angle_between(projected, face_dir) / half_arc)
+    if sign(_axis_component(projected, uv_axis)) == 1
+        return arc_angle_ratio * arc_uv_ratio
+    end
+    length_uv = center_length / (total_arc_length + center_length)
+    return length_uv + arc_uv_ratio + arc_uv_ratio * (1.0 - arc_angle_ratio)
+end
+
+"""
+    RoundedBoxGeometry(; width=1, height=1, depth=1, segments=2, radius=0.1)
+
+Box with rounded edges and corners (three.js addon `RoundedBoxGeometry`). The
+radius is limited to half the shortest side, and each rounded edge has
+`segments` subdivisions. As in three.js the result is built from a unit
+`BoxGeometry` with `2segments + 1` subdivisions per side, made unindexed
+(indices `1:n_vertices`), each vertex is pushed onto the rounded surface with
+the surface normal, and the UVs run around each side's arcs. With
+`segments = 0` three.js returns that unit box unchanged (ignoring `width`,
+`height`, `depth` and `radius`), and so does this constructor.
+
+The dimensions must be finite and positive and the radius finite and
+non-negative (a zero side would make three.js's UVs `NaN`).
+"""
+function RoundedBoxGeometry(; width=1.0, height=1.0, depth=1.0, segments=2, radius=0.1)
+    width = _geometry_finite_float(width, "RoundedBoxGeometry width")
+    height = _geometry_finite_float(height, "RoundedBoxGeometry height")
+    depth = _geometry_finite_float(depth, "RoundedBoxGeometry depth")
+    radius = _geometry_finite_float(radius, "RoundedBoxGeometry radius")
+    (width > 0 && height > 0 && depth > 0) ||
+        throw(ArgumentError("RoundedBoxGeometry width, height and depth must be positive"))
+    radius >= 0 || throw(ArgumentError("RoundedBoxGeometry radius must be non-negative"))
+    segments = _geometry_nonnegative_int(segments, "RoundedBoxGeometry segments")
+    total = _geometry_checked_add(
+        _geometry_checked_mul(2, segments, "RoundedBoxGeometry segments"), 1,
+        "RoundedBoxGeometry segments")
+    radius = min(width / 2, height / 2, depth / 2, radius)
+    box = BoxGeometry(width=1.0, height=1.0, depth=1.0, width_segments=total,
+                      height_segments=total, depth_segments=total)
+    total == 1 && return box
+    geo = to_non_indexed(box)
+    positions, normals, uvs = geo.positions, geo.normals, geo.uvs
+    bx, by, bz = width / 2 - radius, height / 2 - radius, depth / 2 - radius
+    face_tris = length(positions) ÷ 6
+    half_segment = 0.5 / total
+    for i in 0:3:(length(positions) - 1)
+        j = 2 * (i ÷ 3)
+        x, y, z = positions[i + 1], positions[i + 2], positions[i + 3]
+        n = Vec3(_normalize_components(x - sign(x) * half_segment, y - sign(y) * half_segment,
+                                       z - sign(z) * half_segment)...)
+        positions[i + 1] = bx * sign(x) + n.x * radius
+        positions[i + 2] = by * sign(y) + n.y * radius
+        positions[i + 3] = bz * sign(z) + n.z * radius
+        normals[i + 1] = n.x
+        normals[i + 2] = n.y
+        normals[i + 3] = n.z
+        # RoundedBoxGeometry.js:118-176; axes are 1 = x, 2 = y, 3 = z.
+        side = i ÷ face_tris
+        if side == 0
+            dir = Vec3(1.0, 0.0, 0.0)
+            u = _rounded_box_uv(dir, n, 3, 2, radius, depth)
+            v = 1.0 - _rounded_box_uv(dir, n, 2, 3, radius, height)
+        elseif side == 1
+            dir = Vec3(-1.0, 0.0, 0.0)
+            u = 1.0 - _rounded_box_uv(dir, n, 3, 2, radius, depth)
+            v = 1.0 - _rounded_box_uv(dir, n, 2, 3, radius, height)
+        elseif side == 2
+            dir = Vec3(0.0, 1.0, 0.0)
+            u = 1.0 - _rounded_box_uv(dir, n, 1, 3, radius, width)
+            v = _rounded_box_uv(dir, n, 3, 1, radius, depth)
+        elseif side == 3
+            dir = Vec3(0.0, -1.0, 0.0)
+            u = 1.0 - _rounded_box_uv(dir, n, 1, 3, radius, width)
+            v = 1.0 - _rounded_box_uv(dir, n, 3, 1, radius, depth)
+        elseif side == 4
+            dir = Vec3(0.0, 0.0, 1.0)
+            u = 1.0 - _rounded_box_uv(dir, n, 1, 2, radius, width)
+            v = 1.0 - _rounded_box_uv(dir, n, 2, 1, radius, height)
+        else
+            dir = Vec3(0.0, 0.0, -1.0)
+            u = _rounded_box_uv(dir, n, 1, 2, radius, width)
+            v = 1.0 - _rounded_box_uv(dir, n, 2, 1, radius, height)
+        end
+        uvs[j + 1] = u
+        uvs[j + 2] = v
+    end
+    return geo
+end
+
+"""
+    BoxLineGeometry(; width=1, height=1, depth=1, width_segments=1,
+                    height_segments=1, depth_segments=1)
+
+Line segments outlining the grid lines on the six sides of a box (three.js
+addon `BoxLineGeometry`): for each of the `width_segments + 1` x positions a
+rectangle around the box, then likewise along y and z. Returns an unindexed
+line geometry (`n_faces = 0`) whose consecutive vertex pairs are the segments;
+draw it with [`LineSegments`](@ref).
+"""
+function BoxLineGeometry(; width=1.0, height=1.0, depth=1.0, width_segments=1,
+                         height_segments=1, depth_segments=1)
+    width = _geometry_finite_float(width, "BoxLineGeometry width")
+    height = _geometry_finite_float(height, "BoxLineGeometry height")
+    depth = _geometry_finite_float(depth, "BoxLineGeometry depth")
+    ws = _geometry_segment_count("width_segments", width_segments)
+    hs = _geometry_segment_count("height_segments", height_segments)
+    ds = _geometry_segment_count("depth_segments", depth_segments)
+    wh, hh, dh = width / 2, height / 2, depth / 2
+    segment_width, segment_height, segment_depth = width / ws, height / hs, depth / ds
+    n_lines = _geometry_checked_add(_geometry_checked_add(ws, hs, "BoxLineGeometry segments"),
+                                    ds + 3, "BoxLineGeometry segments")
+    n_vertices = _geometry_checked_mul(8, n_lines, "BoxLineGeometry vertex count")
+    position_len, _, _ = _geometry_mesh_buffer_lengths(n_vertices, 0, "BoxLineGeometry")
+    positions = Float64[]
+    sizehint!(positions, position_len)
+    # BoxLineGeometry.js:43-71 accumulates each coordinate by its step.
+    x = -wh
+    for _ in 0:ws
+        append!(positions, (x, -hh, -dh, x, hh, -dh, x, hh, -dh, x, hh, dh,
+                            x, hh, dh, x, -hh, dh, x, -hh, dh, x, -hh, -dh))
+        x += segment_width
+    end
+    y = -hh
+    for _ in 0:hs
+        append!(positions, (-wh, y, -dh, wh, y, -dh, wh, y, -dh, wh, y, dh,
+                            wh, y, dh, -wh, y, dh, -wh, y, dh, -wh, y, -dh))
+        y += segment_height
+    end
+    z = -dh
+    for _ in 0:ds
+        append!(positions, (-wh, -hh, z, -wh, hh, z, -wh, hh, z, wh, hh, z,
+                            wh, hh, z, wh, -hh, z, wh, -hh, z, -wh, -hh, z))
+        z += segment_depth
+    end
+    return BufferGeometry(positions, Float64[], Float64[], Int[], n_vertices, 0)
+end
+
+# DecalGeometry.js:183-311 `clipGeometry` for the plane with unit normal
+# `sign` along `axis`, keeping the side within `s` of the origin.
+@inline _decal_distance(p::Vec3{Float64}, axis::Int, sgn::Float64, s::Float64) =
+    sgn * _axis_component(p, axis) - s
+
+@inline function _decal_clip(p0::Vec3{Float64}, n0::Vec3{Float64}, p1::Vec3{Float64},
+                             n1::Vec3{Float64}, axis::Int, sgn::Float64, s::Float64)
+    d0 = _decal_distance(p0, axis, sgn, s)
+    d1 = _decal_distance(p1, axis, sgn, s)
+    s0 = d0 / (d0 - d1)
+    return (Vec3(p0.x + s0 * (p1.x - p0.x), p0.y + s0 * (p1.y - p0.y), p0.z + s0 * (p1.z - p0.z)),
+            Vec3(n0.x + s0 * (n1.x - n0.x), n0.y + s0 * (n1.y - n0.y), n0.z + s0 * (n1.z - n0.z)))
+end
+
+function _decal_clip_plane(points::Vector{Vec3{Float64}}, normals::Vector{Vec3{Float64}},
+                           axis::Int, sgn::Float64, s::Float64)
+    out_points = Vec3{Float64}[]
+    out_normals = Vec3{Float64}[]
+    sizehint!(out_points, length(points))
+    sizehint!(out_normals, length(points))
+    keep(p, n) = (push!(out_points, p); push!(out_normals, n))
+    for i in 1:3:length(points)
+        q = (points[i], points[i + 1], points[i + 2])
+        m = (normals[i], normals[i + 1], normals[i + 2])
+        out = (_decal_distance(q[1], axis, sgn, s) > 0, _decal_distance(q[2], axis, sgn, s) > 0,
+               _decal_distance(q[3], axis, sgn, s) > 0)
+        total = count(out)
+        if total == 0
+            for k in 1:3
+                keep(q[k], m[k])
+            end
+        elseif total == 1
+            # One corner outside: two triangles (DecalGeometry.js:218-270).
+            o = out[1] ? 1 : out[2] ? 2 : 3
+            a, b = o == 1 ? (2, 3) : o == 2 ? (1, 3) : (1, 2)
+            c3 = _decal_clip(q[o], m[o], q[a], m[a], axis, sgn, s)
+            c4 = _decal_clip(q[o], m[o], q[b], m[b], axis, sgn, s)
+            if o == 2
+                keep(c3...); keep(q[b], m[b]); keep(q[a], m[a])
+                keep(q[b], m[b]); keep(c3...); keep(c4...)
+            else
+                keep(q[a], m[a]); keep(q[b], m[b]); keep(c3...)
+                keep(c4...); keep(c3...); keep(q[b], m[b])
+            end
+        elseif total == 2
+            # One corner inside: one triangle (DecalGeometry.js:272-306).
+            k = !out[1] ? 1 : !out[2] ? 2 : 3
+            next, prev = k == 1 ? (2, 3) : k == 2 ? (3, 1) : (1, 2)
+            keep(q[k], m[k])
+            keep(_decal_clip(q[k], m[k], q[next], m[next], axis, sgn, s)...)
+            keep(_decal_clip(q[k], m[k], q[prev], m[prev], axis, sgn, s)...)
+        end
+    end
+    return out_points, out_normals
+end
+
+"""
+    DecalGeometry(mesh::Mesh, position::Vec3, orientation::Euler, size::Vec3)
+
+Decal geometry projected onto `mesh` (three.js addon `DecalGeometry`). A box
+projector of extent `size`, centred at the world-space `position` and rotated
+by `orientation`, cuts the mesh's triangles (in world space, through the
+mesh's world matrix) to the box. The result is an unindexed world-space
+triangle geometry with UVs `0.5 .+ (x, y) ./ (size.x, size.y)` in projector
+space; it carries the mesh's normals, transformed by its normal matrix and
+linearly interpolated at the cut (not renormalized, as in three.js), when the
+mesh geometry has normals. Use it with a mesh at the origin, e.g.
+`Mesh(DecalGeometry(target, position, orientation, size), decal_material)`.
+
+The geometry's base positions are used (morph targets and skinning are not
+applied, as in three.js). `size` must have finite non-zero components.
+"""
+function DecalGeometry(mesh::Mesh, position::Vec3, orientation::Euler, size::Vec3)
+    geo = mesh.geometry
+    geo isa BufferGeometry || throw(ArgumentError("DecalGeometry mesh must have a BufferGeometry"))
+    _validate_triangle_geometry_indices(geo, "DecalGeometry")
+    sx = _geometry_nonzero_finite_scalar(Float64(size.x), "DecalGeometry size.x")
+    sy = _geometry_nonzero_finite_scalar(Float64(size.y), "DecalGeometry size.y")
+    sz = _geometry_nonzero_finite_scalar(Float64(size.z), "DecalGeometry size.z")
+    center = Vec3(_geometry_finite_float(position.x, "DecalGeometry position"),
+                  _geometry_finite_float(position.y, "DecalGeometry position"),
+                  _geometry_finite_float(position.z, "DecalGeometry position"))
+    has_normals = !isempty(geo.normals)
+    has_normals && length(geo.normals) < 3geo.n_vertices &&
+        throw(ArgumentError("DecalGeometry mesh normals must cover n_vertices"))
+    entries = isempty(geo.indices) ? (1:geo.n_vertices) : view(geo.indices, 1:3geo.n_faces)
+    rem(length(entries), 3) == 0 ||
+        throw(ArgumentError("DecalGeometry mesh must consist of whole triangles"))
+    world = compute_world_matrix(mesh)
+    normal_matrix = _geometry_normal_matrix(world)
+    # Matrix4.makeRotationFromEuler(orientation).setPosition(position).
+    rotation = quat_to_mat4(quat_from_euler(Float64(orientation.x), Float64(orientation.y),
+                                            Float64(orientation.z); order=orientation.order))
+    e = rotation.e
+    projector = Mat4((e[1], e[2], e[3], 0.0, e[5], e[6], e[7], 0.0, e[9], e[10], e[11], 0.0,
+                      center.x, center.y, center.z, 1.0))
+    projector_inverse = mat4_inverse(projector)
+    points = Vector{Vec3{Float64}}(undef, length(entries))
+    normals = Vector{Vec3{Float64}}(undef, length(entries))
+    for (k, vi) in enumerate(entries)
+        points[k] = mat4_transform_point(projector_inverse, mat4_transform_point(world, get_vertex(geo, vi)))
+        normals[k] = has_normals ?
+            first(_transform_geometry_direction_pair(normal_matrix, get_normal(geo, vi), Vec3(), 1.0)) :
+            Vec3(0.0, 0.0, 0.0)
+    end
+    # DecalGeometry.js:100-105: +x, -x, +y, -y, +z, -z.
+    for (axis, sgn) in ((1, 1.0), (1, -1.0), (2, 1.0), (2, -1.0), (3, 1.0), (3, -1.0))
+        half = 0.5 * abs(axis == 1 ? sx : axis == 2 ? sy : sz)
+        points, normals = _decal_clip_plane(points, normals, axis, sgn, half)
+    end
+    n = length(points)
+    out_positions = Vector{Float64}(undef, 3n)
+    out_normals = has_normals ? Vector{Float64}(undef, 3n) : Float64[]
+    out_uvs = Vector{Float64}(undef, 2n)
+    for k in 1:n
+        p = points[k]
+        out_uvs[2k - 1] = 0.5 + (p.x / sx)
+        out_uvs[2k] = 0.5 + (p.y / sy)
+        w = mat4_transform_point(projector, p)
+        out_positions[3k - 2] = w.x
+        out_positions[3k - 1] = w.y
+        out_positions[3k] = w.z
+        if has_normals
+            out_normals[3k - 2] = normals[k].x
+            out_normals[3k - 1] = normals[k].y
+            out_normals[3k] = normals[k].z
+        end
+    end
+    return BufferGeometry(out_positions, out_normals, out_uvs, collect(1:n), n, n ÷ 3)
 end

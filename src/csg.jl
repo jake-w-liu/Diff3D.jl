@@ -121,8 +121,15 @@ function _csg_polygon(vertices::Vector{CSGVertex}, epsilon::Float64)
     return CSGPolygon(vertices, CSGPlane(plane.normal, plane.w, epsilon))
 end
 
-function _csg_polygon_flip(poly::CSGPolygon)
-    vertices = [_csg_vertex_flip(v) for v in Iterators.reverse(poly.vertices)]
+# Flips a polygon by reversing and negating its vertex list in place. Every
+# polygon's vertex list belongs to exactly one BSP node during an operation
+# (splitting builds new lists and moves unsplit polygons), so no other
+# polygon sees the change.
+function _csg_polygon_flip!(poly::CSGPolygon)
+    vertices = reverse!(poly.vertices)
+    @inbounds for i in eachindex(vertices)
+        vertices[i] = _csg_vertex_flip(vertices[i])
+    end
     return CSGPolygon(vertices, CSGPlane(
         -poly.plane.normal, -poly.plane.w, poly.plane.epsilon))
 end
@@ -143,11 +150,18 @@ end
     return polygon_type
 end
 
+# Placeholder vertex list for back fragments that are not built.
+const _CSG_NO_VERTICES = CSGVertex[]
+
 function _csg_split_polygon(plane::CSGPlane, polygon::CSGPolygon,
                             coplanar_front::Vector{CSGPolygon},
                             coplanar_back::Vector{CSGPolygon},
                             front::Vector{CSGPolygon},
-                            back::Vector{CSGPolygon})
+                            back::Vector{CSGPolygon},
+                            keep_back::Bool=true)
+    # With keep_back = false the caller discards everything behind the plane
+    # (clipping against a node without a back subtree), so those polygons and
+    # back fragments are not built at all.
     coplanar = 0
     front_type = 1
     back_type = 2
@@ -158,18 +172,18 @@ function _csg_split_polygon(plane::CSGPlane, polygon::CSGPolygon,
     if polygon_type == coplanar
         if dot(plane.normal, polygon.plane.normal) > 0.0
             push!(coplanar_front, polygon)
-        else
+        elseif keep_back
             push!(coplanar_back, polygon)
         end
     elseif polygon_type == front_type
         push!(front, polygon)
     elseif polygon_type == back_type
-        push!(back, polygon)
+        keep_back && push!(back, polygon)
     elseif polygon_type == spanning
         f = Vector{CSGVertex}(undef, n + 1)
-        b = Vector{CSGVertex}(undef, n + 1)
+        b = keep_back ? Vector{CSGVertex}(undef, n + 1) : _CSG_NO_VERTICES
         empty!(f)
-        empty!(b)
+        keep_back && empty!(b)
         for i in 1:n
             j = i == n ? 1 : i + 1
             vi = polygon.vertices[i]
@@ -177,14 +191,14 @@ function _csg_split_polygon(plane::CSGPlane, polygon::CSGPolygon,
             ti = _csg_vertex_type(plane, vi)
             tj = _csg_vertex_type(plane, vj)
             ti != back_type && push!(f, vi)
-            ti != front_type && push!(b, vi)
+            keep_back && ti != front_type && push!(b, vi)
             if (ti | tj) == spanning
                 denom = dot(plane.normal, vj.pos - vi.pos)
                 if abs(denom) > plane.epsilon
                     t = (plane.w - dot(plane.normal, vi.pos)) / denom
                     v = _csg_vertex_lerp(vi, vj, clamp(t, 0.0, 1.0))
                     push!(f, v)
-                    push!(b, v)
+                    keep_back && push!(b, v)
                 end
             end
         end
@@ -192,33 +206,47 @@ function _csg_split_polygon(plane::CSGPlane, polygon::CSGPolygon,
         # operation-wide tolerance instead of deriving a larger tolerance from
         # either fragment's current extent.
         fp = _csg_polygon(f, polygon.plane.epsilon)
-        bp = _csg_polygon(b, polygon.plane.epsilon)
         fp !== nothing && push!(front, fp)
-        bp !== nothing && push!(back, bp)
+        if keep_back
+            bp = _csg_polygon(b, polygon.plane.epsilon)
+            bp !== nothing && push!(back, bp)
+        end
     end
     return nothing
 end
 
-function _csg_build!(node::CSGNode, polygons::Vector{CSGPolygon})
+# Consumes `polygons`: its storage is reused for the polygons behind the
+# node's plane. Each input yields at most one back polygon, so the back list is
+# compacted in place, in order, ahead of the read position; a convex solid,
+# whose BSP is a chain of back nodes, then needs no list per level.
+function _csg_build!(node::CSGNode, polygons::Vector{CSGPolygon},
+                     split_back::Vector{CSGPolygon}=CSGPolygon[])
     isempty(polygons) && return node
     node.plane === nothing && (node.plane = polygons[1].plane)
     front = CSGPolygon[]
-    back = CSGPolygon[]
-    for p in polygons
-        _csg_split_polygon(node.plane::CSGPlane, p, node.polygons,
-                           node.polygons, front, back)
+    n_back = 0
+    for i in eachindex(polygons)
+        _csg_split_polygon(node.plane::CSGPlane, polygons[i], node.polygons,
+                           node.polygons, front, split_back)
+        if !isempty(split_back)
+            n_back += 1
+            polygons[n_back] = only(split_back)
+            empty!(split_back)
+        end
     end
+    back = resize!(polygons, n_back)
     if !isempty(front)
         node.front === nothing && (node.front = CSGNode())
-        _csg_build!(node.front::CSGNode, front)
+        _csg_build!(node.front::CSGNode, front, split_back)
     end
     if !isempty(back)
         node.back === nothing && (node.back = CSGNode())
-        _csg_build!(node.back::CSGNode, back)
+        _csg_build!(node.back::CSGNode, back, split_back)
     end
     return node
 end
 
+# Builds a BSP tree from `polygons`, consuming the vector (see _csg_build!).
 function _csg_node(polygons::Vector{CSGPolygon})
     node = CSGNode()
     _csg_build!(node, polygons)
@@ -246,7 +274,7 @@ function _csg_all_polygons(node::CSGNode)
 end
 
 function _csg_invert!(node::CSGNode)
-    map!(_csg_polygon_flip, node.polygons, node.polygons)
+    map!(_csg_polygon_flip!, node.polygons, node.polygons)
     node.plane !== nothing && (node.plane = _csg_plane_flip(node.plane))
     node.front !== nothing && _csg_invert!(node.front)
     node.back !== nothing && _csg_invert!(node.back)
@@ -256,10 +284,11 @@ end
 
 function _csg_clip_polygons(node::CSGNode, polygons::Vector{CSGPolygon})
     (isempty(polygons) || node.plane === nothing) && return copy(polygons)
+    keep_back = node.back !== nothing
     front = CSGPolygon[]
-    back = CSGPolygon[]
+    back = keep_back ? CSGPolygon[] : front
     for p in polygons
-        _csg_split_polygon(node.plane::CSGPlane, p, front, back, front, back)
+        _csg_split_polygon(node.plane::CSGPlane, p, front, back, front, back, keep_back)
     end
     if !isempty(front) && node.front !== nothing
         front = _csg_clip_polygons(node.front, front)

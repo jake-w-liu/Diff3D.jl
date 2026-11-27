@@ -6,6 +6,8 @@ using Test, Diff3D
 
 _segments(g) = [Tuple(g.positions[6k-5:6k]) for k in 1:(length(g.positions) ÷ 6)]
 _approx(a, b; atol=1e-12) = length(a) == length(b) && all(isapprox.(a, b; atol=atol))
+_xyz(p::Vec2) = [p.x, p.y]
+_xyz(p::Vec3) = [p.x, p.y, p.z]
 
 # Four vertices with hand-set normals and tangents, used by the transform tests.
 function _audit3b_quad()
@@ -278,4 +280,297 @@ end
     @test_throws ArgumentError Diff3D.to_triangles_draw_mode!(tri, :points)
     @test_throws ArgumentError Diff3D.to_triangles_draw_mode!(
         BufferGeometry(zeros(6), Float64[], Float64[], Int[], 2, 0), :triangle_strip)
+end
+
+@testset "BoxGeometry, PolyhedronGeometry and LatheGeometry use three.js order" begin
+    # BoxGeometry.js:76-81 builds px, nx, py, ny, pz, nz; buildPlane
+    # (BoxGeometry.js:111-160) emits rows top to bottom with UV
+    # (ix / gridX, 1 - iy / gridY) and faces (a, b, d), (b, c, d).
+    # new THREE.BoxGeometry(1, 2, 3, 2, 1, 1):
+    box = BoxGeometry(width=1.0, height=2.0, depth=3.0, width_segments=2)
+    @test box.positions[1:12] == [0.5, 1.0, 1.5, 0.5, 1.0, -1.5, 0.5, -1.0, 1.5, 0.5, -1.0, -1.5]
+    @test box.positions[25:36] == [-0.5, 1.0, -1.5, 0.0, 1.0, -1.5, 0.5, 1.0, -1.5, -0.5, 1.0, 1.5]
+    @test box.uvs[1:8] == [0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 1.0, 0.0]
+    @test box.indices[1:12] == [0, 2, 1, 2, 3, 1, 4, 6, 5, 6, 7, 5] .+ 1
+    @test box.normals[1:3] == [1.0, 0.0, 0.0] && box.normals[25:27] == [0.0, 1.0, 0.0]
+    # PolyhedronGeometry.js:84-131 subdivides each face into rows from corner a
+    # and emits (v[i][k+1], v[i+1][k], v[i][k]) then
+    # (v[i][k+1], v[i+1][k+1], v[i+1][k]). new THREE.OctahedronGeometry(1, 1):
+    r = 0.7071067811865475
+    octa = OctahedronGeometry(radius=1.0, detail=1)
+    @test _approx(octa.positions[1:18], [r, r, 0.0, r, 0.0, r, 1.0, 0.0, 0.0,
+                                         r, r, 0.0, 0.0, r, r, r, 0.0, r]; atol=1e-15)
+    @test _approx(octa.uvs[1:12], [1.0, 0.75, 0.875, 0.5, 1.0, 0.5, 1.0, 0.75, 0.75, 0.75, 0.875, 0.5];
+                  atol=1e-15)
+    # The icosahedron's last five faces keep the corner order of
+    # IcosahedronGeometry.js:44-45; node prints face 16 (vertices 46-48) of
+    # new THREE.IcosahedronGeometry(1, 0) as:
+    ico = IcosahedronGeometry(radius=1.0, detail=0)
+    @test _approx(ico.positions[136:144],
+                  [0.85065080835204, 0.0, 0.5257311121191336, 0.0, 0.5257311121191336,
+                   0.85065080835204, 0.0, -0.5257311121191336, 0.85065080835204]; atol=1e-15)
+    # LatheGeometry.js:176-177 emits (a, b, d), (c, d, b).
+    # new THREE.LatheGeometry([(1,0), (2,1), (1,2)], 2).index:
+    lathe = LatheGeometry([Vec2(1.0, 0.0), Vec2(2.0, 1.0), Vec2(1.0, 2.0)]; segments=2)
+    @test lathe.indices == [0, 3, 1, 4, 1, 3, 1, 4, 2, 5, 2, 4, 3, 6, 4, 7, 4, 6, 4, 7, 5, 8, 5, 7] .+ 1
+end
+
+@testset "ParametricGeometry follows three.js" begin
+    # ParametricGeometry.js:64-118: UV (u, v), faces (a, b, d), (b, c, d) and
+    # finite-difference normals. new ParametricGeometry(ParametricFunctions.mobius, 3, 2):
+    g = ParametricGeometry(Diff3D.ParametricFunctions.mobius, 3, 2)
+    @test g.n_vertices == 12
+    @test g.uvs[1:10] == [0.0, 0.0, 1 / 3, 0.0, 2 / 3, 0.0, 1.0, 0.0, 0.0, 0.5]
+    @test g.indices[1:12] == [0, 1, 4, 1, 5, 4, 1, 2, 5, 2, 6, 5] .+ 1
+    @test _approx(g.positions[13:18], [-2.0, 2.4492935982947064e-16, -0.5, -2.0,
+                                       2.4492935982947064e-16, -0.16666666666666669])
+    @test _approx(g.normals[1:12], [0.0, 0.16439898735798059, 0.9863939238233731, 0.0,
+                                    0.045407660938978696, 0.9989685402093756, 0.0,
+                                    -0.03843312212159912, 0.9992611746305297, 0.0,
+                                    -0.09950371907933925, 0.995037190204155]; atol=1e-9)
+    # Defaults slices = stacks = 8 (ParametricGeometry.js:33): 81 vertices.
+    @test ParametricGeometry(Diff3D.ParametricFunctions.plane).n_vertices == 81
+    # ParametricFunctions.js values at (0.3, 0.7) (klein also at (0.3, 0.2)).
+    P = Diff3D.ParametricFunctions
+    @test _approx(_xyz(P.klein(0.3, 0.7)), [0.6681523868762881, -2.196005658736544, 7.608452130361228])
+    @test _approx(_xyz(P.klein(0.3, 0.2)), [1.6472543531259733, -1.6082204064440706, -7.111484694069425])
+    @test _approx(_xyz(P.mobius(0.3, 0.7)), [-0.6543611151501632, -2.0139164314652964, -0.1618033988749895])
+    @test _approx(_xyz(P.mobius3d(0.3, 0.7)), [-0.842818859107538, 2.5939297274961, -0.3946110463437158])
+    @test P.plane(0.3, 0.7) == Vec3(0.3, 0.0, 0.7)
+    # The three.js NURBS example builds its surface as
+    # ParametricGeometry(getSurfacePoint, 20, 20); same faces and UVs here.
+    surface = NURBSSurface(1, 1, [0.0, 0.0, 1.0, 1.0], [0.0, 0.0, 1.0, 1.0],
+                           [[Vec4(0.0, 0.0, 0.0, 1.0), Vec4(0.0, 1.0, 0.0, 1.0)],
+                            [Vec4(1.0, 0.0, 0.0, 1.0), Vec4(1.0, 1.0, 0.0, 1.0)]])
+    ns = NURBSSurfaceGeometry(surface; slices=3, stacks=2)
+    @test ns.indices == ParametricGeometry((u, v) -> nurbs_point(surface, u, v), 3, 2).indices
+    @test ns.uvs == g.uvs
+end
+
+@testset "RoundedBoxGeometry, BoxLineGeometry and DecalGeometry match three.js" begin
+    # new RoundedBoxGeometry(2, 0.5, 1.5, 3, 0.2) vertices 0, 99, 999 (and UV 1500).
+    rb = Diff3D.RoundedBoxGeometry(width=2.0, height=0.5, depth=1.5, segments=3, radius=0.2)
+    @test rb.n_vertices == 1764 && rb.indices == collect(1:1764)
+    pos(i) = rb.positions[3i + 1:3i + 3]
+    nrm(i) = rb.normals[3i + 1:3i + 3]
+    uv(i) = rb.uvs[2i + 1:2i + 2]
+    @test _approx(pos(0), [0.9154700538379252, 0.16547005383792512, 0.6654700538379252])
+    @test _approx(pos(99), [0.9897366596101028, 0.05, 0.6132455532033676])
+    @test _approx(pos(999), [0.8632455532033676, -0.23973665961010276, 0.55])
+    @test _approx(nrm(0), [0.5773502691896257, 0.5773502691896257, 0.5773502691896257])
+    @test _approx(nrm(99), [0.9486832980505139, 6.143958570009227e-17, 0.316227766016838])
+    @test _approx(uv(99), [0.06557219124581573, 0.6207265035026119])
+    @test _approx(uv(999), [0.9515560050418423, 0.8889236619047887])
+    @test _approx(uv(1500), [0.9515560050418422, 1.0])
+    # segments = 0 returns the unit box (RoundedBoxGeometry.js:73-77 builds
+    # BoxGeometry(1, 1, 1, 1, 1, 1) and returns early).
+    @test Diff3D.RoundedBoxGeometry(width=3.0, segments=0).positions == BoxGeometry().positions
+    @test_throws ArgumentError Diff3D.RoundedBoxGeometry(width=0.0)
+    @test_throws ArgumentError Diff3D.RoundedBoxGeometry(radius=-0.1)
+
+    # new BoxLineGeometry(2, 3, 1, 2, 3, 1): 72 vertices; the first x rectangle
+    # and the first y rectangle (BoxLineGeometry.js:43-71).
+    bl = Diff3D.BoxLineGeometry(width=2.0, height=3.0, depth=1.0, width_segments=2,
+                                height_segments=3, depth_segments=1)
+    @test bl.n_vertices == 72 && bl.n_faces == 0 && isempty(bl.indices)
+    @test bl.positions[1:24] == [-1.0, -1.5, -0.5, -1.0, 1.5, -0.5, -1.0, 1.5, -0.5, -1.0, 1.5, 0.5,
+                                 -1.0, 1.5, 0.5, -1.0, -1.5, 0.5, -1.0, -1.5, 0.5, -1.0, -1.5, -0.5]
+    @test bl.positions[73:96] == [-1.0, -1.5, -0.5, 1.0, -1.5, -0.5, 1.0, -1.5, -0.5, 1.0, -1.5, 0.5,
+                                  1.0, -1.5, 0.5, -1.0, -1.5, 0.5, -1.0, -1.5, 0.5, -1.0, -1.5, -0.5]
+
+    # DecalGeometry.js:55-311 on a transformed torus; node prints 315 vertices
+    # and these first positions, normals and UVs.
+    torus = Mesh(TorusGeometry(radius=1.0, tube=0.4, radial_segments=10, tubular_segments=16),
+                 MeshBasicMaterial())
+    torus.position = Vec3(0.2, -0.1, 0.3)
+    torus.rotation = Euler(0.4, 0.2, -0.3, :YXZ)
+    torus.scale = Vec3(1.5, 0.8, 1.2)
+    decal = Diff3D.DecalGeometry(torus, Vec3(0.5, 0.6, 0.6), Euler(0.3, -0.5, 0.1, :ZYX),
+                                 Vec3(1.2, 0.9, 1.5))
+    @test decal.n_vertices == 315 && decal.n_faces == 105
+    @test _approx(decal.positions[1:9], [1.3102355038567923, 0.5917529910233622, 0.3733610661724025,
+                                         1.3100659483921546, 0.588957844612535, 0.37810780188729404,
+                                         1.313621794518319, 0.5892225423444535, 0.37158301488404105])
+    @test _approx(decal.normals[1:9], [0.5520193611320522, 0.8004916480987861, 0.2334261044944417,
+                                       0.5524499465648909, 0.7954663357664639, 0.24072952214322405,
+                                       0.5532786462642874, 0.7995267099486623, 0.23275456782973353])
+    @test _approx(decal.uvs[1:6], [0.9984310314733813, 0.2133373360872604, 1.0, 0.2118414239084236,
+                                   1.0, 0.2093028633793026])
+    @test_throws ArgumentError Diff3D.DecalGeometry(torus, Vec3(0.0, 0.0, 0.0),
+                                                    Euler(0.0, 0.0, 0.0, :XYZ), Vec3(1.0, 0.0, 1.0))
+end
+
+@testset "Curve hierarchy matches three.js" begin
+    D = Diff3D
+    V2(x, y) = Vec2(Float64(x), Float64(y))
+    V3(x, y, z) = Vec3(Float64(x), Float64(y), Float64(z))
+    flat(points) = reduce(vcat, [_xyz(p) for p in points])
+    # Curve.js on new THREE.QuadraticBezierCurve3((-1,-1,0), (-1,1,0), (1,1,0)).
+    q = D.QuadraticBezierCurve3(V3(-1, -1, 0), V3(-1, 1, 0), V3(1, 1, 0))
+    @test D.get_length(q) ≈ 3.2464421469288975 atol = 1e-12
+    @test _approx(D.get_lengths(q, 4), [0.0, 0.8838834764831844, 1.612752463338847,
+                                         2.3416214501945096, 3.225504926677694])
+    @test D.get_u_to_t_mapping(q, 0.3) ≈ 0.2775757937240636 atol = 1e-12
+    @test D.get_u_to_t_mapping(q, 0.0, 1.5) ≈ 0.456489888802106 atol = 1e-12
+    @test _approx(_xyz(D.get_point_at(q, 0.3)), [-0.8459033574769123, -0.04379346762683342, 0.0])
+    @test _approx(_xyz(D.get_tangent_at(q, 0.3)), [0.35866425671859564, 0.9334666308725219, 0.0])
+    @test D.get_points(q, 2) == [V3(-1, -1, 0), V3(-0.5, 0.5, 0), V3(1, 1, 0)]
+    frames = D.compute_frenet_frames(q, 4)
+    @test all(n -> n == V3(0, 0, -1), frames.normals)
+    @test _approx(flat(frames.binormals),
+                  [-0.999999998749875, 0.00005000250003618196, 0.0, -0.959838066895765, 0.2805546031306576, 0.0,
+                   -0.7071067811864004, 0.7071067811866948, 0.0, -0.2805546031308394, 0.9598380668957118, 0.0,
+                   -0.00005000250003619584, 0.999999998749875, 0.0])
+    @test all(n -> n == V3(0, 0, -1), D.compute_frenet_frames(q, 4, true).normals)
+    # EllipseCurve.js:123-170 sweep handling, ArcCurve and the 2D curves.
+    @test _approx(_xyz(D.get_point(D.EllipseCurve(0.5, -0.2, 2, 1, 0.3, 4, false, 0.25), 0.4)),
+                  [-0.14445911787776855, 0.6450246390916015])
+    @test _approx(_xyz(D.get_point(D.EllipseCurve(0, 0, 1, 1.5, 0.3, 4, true), 0.4)),
+                  [0.7429869990346246, -1.0039587732309658])
+    @test _approx(_xyz(D.get_point(D.EllipseCurve(0, 0, 1, 1, 0, 4π), 0.25)), [0.0, 1.0])
+    @test _approx(_xyz(D.get_point(D.EllipseCurve(0, 0, 1, 1, 1, 1, true), 0.5)),
+                  [0.5403023058681398, 0.8414709848078965])
+    @test _approx(_xyz(D.get_point(D.ArcCurve(1, 1, 2, 0, π, true), 0.25)),
+                  [2.414213562373095, -0.4142135623730949])
+    spline = D.SplineCurve([V2(0, 0), V2(1, 1), V2(2, -1), V2(4, 0), V2(5, 2)])
+    @test _approx(_xyz(D.get_point(spline, 0.37)), [1.420096, 0.054976000000000025])
+    @test D.get_point(spline, 1.0) == V2(5, 2)
+    @test _approx(_xyz(D.get_point(D.CubicBezierCurve(V2(0, 0), V2(1, 2), V2(2, -1), V2(3, 0.5)), 0.3)),
+                  [0.8999999999999998, 0.7064999999999998])
+    @test _approx(_xyz(D.get_point(D.CubicBezierCurve3(V3(0, 0, 0), V3(1, 2, 1), V3(2, -1, 0.5),
+                                                                 V3(3, 0.5, -1)), 0.3)),
+                  [0.8999999999999998, 0.7064999999999998, 0.5084999999999998])
+    @test _approx(_xyz(D.get_point(D.QuadraticBezierCurve(V2(0, 0), V2(1, 2), V2(3, 0.5)), 0.3)),
+                  [0.69, 0.885])
+    @test D.get_point(D.LineCurve(V2(0, 0), V2(2, 1)), 0.3) == V2(0.6, 0.3)
+
+    # Path / Shape pen commands and CurvePath sampling (CurvePath.js:90-213).
+    shape = D.Shape()
+    D.move_to!(shape, 0, 0); D.line_to!(shape, 2, 0); D.quadratic_curve_to!(shape, 3, 1, 2, 2)
+    D.bezier_curve_to!(shape, 1.5, 3, 0.5, 3, 0, 2)
+    D.spline_thru!(shape, [V2(-0.5, 1.5), V2(-0.2, 0.8)])
+    D.absarc!(shape, 0.0, 0.3, 0.3, π / 2, 3π / 2, false)
+    D.close_path!(shape)
+    @test length(shape.curves) == 7
+    pts = D.get_points(shape, 2)
+    @test length(pts) == 18
+    @test pts[1:6] == [V2(0, 0), V2(2, 0), V2(2.5, 1), V2(2, 2), V2(1, 2.75), V2(0, 2)]
+    @test _approx(_xyz(pts[7]), [-0.15925925925925927, 1.8777777777777778])
+    @test _approx(_xyz(pts[14]), [-0.21213203435596423, 0.5121320343559642])
+    @test D.get_length(shape) ≈ 9.647027011181313 atol = 1e-12
+    @test _approx(_xyz(D.get_point(shape, 0.43)), [2.1012878879717687, 1.8929861275834372])
+    @test _approx(flat(D.get_spaced_points(shape, 4)),
+                  [0.0, 0.0, 2.2649849191422264, 0.31441254262089474, 1.6989667379910611, 2.4310578233130364,
+                   -0.24265323975047576, 1.814581882183391, -5.510910596163089e-17, 0.0])
+    path3 = D.CurvePath([D.LineCurve3(V3(0, 0, 0), V3(1, 0, 0)),
+                         D.QuadraticBezierCurve3(V3(1, 0, 0), V3(2, 1, 0), V3(2, 2, 1))]; auto_close=true)
+    @test D.get_points(path3, 2) == [V3(0, 0, 0), V3(1, 0, 0), V3(1.75, 1, 0.25), V3(2, 2, 1), V3(0, 0, 0)]
+    @test _approx(flat(D.get_spaced_points(path3, 2)),
+                  [0.0, 0.0, 0.0, 1.5067766839893522, 0.5954028107522815, 0.08862612676292929,
+                   2.0, 2.0, 1.0, 0.0, 0.0, 0.0])
+    @test_throws ArgumentError D.add!(path3, D.LineCurve(V2(0, 0), V2(1, 1)))
+
+    # TubeGeometry.js:73-160 along a curve: new THREE.TubeGeometry(q, 3, 0.5, 4).
+    tube = TubeGeometry(q; tubular_segments=3, radius=0.5, radial_segments=4)
+    @test tube.n_vertices == 20
+    @test _approx(tube.positions[16:27], [-0.8040910485164533, 0.05599823831463223, 0.5, -1.2591010983805018,
+                                          0.26328030344019054, 3.061616997868383e-17, -0.8040910485164534,
+                                          0.05599823831463226, -0.5, -0.3490809986524049,
+                                          -0.15128382681092606, -9.184850993605148e-17])
+    @test _approx(tube.normals[16:21], [0.0, 0.0, 1.0, -0.9100200997280968, 0.4145641302511166,
+                                        6.123233995736766e-17])
+    @test tube.indices[1:12] == [0, 5, 1, 5, 6, 1, 1, 6, 2, 6, 7, 2] .+ 1
+    closed = TubeGeometry(q; tubular_segments=3, radius=0.5, radial_segments=4, closed=true)
+    @test _approx(closed.positions[46:60], [-1.0, -1.0, 0.5, -1.4999999993749376, -0.9999749987499819,
+                                            3.061616997868383e-17, -1.0, -1.0, -0.5, -0.5000000006250624,
+                                            -1.000025001250018, -9.184850993605148e-17,
+                                            -0.9999999999999999, -1.0, 0.5])
+    # CatmullRomCurve is a Curve: new THREE.TubeGeometry(CatmullRomCurve3(...), 4, 0.2, 3).
+    cr = CatmullRomCurve([V3(0, 0, 0), V3(1, 2, 0.5), V3(3, 1, -1), V3(4, -1, 0)])
+    @test _approx(TubeGeometry(cr; tubular_segments=4, radius=0.2, radial_segments=3).positions[25:36],
+                  [2.2455101398533306, 1.744597256556591, -0.2373678954290032, 2.06394104972566,
+                   1.859029385662986, -0.5092832376559309, 1.9969925006863614, 1.5466349283018648,
+                   -0.37538926918989673, 2.2455101398533306, 1.7445972565565908, -0.2373678954290032];
+                  atol=1e-9)
+
+    # Shape -> ShapeGeometry / ExtrudeGeometry sample with extract_points.
+    sq = D.Shape([V2(0, 0), V2(2, 0), V2(2, 2)])
+    D.absarc!(sq, 1.0, 2.0, 0.5, 0.0, π)
+    D.line_to!(sq, 0, 2)
+    push!(sq.holes, D.Path([V2(0.5, 0.5), V2(1.5, 0.5), V2(1.0, 1.2)]))
+    sampled = D.extract_points(sq, 5)
+    # node: new THREE.Shape(...).extractPoints(5) has 15 outline and 3 hole points.
+    @test length(sampled.shape) == 15 && length(sampled.holes[1]) == 3
+    @test ShapeGeometry(sq; curve_segments=5).positions ==
+          ShapeGeometry(sampled.shape; holes=sampled.holes).positions
+    @test ExtrudeGeometry(sq; curve_segments=5, depth=0.5).positions ==
+          ExtrudeGeometry(sampled.shape; holes=sampled.holes, depth=0.5).positions
+end
+
+@testset "ShapePath.to_shapes matches three.js" begin
+    # ShapePath.js toShapes: an outer square, a same-winding inner square, a
+    # nested bump outline, a separate open curve and a degenerate sub-path.
+    D = Diff3D
+    function build(rule)
+        sp = D.ShapePath(; fill_rule=rule)
+        D.move_to!(sp, 0, 0); D.line_to!(sp, 10, 0); D.line_to!(sp, 10, 10); D.line_to!(sp, 0, 10); D.line_to!(sp, 0, 0)
+        D.move_to!(sp, 2, 2); D.line_to!(sp, 8, 2); D.line_to!(sp, 8, 8); D.line_to!(sp, 2, 8)
+        D.move_to!(sp, 3, 3); D.line_to!(sp, 3, 7); D.quadratic_curve_to!(sp, 5, 9, 7, 7); D.line_to!(sp, 7, 3)
+        D.move_to!(sp, 20, 0); D.line_to!(sp, 25, 0); D.bezier_curve_to!(sp, 26, 2, 24, 4, 22, 5)
+        D.move_to!(sp, 4, 4); D.line_to!(sp, 4.5, 4)
+        return D.to_shapes(sp)
+    end
+    # node prints 2 shapes without holes for nonzero, and 3 shapes (the first
+    # with one hole) for evenodd.
+    nonzero = build(:nonzero)
+    @test length(nonzero) == 2 && all(s -> isempty(s.holes), nonzero)
+    @test D.get_points(nonzero[1], 6)[1:3] == [Vec2(0.0, 0.0), Vec2(10.0, 0.0), Vec2(10.0, 10.0)]
+    evenodd = build(:evenodd)
+    @test length.(getfield.(evenodd, :holes)) == [1, 0, 0]
+    @test D.get_points(evenodd[1].holes[1], 6)[1] == Vec2(2.0, 2.0)
+    @test D.get_points(evenodd[2], 6)[1] == Vec2(3.0, 3.0)
+    @test_throws ArgumentError D.line_to!(D.ShapePath(), 1, 1)
+end
+
+@testset "LatheGeometry accepts three.js segment counts" begin
+    # LatheGeometry.js:56 only floors the count; 1 and 2 segments give
+    # segments + 1 rows (new THREE.LatheGeometry(points, 2): 9 vertices).
+    points = [Vec2(1.0, 0.0), Vec2(2.0, 1.0), Vec2(1.0, 2.0)]
+    @test LatheGeometry(points; segments=2).n_vertices == 9
+    @test LatheGeometry(points; segments=1).n_vertices == 6
+end
+
+@testset "CatmullRomCurve stays finite near floatmax" begin
+    # node: CatmullRomCurve3 of the unit diamond (-1,0,0), (0,1,0), (1,0,0),
+    # (0,-1,0) gives (0.625, 0.625, 0) at 0.5 (centripetal, open) and
+    # (0.232, 0.928, 0) at 0.3 (chordal, closed). Scaled by floatmax, three.js
+    # prints NaN because the point differences overflow; the non-uniform
+    # parameterizations are scale invariant, so Diff3D returns the scaled
+    # points.
+    L = floatmax(Float64)
+    diamond = [Vec3(-1.0, 0.0, 0.0), Vec3(0.0, 1.0, 0.0), Vec3(1.0, 0.0, 0.0), Vec3(0.0, -1.0, 0.0)]
+    open = catmull_rom_point(CatmullRomCurve(diamond .* L; curve_type=:centripetal), 0.5)
+    @test isapprox(open.x / L, 0.625; atol=1e-15) && isapprox(open.y / L, 0.625; atol=1e-15)
+    closed = catmull_rom_point(CatmullRomCurve(diamond .* L; curve_type=:chordal, closed=true), 0.3)
+    @test isapprox(closed.x / L, 0.23199999999999993; atol=1e-15) &&
+          isapprox(closed.y / L, 0.928; atol=1e-15)
+    for curve_type in (:centripetal, :chordal), closed in (false, true)
+        curve = CatmullRomCurve(diamond .* L; curve_type=curve_type, closed=closed)
+        @test all(p -> isfinite(p.x) && isfinite(p.y) && isfinite(p.z),
+                  catmull_rom_points(curve; segments=16))
+    end
+end
+
+@testset "CSG builds back chains in place" begin
+    # A convex operand's BSP tree is a chain of back nodes. Building it by
+    # copying the remaining polygons at every level allocated about 112 MB
+    # (Julia 1.13) / 105 MB (1.10) for this union; compacting each back list
+    # in place and building no discarded back fragments while clipping brings
+    # it to about 47 MB / 77 MB with the same output (1663 triangles).
+    sphere = SphereGeometry(radius=1.0, width_segments=32, height_segments=16)
+    box = BoxGeometry(width=2.0, height=2.0, depth=2.0)
+    @test csg_union(sphere, box).n_faces == 1663
+    probe() = @allocated csg_union(sphere, box)
+    probe()
+    @test probe() < 90_000_000
 end

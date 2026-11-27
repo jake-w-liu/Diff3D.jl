@@ -1191,76 +1191,64 @@ function _box_write_vertex!(positions::Vector{Float64}, normals_arr::Vector{Floa
     return nothing
 end
 
-function _box_add_quad_face!(positions::Vector{Float64}, normals_arr::Vector{Float64},
-                             uvs_arr::Vector{Float64}, indices::Vector{Int},
-                             vi::Int, out::Int, p1, p2, p3, p4, n)
-    base = vi + 1
-    _box_write_vertex!(positions, normals_arr, uvs_arr, base, p1, n, 0.0, 0.0)
-    _box_write_vertex!(positions, normals_arr, uvs_arr, base + 1, p2, n, 1.0, 0.0)
-    _box_write_vertex!(positions, normals_arr, uvs_arr, base + 2, p3, n, 1.0, 1.0)
-    _box_write_vertex!(positions, normals_arr, uvs_arr, base + 3, p4, n, 0.0, 1.0)
-    indices[out] = base
-    indices[out + 1] = base + 1
-    indices[out + 2] = base + 2
-    indices[out + 3] = base
-    indices[out + 4] = base + 2
-    indices[out + 5] = base + 3
-    return vi + 4, out + 6
-end
+# BoxGeometry.js:99-150 `buildPlane`: a (grid_x + 1) × (grid_y + 1) vertex grid
+# with `vector[u] = x * udir`, `vector[v] = y * vdir`, `vector[w] = depth / 2`.
+# `u`, `v`, `w` are axis numbers (1 = x, 2 = y, 3 = z).
+@inline _box_axis_vec(u::Int, v::Int, w::Int, a::Float64, b::Float64, c::Float64) =
+    Vec3(u == 1 ? a : v == 1 ? b : c, u == 2 ? a : v == 2 ? b : c, u == 3 ? a : v == 3 ? b : c)
 
-# Grid points of a side, `a + (b - a) * t` as in BoxGeometry.js:111-115
-# (`iy * segmentHeight - heightHalf`). A constant coordinate stays exact and
-# t == 1 returns `b`, so subdivided sides share their edge vertices exactly
-# with the neighbouring sides.
-@inline _box_lerp(a::Float64, b::Float64, t::Float64) =
-    t == 1.0 ? b : a + (b - a) * t
-@inline _box_lerp(a::Vec3, b::Vec3, t::Float64) =
-    Vec3(_box_lerp(a.x, b.x, t), _box_lerp(a.y, b.y, t), _box_lerp(a.z, b.z, t))
-
-function _box_add_grid_face!(positions::Vector{Float64}, normals_arr::Vector{Float64},
-                             uvs_arr::Vector{Float64}, indices::Vector{Int},
-                             vi::Int, out::Int, p1, p2, p3, p4, n,
-                             u_segments::Int, v_segments::Int)
-    base = vi + 1
-    row = u_segments + 1
-    for j in 0:v_segments
-        tv = j / v_segments
-        left = _box_lerp(p1, p4, tv)
-        right = _box_lerp(p2, p3, tv)
-        for i in 0:u_segments
-            tu = i / u_segments
-            p = _box_lerp(left, right, tu)
-            _box_write_vertex!(positions, normals_arr, uvs_arr,
-                               base + j * row + i, p, n, tu, tv)
+function _box_build_plane!(positions::Vector{Float64}, normals_arr::Vector{Float64},
+                           uvs_arr::Vector{Float64}, indices::Vector{Int},
+                           vi::Int, out::Int, u::Int, v::Int, w::Int,
+                           udir::Float64, vdir::Float64, width::Float64,
+                           height::Float64, depth::Float64, grid_x::Int, grid_y::Int)
+    segment_width = width / grid_x
+    segment_height = height / grid_y
+    width_half = width / 2
+    height_half = height / 2
+    depth_half = depth / 2
+    row = grid_x + 1
+    # BoxGeometry.js:131 orients each side by the sign of its signed offset,
+    # so a negative dimension keeps the normals pointing away from the center
+    # and a zero one gives -1.
+    n = _box_axis_vec(u, v, w, 0.0, 0.0, depth > 0 ? 1.0 : -1.0)
+    dst = vi
+    for iy in 0:grid_y
+        y = iy * segment_height - height_half
+        for ix in 0:grid_x
+            x = ix * segment_width - width_half
+            dst += 1
+            _box_write_vertex!(positions, normals_arr, uvs_arr, dst,
+                               _box_axis_vec(u, v, w, x * udir, y * vdir, depth_half),
+                               n, ix / grid_x, 1 - iy / grid_y)
         end
     end
-    for j in 0:(v_segments - 1), i in 0:(u_segments - 1)
-        a = base + j * row + i
-        b = a + 1
-        d0 = a + row
-        c = d0 + 1
+    for iy in 0:(grid_y - 1), ix in 0:(grid_x - 1)
+        a = vi + ix + row * iy + 1
+        b = vi + ix + row * (iy + 1) + 1
+        c = vi + (ix + 1) + row * (iy + 1) + 1
+        d = vi + (ix + 1) + row * iy + 1
         indices[out] = a
         indices[out + 1] = b
-        indices[out + 2] = c
-        indices[out + 3] = a
+        indices[out + 2] = d
+        indices[out + 3] = b
         indices[out + 4] = c
-        indices[out + 5] = d0
+        indices[out + 5] = d
         out += 6
     end
-    return vi + row * (v_segments + 1), out
+    return dst, out
 end
 
-function _box_add_face!(positions::Vector{Float64}, normals_arr::Vector{Float64},
-                        uvs_arr::Vector{Float64}, indices::Vector{Int},
-                        vi::Int, out::Int, use_quad_faces::Bool,
-                        p1, p2, p3, p4, n, u_segments::Int, v_segments::Int)
-    return use_quad_faces ?
-        _box_add_quad_face!(positions, normals_arr, uvs_arr, indices,
-                            vi, out, p1, p2, p3, p4, n) :
-        _box_add_grid_face!(positions, normals_arr, uvs_arr, indices,
-                            vi, out, p1, p2, p3, p4, n, u_segments, v_segments)
-end
+"""
+    BoxGeometry(; width=1, height=1, depth=1, width_segments=1, height_segments=1,
+                depth_segments=1)
 
+Axis-aligned box centred on the origin (three.js `BoxGeometry`). Each side is a
+separate grid of vertices with flat normals, built in three.js's order (+x,
+-x, +y, -y, +z, -z) with its vertex layout, UVs and triangles, so indices and
+raycast `face_index` values match three.js. three.js's per-side draw groups are
+not added.
+"""
 function BoxGeometry(; width=1.0, height=1.0, depth=1.0,
                      width_segments=1, height_segments=1, depth_segments=1)
     width = _geometry_finite_float(width, "BoxGeometry width")
@@ -1269,11 +1257,6 @@ function BoxGeometry(; width=1.0, height=1.0, depth=1.0,
     ws = _geometry_segment_count("width_segments", width_segments)
     hs = _geometry_segment_count("height_segments", height_segments)
     ds = _geometry_segment_count("depth_segments", depth_segments)
-    w, h, d = width/2, height/2, depth/2
-    # BoxGeometry.js:131 orients each side by the sign of its signed offset
-    # (`depth > 0 ? 1 : -1`), so a negative dimension keeps the normals
-    # pointing away from the center and a zero one gives both sides -1.
-    side(offset) = offset > 0 ? 1.0 : -1.0
 
     # Vertices are duplicated per face so each face keeps flat normals and UVs.
     n_verts = 2 * ((ws + 1) * (hs + 1) +
@@ -1286,35 +1269,20 @@ function BoxGeometry(; width=1.0, height=1.0, depth=1.0,
     normals_arr = Vector{Float64}(undef, position_len)
     uvs_arr = Vector{Float64}(undef, uv_len)
     indices = Vector{Int}(undef, index_len)
-    use_quad_faces = ws == 1 && hs == 1 && ds == 1
 
     vi = 0
     out = 1
-
-    # +Z face
-    vi, out = _box_add_face!(positions, normals_arr, uvs_arr, indices, vi, out,
-                             use_quad_faces, Vec3(-w,-h,d), Vec3(w,-h,d),
-                             Vec3(w,h,d), Vec3(-w,h,d), Vec3(0.0, 0.0, side(depth)), ws, hs)
-    # -Z face
-    vi, out = _box_add_face!(positions, normals_arr, uvs_arr, indices, vi, out,
-                             use_quad_faces, Vec3(w,-h,-d), Vec3(-w,-h,-d),
-                             Vec3(-w,h,-d), Vec3(w,h,-d), Vec3(0.0, 0.0, side(-depth)), ws, hs)
-    # +Y face
-    vi, out = _box_add_face!(positions, normals_arr, uvs_arr, indices, vi, out,
-                             use_quad_faces, Vec3(-w,h,d), Vec3(w,h,d),
-                             Vec3(w,h,-d), Vec3(-w,h,-d), Vec3(0.0, side(height), 0.0), ws, ds)
-    # -Y face
-    vi, out = _box_add_face!(positions, normals_arr, uvs_arr, indices, vi, out,
-                             use_quad_faces, Vec3(-w,-h,-d), Vec3(w,-h,-d),
-                             Vec3(w,-h,d), Vec3(-w,-h,d), Vec3(0.0, side(-height), 0.0), ws, ds)
-    # +X face
-    vi, out = _box_add_face!(positions, normals_arr, uvs_arr, indices, vi, out,
-                             use_quad_faces, Vec3(w,-h,d), Vec3(w,-h,-d),
-                             Vec3(w,h,-d), Vec3(w,h,d), Vec3(side(width), 0.0, 0.0), ds, hs)
-    # -X face
-    vi, out = _box_add_face!(positions, normals_arr, uvs_arr, indices, vi, out,
-                             use_quad_faces, Vec3(-w,-h,-d), Vec3(-w,-h,d),
-                             Vec3(-w,h,d), Vec3(-w,h,-d), Vec3(side(-width), 0.0, 0.0), ds, hs)
+    # BoxGeometry.js:63-68: px, nx, py, ny, pz, nz.
+    for (u, v, w, udir, vdir, sw, sh, sd, gx, gy) in (
+            (3, 2, 1, -1.0, -1.0, depth, height, width, ds, hs),
+            (3, 2, 1, 1.0, -1.0, depth, height, -width, ds, hs),
+            (1, 3, 2, 1.0, 1.0, width, depth, height, ws, ds),
+            (1, 3, 2, 1.0, -1.0, width, depth, -height, ws, ds),
+            (1, 2, 3, 1.0, -1.0, width, height, depth, ws, hs),
+            (1, 2, 3, -1.0, -1.0, width, height, -depth, ws, hs))
+        vi, out = _box_build_plane!(positions, normals_arr, uvs_arr, indices, vi, out,
+                                    u, v, w, udir, vdir, sw, sh, sd, gx, gy)
+    end
 
     BufferGeometry(positions, normals_arr, uvs_arr, indices, n_verts, n_faces)
 end
@@ -2115,11 +2083,12 @@ const _ICOSAHEDRON_BASE_VERTS = Vec3{Float64}[
     Vec3(-_ICOSAHEDRON_T,  0.0,  1.0),
 ]
 
+# IcosahedronGeometry.js:34-39, one-based, in three.js's corner order.
 const _ICOSAHEDRON_BASE_FACES = NTuple{3,Int}[
     (1,12,6), (1,6,2), (1,2,8), (1,8,11), (1,11,12),
     (2,6,10), (6,12,5), (12,11,3), (11,8,7), (8,2,9),
     (4,10,5), (4,5,3), (4,3,7), (4,7,9), (4,9,10),
-    (10,6,5), (5,12,3), (3,11,7), (7,8,9), (9,2,10),
+    (5,10,6), (3,5,12), (7,3,11), (9,7,8), (10,9,2),
 ]
 
 function IcosahedronGeometry(; radius=1.0, detail=0)
