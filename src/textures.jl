@@ -303,8 +303,8 @@ DepthTexture(depth::Matrix{Float64}; filter=nothing, min_filter=nothing,
                              filter, min_filter, mag_filter, kwargs)
 
 # Wrap a 0-based integer pixel coordinate into [0, n-1] per the mode (n >= 1).
-# Samplers reduce UVs to [0, 1] (one [0, 2] period for mirrored nearest) first,
-# so most indices are already in range; returning them directly skips `mod`.
+# Samplers reduce UVs to [0, 1] first, so almost every index is already in
+# range; returning it directly skips the integer divisions of `mod`.
 @inline function _wrap_coord(i::Int, n::Int, mode::Symbol)
     if mode === :repeat
         return 0 <= i < n ? i : mod(i, n)
@@ -461,14 +461,16 @@ end
 end
 
 # NEAREST texel selection (GLES 3.0 §3.8.10, used by WebGL 2/three.js):
-# i = wrap(floor(s * W)) and j = wrap(floor(t * H)); the wrap applies to the
-# integer texel index. Mirrored repeat therefore reduces the coordinate only to
-# one full mirror period [0, 2]: folding it into [0, 1] first would move every
-# texel boundary of a reflected period to the neighbouring texel.
-@inline function _nearest_sampling_uv(x, mode::Symbol)
-    mode === :mirror || return _sampling_uv(x, mode)
+# i = wrap(floor(s * n)); the wrap applies to the integer texel index. Mirrored
+# repeat therefore reduces the coordinate only to one full mirror period
+# [0, 2) and reflects the index: folding the coordinate into [0, 1] first would
+# move every texel boundary of a reflected period to the neighbouring texel.
+@inline function _nearest_texel_index(x, n::Int, mode::Symbol)
+    mode === :mirror || return floor(Int, _sampling_uv(x, mode) * n)
     x = _sanitize_uv(x)
-    return mod(x, one(x) + one(x))
+    i = floor(Int, mod(x, one(x) + one(x)) * n)   # 0:2n (2n only by rounding)
+    i = i >= 2n ? i - 2n : i
+    return i < n ? i : 2n - 1 - i
 end
 
 # 0-based (column, storage row) of the NEAREST texel. A 2D texture is uploaded
@@ -476,16 +478,15 @@ end
 # so t = v counts rows from the bottom and the storage row is H - 1 - j. Cube
 # faces are uploaded top row first (CubeTexture.js `flipY = false`; web export
 # writes faces with `flip_y=false`) and GL's face coordinate is t = 1 - v, so
-# j counts storage rows from the top. `_wrap_coord` handles out-of-range
-# indices; its repeat, clamp and mirror patterns commute with i -> H - 1 - i.
+# j counts storage rows from the top. `_wrap_coord` reduces the remaining
+# out-of-range repeat/clamp indices (i == n from a coordinate of exactly 1).
 @inline function _nearest_texel_indices(u, v, W::Int, H::Int, wrap_s::Symbol,
                                         wrap_t::Symbol, rows_from_top::Bool)
-    su = _nearest_sampling_uv(u, wrap_s)
-    sv = _nearest_sampling_uv(v, wrap_t)
-    ix = floor(Int, su * W)
-    iy = rows_from_top ? floor(Int, (1 - sv) * H) : H - 1 - floor(Int, sv * H)
+    ix = _nearest_texel_index(u, W, wrap_s)
+    iy = rows_from_top ? _nearest_texel_index(1 - _sanitize_uv(v), H, wrap_t) :
+         H - 1 - _nearest_texel_index(v, H, wrap_t)
     # Scalar type that linear filtering returns for the same coordinates.
-    return ix, iy, promote_type(typeof(su), typeof(sv), Float64)
+    return ix, iy, promote_type(typeof(u), typeof(v), Float64)
 end
 
 # Nearest filtering returns stored constants. Give them the scalar type that
