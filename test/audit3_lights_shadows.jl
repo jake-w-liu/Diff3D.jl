@@ -212,9 +212,9 @@ end
     end
     @test query(point, Vec3(0.0, 0.0, -4.5)) == 1.0
 
-    # The WebGL static export still uploads one square texture per light.
+    # The WebGL export draws all six faces in the browser (one atlas texture per light).
     json = Diff3D._web_shadow_json(scene, point)
-    @test occursin("\"type\":\"pointStatic\",\"size\":64,", json)
+    @test occursin("\"type\":\"pointDynamic\",\"size\":64,", json)
 end
 
 @testset "Cube faces fit near planes to the frustum, not only the depth slab" begin
