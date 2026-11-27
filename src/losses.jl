@@ -3,10 +3,6 @@
 # All pure Julia, ForwardDiff compatible.
 # --------------------------------------------------------------------------
 
-"""
-L2 (MSE) loss between two images.
-Images are Array{T, 3} of size (H, W, C).
-"""
 function _checked_loss_image_size(image::AbstractArray, target::AbstractArray, label::String)
     size(image) == size(target) ||
         throw(ArgumentError("$label: image and target sizes must match; got $(size(image)) and $(size(target))"))
@@ -63,6 +59,14 @@ end
     end
 end
 
+"""
+    loss_mse(image, target)
+
+Mean squared error `sum((image - target)^2) / length(image)` between two
+`(H, W, C)` image arrays of equal size, accumulated with compensated summation.
+The result type is `promote_type(Float32, float(promote_type(T, S)))`;
+`Float16` and `Float32` data are accumulated in `Float64`.
+"""
 function loss_mse(image::Array{T, 3}, target::Array{S, 3}) where {T, S}
     H, W, C = _checked_loss_image_size(image, target, "loss_mse")
     R = _loss_accumulator_type(T, S)
@@ -94,7 +98,11 @@ function loss_mse(image::Array{T, 3}, target::Array{S, 3}) where {T, S}
 end
 
 """
-L1 loss between two images.
+    loss_l1(image, target)
+
+Mean absolute error `sum(abs(image - target)) / length(image)` between two
+`(H, W, C)` image arrays of equal size, with the accumulation and result type
+of [`loss_mse`](@ref).
 """
 function loss_l1(image::Array{T, 3}, target::Array{S, 3}) where {T, S}
     H, W, C = _checked_loss_image_size(image, target, "loss_l1")
@@ -126,9 +134,19 @@ function loss_l1(image::Array{T, 3}, target::Array{S, 3}) where {T, S}
 end
 
 """
-Structural Similarity Index (SSIM) loss.
-Returns 1 - SSIM (so that minimizing this maximizes SSIM).
-Simplified single-channel average SSIM.
+    loss_ssim(image, target; window_size=7, C1=0.01^2, C2=0.03^2)
+
+Structural-similarity loss `1 - mean(SSIM)`, so minimizing it maximizes SSIM.
+SSIM is evaluated per channel on every fully contained `window_size` x
+`window_size` uniform window (no padding), using window means, unbiased
+(`n - 1`) variances and covariance, and the stabilizing constants `C1`, `C2`;
+the mean runs over all windows of all channels. `window_size` must be an odd
+integer `>= 3` no larger than either image dimension.
+
+With several Julia threads, at least 1024 windows and an isbits accumulator
+(`Float32`, `Float64`, ForwardDiff duals), windows are evaluated in parallel
+and summed in the serial order, so the result does not depend on the thread
+count; that path allocates one buffer of window values.
 """
 function loss_ssim(image::Array{T, 3}, target::Array{S, 3};
                    window_size=7, C1=0.01^2, C2=0.03^2) where {T, S}
@@ -149,104 +167,138 @@ function loss_ssim(image::Array{T, 3}, target::Array{S, 3};
     if min(H, W) < 2*hw + 1
         throw(ArgumentError("loss_ssim: image of size $(H)x$(W) is smaller than the SSIM window (window_size=$(window_size))"))
     end
-    ssim_sum = zero(R)
-    count = 0
-
-    for c in 1:C
-        for j in (hw+1):(W-hw)
-            for i in (hw+1):(H-hw)
-                # Local means
-                μx = zero(R)
-                μy = zero(R)
-                raw_scale = sqrt(C2)
-                n = 0
-                for dj in -hw:hw
-                    for di in -hw:hw
-                        n += 1
-                        x = convert(R, image[i+di, j+dj, c])
-                        y = convert(R, target[i+di, j+dj, c])
-                        raw_scale =
-                            max(raw_scale, abs(x), abs(y))
-                        if n == 1
-                            μx = x
-                            μy = y
-                        else
-                            μx = _stable_lerp(
-                                μx, x, one(x) / n)
-                            μy = _stable_lerp(
-                                μy, y, one(y) / n)
-                        end
-                    end
-                end
-
-                # Local variances and covariance. Keep the accumulators scaled
-                # to the largest deviation seen so squared HDR values cannot
-                # overflow before the bounded SSIM ratio is formed.
-                σx2 = zero(R)
-                σy2 = zero(R)
-                σxy = zero(R)
-                deviation_scale = sqrt(C2)
-                for dj in -hw:hw
-                    for di in -hw:hw
-                        x = convert(R, image[i+di, j+dj, c])
-                        y = convert(R, target[i+di, j+dj, c])
-                        dx = x - μx
-                        dy = y - μy
-                        finite_dx = isfinite(dx)
-                        finite_dy = isfinite(dy)
-                        next_scale =
-                            finite_dx && finite_dy ?
-                            max(deviation_scale, abs(dx), abs(dy)) :
-                            max(deviation_scale, raw_scale)
-                        if next_scale > deviation_scale
-                            ratio = deviation_scale / next_scale
-                            ratio2 = ratio * ratio
-                            σx2 *= ratio2
-                            σy2 *= ratio2
-                            σxy *= ratio2
-                            deviation_scale = next_scale
-                        end
-                        scaled_dx = finite_dx ?
-                            dx / deviation_scale :
-                            x / deviation_scale -
-                            μx / deviation_scale
-                        scaled_dy = finite_dy ?
-                            dy / deviation_scale :
-                            y / deviation_scale -
-                            μy / deviation_scale
-                        σx2 += scaled_dx * scaled_dx
-                        σy2 += scaled_dy * scaled_dy
-                        σxy += scaled_dx * scaled_dy
-                    end
-                end
-                σx2 /= (n - 1)
-                σy2 /= (n - 1)
-                σxy /= (n - 1)
-
-                mean_scale = max(abs(μx), abs(μy), sqrt(C1))
-                scaled_μx = μx / mean_scale
-                scaled_μy = μy / mean_scale
-                scaled_C1 = (C1 / mean_scale) / mean_scale
-                luminance = (
-                    2 * scaled_μx * scaled_μy + scaled_C1
-                ) / (
-                    scaled_μx * scaled_μx +
-                    scaled_μy * scaled_μy + scaled_C1
-                )
-
-                scaled_C2 =
-                    (C2 / deviation_scale) / deviation_scale
-                structure = (2 * σxy + scaled_C2) /
-                            (σx2 + σy2 + scaled_C2)
-                ssim_val = luminance * structure
-                ssim_sum += ssim_val
-                count += 1
-            end
+    windows_i = (hw + 1):(H - hw)
+    windows_j = (hw + 1):(W - hw)
+    if _ssim_parallel(R, length(windows_i) * length(windows_j) * C)
+        ssim_sum, count = _ssim_parallel_sum(image, target, windows_i,
+                                             windows_j, C, hw, C1, C2)
+    else
+        ssim_sum = zero(R)
+        count = 0
+        for c in 1:C, j in windows_j, i in windows_i
+            ssim_sum += _ssim_window(image, target, i, j, c, hw, C1, C2)
+            count += 1
         end
     end
 
     mean_ssim = ssim_sum / count
     return one(R) - mean_ssim
+end
+
+# Window evaluation is threaded only for isbits accumulators (no shared heap
+# state or reverse tape) when Julia has several threads and enough windows.
+_ssim_parallel(::Type{R}, windows::Int) where {R} =
+    Threads.nthreads() > 1 && isbitstype(R) && windows >= 1024
+
+# Windows are independent: evaluate them in parallel tasks, then sum in the
+# serial (channel, column, row) order, so the result is bit-identical for any
+# thread count. A separate function keeps the task closure from capturing (and
+# boxing) the caller's reassigned locals.
+function _ssim_parallel_sum(image, target, windows_i, windows_j, C::Int,
+                            hw::Int, C1::R, C2::R) where {R}
+    values = Array{R}(undef, length(windows_i), length(windows_j), C)
+    columns = length(windows_j)
+    Threads.@threads for column in 1:(C * columns)
+        c = (column - 1) ÷ columns + 1
+        jj = (column - 1) % columns + 1
+        j = windows_j[jj]
+        for (ii, i) in enumerate(windows_i)
+            values[ii, jj, c] = _ssim_window(image, target, i, j, c, hw, C1, C2)
+        end
+    end
+    ssim_sum = zero(R)
+    for value in values
+        ssim_sum += value
+    end
+    return ssim_sum, length(values)
+end
+
+# SSIM of the window centred at (i, j) in channel c, in accumulator type R.
+function _ssim_window(image, target, i::Int, j::Int, c::Int, hw::Int,
+                      C1::R, C2::R) where {R}
+    # Local means
+    μx = zero(R)
+    μy = zero(R)
+    raw_scale = sqrt(C2)
+    n = 0
+    for dj in -hw:hw
+        for di in -hw:hw
+            n += 1
+            x = convert(R, image[i+di, j+dj, c])
+            y = convert(R, target[i+di, j+dj, c])
+            raw_scale =
+                max(raw_scale, abs(x), abs(y))
+            if n == 1
+                μx = x
+                μy = y
+            else
+                μx = _stable_lerp(μx, x, one(x) / n)
+                μy = _stable_lerp(μy, y, one(y) / n)
+            end
+        end
+    end
+
+    # Local variances and covariance. Keep the accumulators scaled
+    # to the largest deviation seen so squared HDR values cannot
+    # overflow before the bounded SSIM ratio is formed.
+    σx2 = zero(R)
+    σy2 = zero(R)
+    σxy = zero(R)
+    deviation_scale = sqrt(C2)
+    for dj in -hw:hw
+        for di in -hw:hw
+            x = convert(R, image[i+di, j+dj, c])
+            y = convert(R, target[i+di, j+dj, c])
+            dx = x - μx
+            dy = y - μy
+            finite_dx = isfinite(dx)
+            finite_dy = isfinite(dy)
+            next_scale =
+                finite_dx && finite_dy ?
+                max(deviation_scale, abs(dx), abs(dy)) :
+                max(deviation_scale, raw_scale)
+            if next_scale > deviation_scale
+                ratio = deviation_scale / next_scale
+                ratio2 = ratio * ratio
+                σx2 *= ratio2
+                σy2 *= ratio2
+                σxy *= ratio2
+                deviation_scale = next_scale
+            end
+            scaled_dx = finite_dx ?
+                dx / deviation_scale :
+                x / deviation_scale -
+                μx / deviation_scale
+            scaled_dy = finite_dy ?
+                dy / deviation_scale :
+                y / deviation_scale -
+                μy / deviation_scale
+            σx2 += scaled_dx * scaled_dx
+            σy2 += scaled_dy * scaled_dy
+            σxy += scaled_dx * scaled_dy
+        end
+    end
+    σx2 /= (n - 1)
+    σy2 /= (n - 1)
+    σxy /= (n - 1)
+
+    mean_scale = max(abs(μx), abs(μy), sqrt(C1))
+    scaled_μx = μx / mean_scale
+    scaled_μy = μy / mean_scale
+    scaled_C1 = (C1 / mean_scale) / mean_scale
+    luminance = (
+        2 * scaled_μx * scaled_μy + scaled_C1
+    ) / (
+        scaled_μx * scaled_μx +
+        scaled_μy * scaled_μy + scaled_C1
+    )
+
+    scaled_C2 =
+        (C2 / deviation_scale) / deviation_scale
+    structure = (2 * σxy + scaled_C2) /
+                (σx2 + σy2 + scaled_C2)
+    ssim_val = luminance * structure
+    return ssim_val
 end
 
 # Per-pixel brightness as the max over the channels that exist, so a grayscale
@@ -262,9 +314,13 @@ end
 end
 
 """
-Silhouette IoU loss (Intersection over Union).
-Compares binary silhouettes extracted from images.
-`threshold` separates foreground from background.
+    loss_silhouette_iou(image, target; threshold=0.05)
+
+Soft silhouette intersection-over-union loss `1 - IoU`. Each pixel's
+occupancy is a steep sigmoid (slope 200) of its brightest channel minus
+`threshold`, rescaled so a black pixel has occupancy 0; the intersection and
+union sum the per-pixel minimum and maximum occupancies. A `1e-8` smoothing term
+makes two empty silhouettes give loss 0. `threshold` must lie in `[0, 1]`.
 """
 function loss_silhouette_iou(image::Array{T, 3}, target::Array{S, 3};
                               threshold=0.05) where {T, S}

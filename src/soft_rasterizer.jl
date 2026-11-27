@@ -10,7 +10,17 @@
 # All operations are pure Julia scalar math — ForwardDiff compatible.
 # --------------------------------------------------------------------------
 
-"""Configuration for the soft rasterizer."""
+"""
+    SoftRasterizerConfig(; sigma=1.0, gamma=1.0, bg_color=Color3(0.0, 0.0, 0.0), eps=1e-8)
+
+Configuration for [`soft_render`](@ref). `sigma` is the edge softness in
+pixels (coverage `sigmoid_approx(d / sigma)` of the signed distance `d`),
+`gamma` the depth-softmax temperature in NDC depth units, and `bg_color` the
+colour of the virtual background surface at the far plane. `eps` (positive)
+is the floor added to the background weight, the relative near/far clipping
+margin, and the doubled screen area (in pixel²) below which a triangle's
+coverage fades smoothly to zero as it degenerates.
+"""
 struct SoftRasterizerConfig{T<:Real}
     sigma::T       # Edge softness in pixel units (larger = softer)
     gamma::T       # Depth aggregation temperature in NDC units
@@ -187,6 +197,20 @@ Arguments:
 - config: SoftRasterizerConfig
 
 Returns: Array{T, 3} of size (height, width, 3) — RGB image.
+
+Degenerate triangles: a triangle whose doubled screen area `|A|` is below
+`config.eps` (pixel²) has its coverage multiplied by `s(|A| / eps)` with
+`s(t) = t^2 (3 - 2t)`, so a collapsing triangle fades out continuously and a
+zero-area triangle covers nothing; triangles with `|A| >= eps` are unaffected.
+
+Threading: when Julia runs with several threads, images of at least 4096 pixels
+with an isbits scalar type (`Float32`, `Float64`, ForwardDiff duals) are
+rendered in parallel column blocks; the reverse-mode (`ADVar`) pixel stage does
+the same before recording. Each pixel performs the same operations as in a
+serial render, so images and derivatives are bit-identical for any thread count.
+The parallel path allocates its task objects (a few kilobytes per call, also
+with a workspace); a single-threaded session keeps the allocation-free reuse.
+A workspace must not be shared by concurrent calls.
 """
 function soft_render(vertices::AbstractVector{Vec3{Tv}},
                      faces::Vector{NTuple{3,Int}},
@@ -423,6 +447,9 @@ end
                 tri.s1.x, tri.s1.y, tri.s2.x, tri.s2.y, tri.s3.x, tri.s3.y,
                 tri.area)
             coverage = sigmoid_approx(d / σ)
+            if _soft_is_faded(tri.area, eps)
+                coverage *= _soft_degenerate_fade(tri.area, eps)
+            end
             depth_weight = use_relative_depth ?
                 _soft_relative_depth_weight(m, tri.depth, γ) :
                 exp(tri.logit - m)
@@ -440,6 +467,21 @@ end
     denom = total_weight + w_bg
     return iszero(_primal_value(total_weight)) ? bg :
         _stable_color_lerp(average_color, bg, w_bg / denom)
+end
+
+# Image model at degeneracy. A triangle whose doubled screen area |A| is below
+# the configured `eps` (pixel^2) has its coverage multiplied by the smoothstep
+# s(t) = t^2 (3 - 2t), t = |A| / eps, which is 1 with zero slope at |A| = eps
+# and 0 with zero slope at A = 0. A collapsing triangle therefore fades out
+# continuously (C1) instead of switching from a half-covered sliver to
+# nothing; triangles with |A| >= eps are unchanged. The test uses primal values
+# so AD scalars take the same branch.
+@inline _soft_is_faded(area, eps) =
+    abs(_primal_value(area)) < _primal_value(eps)
+
+@inline function _soft_degenerate_fade(area, eps)
+    t = abs(area) / eps
+    return t * t * (3 - 2t)
 end
 
 # Per-vertex clip and screen positions, filled on first use.
@@ -497,16 +539,88 @@ function _soft_render_screen(::Type{T}, screen_tris, n_screen_tris::Int,
     zero_color = Color3(zero_weight, zero_weight, zero_weight)
     image = workspace === nothing ? Array{T}(undef, H, W, 3) :
         _soft_image_buffer!(workspace, H, W)
-    for py in 1:H
-        for px in 1:W
+    # Branch on the tile index so the callee specializes on a concrete type
+    # (a `Union{Nothing,Tuple}` argument would be boxed per call).
+    if tiles === nothing
+        _soft_render_pixels!(image, screen_tris, nothing, n_screen_tris, W, H,
+                             σ, γ, bg, eps, use_relative_depth,
+                             background_logit, zero_weight, zero_color)
+    else
+        _soft_render_pixels!(image, screen_tris, tiles, n_screen_tris, W, H,
+                             σ, γ, bg, eps, use_relative_depth,
+                             background_logit, zero_weight, zero_color)
+    end
+    return image
+end
+
+function _soft_render_pixels!(image::AbstractArray{T,3}, screen_tris, tiles,
+                              n_screen_tris::Int, W::Int, H::Int, σ, γ, bg,
+                              eps, use_relative_depth::Bool, background_logit,
+                              zero_weight, zero_color) where {T}
+    chunks = _soft_column_chunks(T, W, H)
+    if chunks <= 1
+        _soft_render_columns!(image, 1:W, screen_tris, tiles, n_screen_tris, H,
+                              σ, γ, bg, eps, use_relative_depth,
+                              background_logit, zero_weight, zero_color)
+    else
+        _soft_render_columns_parallel!(image, chunks, screen_tris, tiles,
+                                       n_screen_tris, W, H, σ, γ, bg, eps,
+                                       use_relative_depth, background_logit,
+                                       zero_weight, zero_color)
+    end
+    return image
+end
+
+# Threading contract. Every pixel is a pure function of the screen triangles,
+# evaluated by one call of `_soft_pixel_color`, so the pixel loop can be split
+# into column blocks rendered by parallel tasks. Each pixel performs exactly the
+# operations of the serial loop, so the image is bit-identical for every thread
+# count and block split. Blocks are used only when Julia runs with more than
+# one thread, the scalar type is an isbits type (Float32/Float64, ForwardDiff
+# duals; never heap-backed BigFloat or a reverse tape), and the image has at
+# least `_SOFT_PARALLEL_MIN_PIXELS` pixels.
+const _SOFT_PARALLEL_MIN_PIXELS = 4096
+
+function _soft_column_chunks(::Type{T}, W::Int, H::Int) where {T}
+    threads = Threads.nthreads()
+    (threads > 1 && isbitstype(T) && W * H >= _SOFT_PARALLEL_MIN_PIXELS) || return 1
+    # Several blocks per thread balance uneven geometry; blocks stay at least
+    # 8 columns wide so each task writes contiguous image memory.
+    return max(1, min(4 * threads, W ÷ 8))
+end
+
+function _soft_render_columns!(image::AbstractArray{T,3}, columns, screen_tris,
+                               tiles, n_screen_tris::Int, H::Int, σ, γ,
+                               bg, eps, use_relative_depth::Bool,
+                               background_logit, zero_weight,
+                               zero_color) where {T}
+    for px in columns
+        cx = _soft_pixel_center(T, px)
+        for py in 1:H
             color = _soft_pixel_color(screen_tris, tiles, n_screen_tris, px, py,
-                _soft_pixel_center(T, px), _soft_pixel_center(T, py),
+                cx, _soft_pixel_center(T, py),
                 σ, γ, bg, eps, use_relative_depth, background_logit,
                 zero_weight, zero_color)
             image[py, px, 1] = color.r
             image[py, px, 2] = color.g
             image[py, px, 3] = color.b
         end
+    end
+    return image
+end
+
+function _soft_render_columns_parallel!(image, chunks::Int, screen_tris, tiles,
+                                        n_screen_tris::Int, W::Int, H::Int,
+                                        σ, γ, bg, eps, use_relative_depth::Bool,
+                                        background_logit, zero_weight,
+                                        zero_color)
+    @sync for chunk in 1:chunks
+        first_column = div((chunk - 1) * W, chunks) + 1
+        last_column = div(chunk * W, chunks)
+        Threads.@spawn _soft_render_columns!(
+            image, first_column:last_column, screen_tris, tiles,
+            n_screen_tris, H, σ, γ, bg, eps, use_relative_depth,
+            background_logit, zero_weight, zero_color)
     end
     return image
 end
@@ -526,27 +640,22 @@ function _soft_background_image(::Type{T}, H::Int, W::Int, bg::Color3{T},
     return image
 end
 
+# `face_flip === nothing` derives the front-face flip from `world_mat` (a mesh);
+# an InstancedMesh passes the flip of its object matrix, because three.js
+# flips front faces for a mirrored matrixWorld only (WebGLRenderer.js
+# `frontFaceCW`), never for an instance matrix.
 @inline function _soft_shade_mesh_faces!(colors::Vector{Color3{Float64}},
                                          geo::BufferGeometry, world_mat::Mat4,
                                          material::AbstractMaterial,
                                          lights::Vector{<:AbstractLight},
                                          cam_pos::Vec3, camera_view::Mat4,
-                                         ortho_dir)
-    return shade_mesh_faces!(
+                                         ortho_dir, face_flip::Union{Nothing,Bool})
+    face_flip === nothing && return shade_mesh_faces!(
         colors, geo, world_mat, material, lights, cam_pos;
-        camera_view=camera_view,
-        ortho_dir=ortho_dir)
-end
-
-@inline function _soft_shade_mesh_faces!(colors::Vector{Color3{Float64}},
-                                         geo::BufferGeometry, world_mat::Mat4,
-                                         material::MeshDepthMaterial,
-                                         lights::Vector{<:AbstractLight},
-                                         cam_pos::Vec3, camera_view::Mat4,
-                                         ortho_dir)
-    return shade_mesh_faces!(colors, geo, world_mat, material, lights, cam_pos;
-                             camera_view=camera_view,
-                             ortho_dir=ortho_dir)
+        camera_view=camera_view, ortho_dir=ortho_dir)
+    return _shade_mesh_faces_flip!(
+        colors, geo, world_mat, material, lights, cam_pos, face_flip;
+        camera_view=camera_view, ortho_dir=ortho_dir)
 end
 
 @inline function _soft_shade_mesh_faces_from_material!(colors::Vector{Color3{Float64}},
@@ -555,27 +664,28 @@ end
                                           lights::Vector{<:AbstractLight},
                                           cam_pos::Vec3,
                                           camera_view::Mat4,
-                                          ortho_dir)
+                                          ortho_dir,
+                                          face_flip::Union{Nothing,Bool})
     if mat isa MeshBasicMaterial
-        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view, ortho_dir)
+        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view, ortho_dir, face_flip)
     elseif mat isa MeshLambertMaterial
-        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view, ortho_dir)
+        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view, ortho_dir, face_flip)
     elseif mat isa MeshPhongMaterial
-        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view, ortho_dir)
+        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view, ortho_dir, face_flip)
     elseif mat isa MeshStandardMaterial
-        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view, ortho_dir)
+        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view, ortho_dir, face_flip)
     elseif mat isa MeshPhysicalMaterial
-        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view, ortho_dir)
+        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view, ortho_dir, face_flip)
     elseif mat isa MeshToonMaterial
-        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view, ortho_dir)
+        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view, ortho_dir, face_flip)
     elseif mat isa MeshNormalMaterial
-        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view, ortho_dir)
+        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view, ortho_dir, face_flip)
     elseif mat isa MeshMatcapMaterial
-        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view, ortho_dir)
+        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view, ortho_dir, face_flip)
     elseif mat isa MeshDepthMaterial
-        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view, ortho_dir)
+        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view, ortho_dir, face_flip)
     elseif mat isa AbstractMaterial
-        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view, ortho_dir)
+        return _soft_shade_mesh_faces!(colors, geo, world_mat, mat, lights, cam_pos, camera_view, ortho_dir, face_flip)
     else
         throw(ArgumentError("soft_render_scene mesh material must be an AbstractMaterial"))
     end
@@ -712,6 +822,25 @@ end
          ndcz)
 end
 
+# Bounding-box margin around a triangle's screen extent. Pixels outside it get
+# no contribution, so a pixel at distance d from the edge loses coverage
+# sigmoid(-d/sigma). The bounds are floor(min - margin) and ceil(max + margin)
+# and pixel centres sit at index - 0.5, so an excluded centre is at least
+# margin + 0.5 from the vertex extent: with margin = 3 sigma the dropped
+# coverage per face is below sigmoid(-3) = 0.047 (0.029 at sigma = 1), and
+# with margin = 1 (sigma < 1/3) below sigmoid(-1.5/sigma) <= 0.011. The
+# aggregate weights coverage by exp(logit - m) against a background weight
+# exp(-1/gamma - m), so the colour
+# error of one dropped tail is bounded only by
+# sigmoid(-d/sigma) * exp((1 - depth)/gamma) relative to the background, not by
+# sigma alone. A bound eps on it needs d >= sigma * (log(1/eps) + 2/gamma),
+# about 27 sigma at gamma = 0.1 and eps = 1e-3. Measured on 60 random faces at
+# 64x64 against an unculled render, sigma = 1 and margin K sigma + 0.5: the
+# default left max |image error| 0.96 at 2.2 ms; K = 14 left 0.30 at 12 ms;
+# K = 37 still left 0.16 at 84 ms. The bound therefore is not adopted here.
+@inline _soft_coverage_margin(::Type{P}, sigma) where {P} =
+    max(P(3.0) * sigma, one(P))
+
 function _soft_screen_triangle(s1::Vec3{T}, s2::Vec3{T}, s3::Vec3{T},
                                color::Color3{T}, σ, γ, eps,
                                use_relative_depth::Bool, W::Int, H::Int) where {T}
@@ -728,7 +857,7 @@ function _soft_screen_triangle(s1::Vec3{T}, s2::Vec3{T}, s3::Vec3{T},
     x2 = _primal_value(s2.x); y2 = _primal_value(s2.y)
     x3 = _primal_value(s3.x); y3 = _primal_value(s3.y)
     P = typeof(x1)
-    margin = max(P(3.0) * _primal_value(σ), one(P))
+    margin = _soft_coverage_margin(P, _primal_value(σ))
     finite = isfinite(x1) && isfinite(y1) &&
              isfinite(x2) && isfinite(y2) &&
              isfinite(x3) && isfinite(y3)
@@ -745,7 +874,10 @@ function _soft_screen_triangle(s1::Vec3{T}, s2::Vec3{T}, s3::Vec3{T},
         bmin_y = 1
         bmax_y = 0
     end
-    valid = finite && abs(_primal_value(area)) > _primal_value(eps) &&
+    # Zero-area (and non-finite NaN-area) triangles cover nothing. Triangles
+    # with doubled area below `eps` stay, with coverage faded to zero as the
+    # area vanishes (`_soft_degenerate_fade`), so coverage is continuous.
+    valid = finite && abs(_primal_value(area)) > zero(P) &&
             bmax_x >= bmin_x && bmax_y >= bmin_y
     return _SoftScreenTriangle(s1, s2, s3, color, depth, logit,
                                bmin_x, bmax_x, bmin_y, bmax_y,
@@ -766,7 +898,11 @@ end
 end
 
 """
-Sigmoid approximation — smooth and AD-friendly.
+    sigmoid_approx(x)
+
+The logistic function `1 / (1 + exp(-x))`, evaluated in the form that cannot
+overflow for either sign of `x`. It is exact (not an approximation) and
+preserves the scalar type, so ForwardDiff and `ADVar` inputs differentiate it.
 """
 @inline function sigmoid_approx(x::T) where T
     if x >= zero(T)
@@ -777,10 +913,7 @@ Sigmoid approximation — smooth and AD-friendly.
     end
 end
 
-"""
-Signed distance from point (px,py) to triangle defined by (ax,ay), (bx,by), (cx,cy).
-Positive inside, negative outside.
-"""
+# Exact sign of the edge function, for coordinates whose Float64 product overflows.
 @noinline function _soft_edge_sign_bigfloat(ax::Float64, ay::Float64,
                                             bx::Float64, by::Float64,
                                             px::Float64, py::Float64)
@@ -864,14 +997,23 @@ function _signed_distance_to_triangle_area(px, py, ax, ay, bx, by, cx, cy, area)
     end
 end
 
+"""
+    signed_distance_to_triangle(px, py, ax, ay, bx, by, cx, cy)
+
+Signed screen-space distance from point `(px, py)` to the triangle with
+vertices `(ax, ay)`, `(bx, by)`, `(cx, cy)` in either winding: inside (or on
+the boundary) it is the distance to the nearest edge line
+([`point_line_distance`](@ref)); outside it is minus the distance to the nearest
+edge segment ([`point_segment_distance`](@ref)). A triangle whose doubled area
+is below `1e-20` returns `-1e10`. This is the coverage argument of
+[`soft_render`](@ref), which evaluates `sigmoid_approx(d / sigma)`.
+"""
 function signed_distance_to_triangle(px, py, ax, ay, bx, by, cx, cy)
     area = edge_function(ax, ay, bx, by, cx, cy)
     return _signed_distance_to_triangle_area(px, py, ax, ay, bx, by, cx, cy, area)
 end
 
-"""
-Distance from point to infinite line through (ax,ay)-(bx,by).
-"""
+# `a * b`, with an exact zero when either factor is zero (avoids 0 * Inf).
 @inline _soft_zero_product(a::Float64, b::Float64) =
     (iszero(a) || iszero(b)) ? 0.0 : a * b
 
@@ -901,6 +1043,14 @@ end
     return sdx / scaled_len, sdy / scaled_len, Inf
 end
 
+"""
+    point_line_distance(px, py, ax, ay, bx, by)
+
+Unsigned distance from point `(px, py)` to the infinite line through
+`(ax, ay)` and `(bx, by)`. The line length is floored at `1e-20`, so coincident
+endpoints give distance zero instead of dividing by zero. `Float64` inputs
+use a rescaled evaluation that stays finite for coordinates near `floatmax`.
+"""
 @inline function point_line_distance(px::Float64, py::Float64,
                                      ax::Float64, ay::Float64,
                                      bx::Float64, by::Float64)
@@ -933,17 +1083,23 @@ end
     return numerator * scale / max(scaled_len, 1.0e-20 / scale)
 end
 
+# Numerical floors in Float32 for Float32 computations, so Float32 inputs stay
+# Float32 (1e-20 and 1e-12 are normal Float32 values). Every other scalar keeps
+# the Float64 literal and its promotion: Float16 would round both floors to
+# zero (0/0 for coincident endpoints), BigFloat and Float64 promote to the same
+# value, and AD scalars record no tape node for a constant.
+@inline _soft_constant(::Type{Float32}, value::Float64) = Float32(value)
+@inline _soft_constant(::Type, value::Float64) = value
+
 @inline function point_line_distance(px, py, ax, ay, bx, by)
     dx = bx - ax
     dy = by - ay
     len = hypot(dx, dy)
-    abs((px - ax) * dy - (py - ay) * dx) / max(len, 1e-20)
+    abs((px - ax) * dy - (py - ay) * dx) / max(len, _soft_constant(typeof(len), 1e-20))
 end
 
-"""
-Distance from point to line segment (ax,ay)-(bx,by).
-AD-friendly: uses smooth min/max via clamping.
-"""
+# Clamped projection parameter of (px, py) onto segment (ax, ay)-(bx, by) of
+# length `len`, rescaling when an intermediate is not representable.
 @inline function _soft_segment_parameter_float(px::Float64, py::Float64,
                                                ax::Float64, ay::Float64,
                                                bx::Float64, by::Float64,
@@ -977,6 +1133,14 @@ AD-friendly: uses smooth min/max via clamping.
     return da <= db ? 0.0 : 1.0
 end
 
+"""
+    point_segment_distance(px, py, ax, ay, bx, by)
+
+Distance from point `(px, py)` to the closed segment `(ax, ay)`-`(bx, by)`,
+smoothed as `sqrt(d^2 + 1e-12)` so the derivative stays finite (zero) when the
+point lies on the segment. The projection parameter is clamped to `[0, 1]`; a
+segment shorter than `1e-10` is treated as its first endpoint.
+"""
 function point_segment_distance(px::Float64, py::Float64,
                                 ax::Float64, ay::Float64,
                                 bx::Float64, by::Float64)
@@ -1001,13 +1165,14 @@ function point_segment_distance(px, py, ax, ay, bx, by)
     # make ForwardDiff return Inf*0 = NaN and poison the whole gradient. The added
     # 1e-12 (≈1e-6 px) makes the distance smooth everywhere with a finite (zero)
     # derivative at 0; the bias is negligible relative to the sigmoid softness sigma.
+    smoothing = _soft_constant(typeof(len_sq), 1e-12)
     if len_sq < 1e-20
-        return sqrt((px - ax)^2 + (py - ay)^2 + 1e-12)
+        return sqrt((px - ax)^2 + (py - ay)^2 + smoothing)
     end
     t = clamp(((px - ax)*dx + (py - ay)*dy) / len_sq, zero(px), one(px))
     proj_x = ax + t * dx
     proj_y = ay + t * dy
-    sqrt((px - proj_x)^2 + (py - proj_y)^2 + 1e-12)
+    sqrt((px - proj_x)^2 + (py - proj_y)^2 + smoothing)
 end
 
 # ========================== High-level differentiable render ==========================
@@ -1015,14 +1180,15 @@ end
 @inline function _soft_append_geometry!(vertices, faces, colors, face_colors,
                                  geo::BufferGeometry, world::Mat4, @nospecialize(material),
                                  lights, camera_position, view, ortho_dir,
-                                 vertex_offset::Int, face_offset::Int)
+                                 vertex_offset::Int, face_offset::Int,
+                                 face_flip::Union{Nothing,Bool}=nothing)
     selected = _draw_face_range(geo)
     isempty(selected) && return vertex_offset, face_offset
     for vertex in 1:geo.n_vertices
         vertices[vertex_offset+vertex] = mat4_transform_point(world,get_vertex(geo,vertex))
     end
     _soft_shade_mesh_faces_from_material!(face_colors,geo,world,material,
-                                         lights,camera_position,view,ortho_dir)
+                                         lights,camera_position,view,ortho_dir,face_flip)
     for face in selected
         i1,i2,i3 = get_face(geo,face)
         face_offset += 1
@@ -1038,10 +1204,12 @@ function _soft_append_instances!(vertices, faces, colors, face_colors,
                                   vertex_offset::Int, face_offset::Int) where {M<:AbstractMaterial}
     geo = _instanced_geometry(object)
     base = compute_world_matrix(object)
+    mirrored = _world_mirrors_faces(base)
     for index in eachindex(object.instance_matrices)
         world = base*object.instance_matrices[index]
         vertex_offset,face_offset = _soft_append_geometry!(vertices,faces,colors,face_colors,
-            geo,world,materials[index],lights,camera_position,view,ortho_dir,vertex_offset,face_offset)
+            geo,world,materials[index],lights,camera_position,view,ortho_dir,vertex_offset,face_offset,
+            mirrored)
     end
     return vertex_offset,face_offset
 end

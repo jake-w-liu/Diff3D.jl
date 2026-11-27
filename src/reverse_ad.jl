@@ -11,6 +11,19 @@
 
 # Parents and partials are stored inline (unset parent fields mark leaves and
 # unary nodes), so recording an operation allocates one fixed-size object.
+"""
+    ADVar
+
+Reverse-mode automatic-differentiation scalar used by [`reverse_gradient`](@ref)
+and [`reverse_value_gradient`](@ref). Its primal value and adjoint are
+`Float64`. Arithmetic, comparisons, and the elementary functions of Base
+(including the trigonometric, hyperbolic, exponential, logarithmic, power,
+rounding, `fma`, `hypot`, `min`/`max`, `mod`/`rem` and `rem2pi` families) are
+recorded on a task-local tape while a gradient pass is active; other `Real`
+types promote to `ADVar`. At nonsmooth points the recorded derivative is a
+selected branch derivative (for example, `min`/`max` ties select the first
+argument), which can differ from ForwardDiff's choice there.
+"""
 mutable struct ADVar <: Real
     val::Float64
     adj::Float64                 # accumulated adjoint (∂output/∂this)
@@ -505,6 +518,17 @@ Base.sign(a::ADVar) = _ad_constant(sign(a.val))
 
 # Discrete quotient operations carry no derivative, matching ForwardDiff.
 Base.div(a::ADVar, b::ADVar, r::RoundingMode) = div(a.val, b.val, r)
+# Base's `fld`/`cld(::T, ::T) where T<:Real` raise instead of using `div`.
+Base.fld(a::ADVar, b::ADVar) = div(a.val, b.val, RoundDown)
+Base.cld(a::ADVar, b::ADVar) = div(a.val, b.val, RoundUp)
+
+# Floating-point traits of the Float64 primal, as ForwardDiff reports them
+# for `Dual{T,Float64}`.
+for op in (:typemin, :typemax, :floatmin, :floatmax, :maxintfloat, :eps)
+    @eval Base.$op(::Type{ADVar}) = $op(Float64)
+end
+Base.precision(::Type{ADVar}; base::Integer=2) = precision(Float64; base=base)
+Base.precision(a::ADVar; base::Integer=2) = precision(a.val; base=base)
 
 function Base.modf(a::ADVar)
     fraction, integral = modf(a.val)
@@ -520,13 +544,64 @@ Base.isinteger(a::ADVar) = isinteger(a.val)
 Base.issubnormal(a::ADVar) = issubnormal(a.val)
 Base.exponent(a::ADVar) = exponent(a.val)
 # Angle conversions. Base routes these through `f(x::Real) = f(float(x))`, and
-# `float(::ADVar) = ADVar` (above) makes that recurse forever (StackOverflow);
-# define them directly via the recorded `*`/sin/cos/tan so the gradient flows.
+# `float(::ADVar) = ADVar` (above) makes that recurse forever (StackOverflow),
+# so each is defined directly. The degree-based functions take their values from
+# Base's exactly reduced Float64 methods (sind(180.0) == 0, unlike
+# sin(deg2rad(180.0))) and their derivatives from the DiffRules formulas.
 Base.deg2rad(x::ADVar) = x * (π / 180)
 Base.rad2deg(x::ADVar) = x * (180 / π)
-Base.sind(x::ADVar) = sin(deg2rad(x))
-Base.cosd(x::ADVar) = cos(deg2rad(x))
-Base.tand(x::ADVar) = tan(deg2rad(x))
+Base.sind(x::ADVar) = _ad_record(sind(x.val), (x,), (deg2rad(cosd(x.val)),))
+Base.cosd(x::ADVar) = _ad_record(cosd(x.val), (x,), (-deg2rad(sind(x.val)),))
+function Base.tand(x::ADVar)
+    t = tand(x.val)
+    return _ad_record(t, (x,), (deg2rad(1.0 + t * t),))
+end
+
+# ---- π-scaled trigonometry ----
+Base.sinpi(x::ADVar) = _ad_record(sinpi(x.val), (x,), (π * cospi(x.val),))
+Base.cospi(x::ADVar) = _ad_record(cospi(x.val), (x,), (-(π * sinpi(x.val)),))
+function Base.sincospi(x::ADVar)
+    s, c = sincospi(x.val)
+    return (_ad_record(s, (x,), (π * c,)), _ad_record(c, (x,), (-(π * s),)))
+end
+function Base.tanpi(x::ADVar)
+    t = tanpi(x.val)
+    return _ad_record(t, (x,), (π * (1.0 + t * t),))
+end
+# Base's generic `sinc` divides sinpi(x) by πx and its chain rule cancels
+# catastrophically near zero; use Base's accurate Float64 `cosc` instead.
+Base.sinc(x::ADVar) = _ad_record(sinc(x.val), (x,), (cosc(x.val),))
+# d/dx cosc(x) = -(π² sinc(x) + 2 cosc(x) / x). Below |x| = 1e-4 the series
+# -π²/3 + π⁴x²/10 is exact to within one ulp (the next term is ~2e-16 relative).
+@inline function _cosc_derivative(x::Float64)
+    if abs(x) < 1.0e-4
+        return -(π^2 / 3) + (π^4 / 10) * (x * x)
+    end
+    isinf(x) && return 0.0
+    return -(π^2 * sinc(x) + 2.0 * (cosc(x) / x))
+end
+Base.cosc(x::ADVar) = _ad_record(cosc(x.val), (x,), (_cosc_derivative(x.val),))
+
+# ---- inverse hyperbolic functions (DiffRules formulas, overflow-free) ----
+Base.asinh(x::ADVar) = _ad_record(asinh(x.val), (x,), (inv(hypot(1.0, x.val)),))
+Base.acosh(x::ADVar) = _ad_record(
+    acosh(x.val), (x,), (inv(sqrt(x.val - 1.0) * sqrt(x.val + 1.0)),))
+Base.atanh(x::ADVar) = _ad_record(
+    atanh(x.val), (x,), (inv((1.0 - x.val) * (1.0 + x.val)),))
+
+# ---- reductions, scaling and fused multiply-add ----
+# rem2pi subtracts an exact multiple of 2π (piecewise unit slope); mod2pi
+# reaches it through Base's `rem2pi(x, RoundDown)`.
+Base.rem2pi(x::ADVar, r::RoundingMode) = _ad_record(rem2pi(x.val, r), (x,), (1.0,))
+Base.ldexp(x::ADVar, n::Integer) = _ad_record(ldexp(x.val, n), (x,), (ldexp(1.0, n),))
+# Base's `fma(::T, ::T, ::T) where T<:Real` raises; mixed arguments reach this
+# method through promotion. ADVar nodes hold two parents, so the addend joins
+# through a second node carrying the same exactly rounded value.
+function Base.fma(a::ADVar, b::ADVar, c::ADVar)
+    value = fma(a.val, b.val, c.val)
+    product = _ad_record(value, (a, b), (b.val, a.val))
+    return _ad_record(value, (product, c), (1.0, 1.0))
+end
 
 function _reverse_value_gradient(f, x::AbstractVector{<:Real})
     state = _ad_tape_state()
@@ -584,7 +659,7 @@ function _reverse_value_gradient(f, x::AbstractVector{<:Real})
 end
 
 """
-    reverse_gradient(f, x::Vector{Float64}) -> Vector{Float64}
+    reverse_gradient(f, x::AbstractVector{<:Real}) -> Vector{Float64}
 
 Gradient of scalar `f(x)` via one reverse-mode pass. `f` must accept a vector of
 `ADVar` and return a single `ADVar`. Validated against ForwardDiff in tests.
@@ -593,7 +668,12 @@ function reverse_gradient(f, x::AbstractVector{<:Real})
     return _reverse_value_gradient(f, x)[2]
 end
 
-"""Value and gradient of `f` at `x` in one reverse pass."""
+"""
+    reverse_value_gradient(f, x::AbstractVector{<:Real}) -> (Float64, Vector{Float64})
+
+Value and gradient of scalar `f` at `x` in one reverse pass, with the
+requirements of [`reverse_gradient`](@ref).
+"""
 function reverse_value_gradient(f, x::AbstractVector{<:Real})
     return _reverse_value_gradient(f, x)
 end
