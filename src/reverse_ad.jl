@@ -36,9 +36,13 @@ end
 # pass's graph. ADVars reference their parents directly, so the tape is only an
 # ordering for the backward pass. Emptied tapes keep their capacity for the next
 # pass on the same task; emptying releases every recorded node.
+#
+# `pullbacks` parallels `stack`: each entry lists `position => pullback` pairs
+# for fused multi-input/multi-output operations (see `_ad_record_pullback!`).
 struct _ADTapeState
     stack::Vector{Vector{ADVar}}
     spare::Vector{Vector{ADVar}}
+    pullbacks::Vector{Vector{Pair{Int,Any}}}
 end
 
 const _AD_SPARE_TAPES = 2
@@ -48,7 +52,8 @@ function _ad_tape_state()
     tls = task_local_storage()
     state = get(tls, :diff3d_ad_tape_state, nothing)
     if state === nothing
-        state = _ADTapeState(Vector{ADVar}[], Vector{ADVar}[])
+        state = _ADTapeState(Vector{ADVar}[], Vector{ADVar}[],
+                             Vector{Pair{Int,Any}}[])
         tls[:diff3d_ad_tape_state] = state
     end
     return state::_ADTapeState
@@ -79,6 +84,23 @@ end
 end
 
 _ad_constant(x::Real) = ADVar(Float64(x), (), ())
+
+# Whether this task is inside a reverse pass that records operations.
+@inline _ad_recording() = !isempty(_ad_tape_stack())
+
+# Register a fused operation's pullback on the active tape. Its outputs must be
+# leaves recorded immediately before this call, after all of its inputs. The
+# backward sweep calls `pullback(tape)` once every node recorded after the
+# outputs has propagated its adjoint and before any node at or below the last
+# output is visited; the pullback reads the outputs' adjoints from `tape` and
+# adds the input adjoints directly to their `adj` fields. It must not record.
+function _ad_record_pullback!(pullback)
+    state = _ad_tape_state()
+    isempty(state.stack) && return nothing
+    push!(@inbounds(state.pullbacks[end]),
+          length(@inbounds(state.stack[end])) => pullback)
+    return nothing
+end
 
 ADVar(x::Real) = _ad_record(Float64(x), (), ())     # leaf / constant
 ADVar(x::ADVar) = x
@@ -464,15 +486,22 @@ function Base.mod(a::Real, b::ADVar)
     q = fld(af, b.val)
     _ad_record(mod(af, b.val), (b,), (-q,))
 end
+# rem(a, b) = a - b * div(a, b). The exact `div` matches the primal remainder;
+# truncating the rounded quotient `a / b` can step past it (rem(1.0, 0.1)
+# subtracts 9 * 0.1, while 1.0 / 0.1 rounds to 10.0).
 function Base.rem(a::ADVar, b::ADVar)
-    q = trunc(a.val / b.val)
+    q = div(a.val, b.val)
     _ad_record(rem(a.val, b.val), (a, b), (1.0, -q))
 end
 function Base.rem(a::Real, b::ADVar)
     af = Float64(a)
-    q = trunc(af / b.val)
+    q = div(af, b.val)
     _ad_record(rem(af, b.val), (b,), (-q,))
 end
+
+# Base's `sign(x)` returns `x` itself at zero, which would pass a unit
+# derivative through a piecewise-constant function. ForwardDiff gives zero.
+Base.sign(a::ADVar) = _ad_constant(sign(a.val))
 
 # Discrete quotient operations carry no derivative, matching ForwardDiff.
 Base.div(a::ADVar, b::ADVar, r::RoundingMode) = div(a.val, b.val, r)
@@ -504,7 +533,9 @@ function _reverse_value_gradient(f, x::AbstractVector{<:Real})
     stack = state.stack
     n = length(x)
     tape = _ad_acquire_tape!(state, n)
+    pullbacks = Pair{Int,Any}[]
     push!(stack, tape)                    # this pass records onto its own tape
+    push!(state.pullbacks, pullbacks)
     try
         inputs = Vector{ADVar}(undef, n)
         input_index = 1
@@ -519,7 +550,12 @@ function _reverse_value_gradient(f, x::AbstractVector{<:Real})
             v.adj = 0.0
         end
         y.adj = 1.0
+        next_pullback = length(pullbacks)
         @inbounds for k in length(tape):-1:1
+            while next_pullback > 0 && pullbacks[next_pullback].first >= k
+                pullbacks[next_pullback].second(tape)
+                next_pullback -= 1
+            end
             v = tape[k]
             a = v.adj
             (a == 0.0 || !isdefined(v, :a1)) && continue
@@ -530,6 +566,10 @@ function _reverse_value_gradient(f, x::AbstractVector{<:Real})
                 second_parent.adj += a * v.p2
             end
         end
+        while next_pullback > 0
+            @inbounds pullbacks[next_pullback].second(tape)
+            next_pullback -= 1
+        end
         grad = Vector{Float64}(undef, n)
         @inbounds for i in 1:n
             grad[i] = inputs[i].adj
@@ -537,6 +577,8 @@ function _reverse_value_gradient(f, x::AbstractVector{<:Real})
         return (Float64(y.val), grad)
     finally
         pop!(stack)                       # always release this pass's tape
+        pop!(state.pullbacks)             # and the fused pullbacks it holds
+        empty!(pullbacks)
         _ad_release_tape!(state, tape)
     end
 end
