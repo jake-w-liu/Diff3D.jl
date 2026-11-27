@@ -334,7 +334,7 @@ function _convex_add_wrapped_face!(faces, seen::Set{Vector{Int}},
     push!(seen, coplanar)
     hull = _convex_face_hull(points, coplanar, normal, eps)
     length(hull) >= 3 || return false
-    push!(faces, (triple, coplanar, normal))
+    push!(faces, (triple, coplanar, normal, hull))
     m = length(hull)
     @inbounds for k in 1:m
         edge = (hull[k], hull[k == m ? 1 : k + 1])
@@ -346,9 +346,9 @@ function _convex_add_wrapped_face!(faces, seen::Set{Vector{Int}},
 end
 
 # Output-sensitive search for the reference enumeration's faces: wrap from one
-# support plane across every hull edge. Returns `nothing` unless the faces
-# close up into a consistently oriented surface, in which case the caller uses
-# the reference enumeration instead.
+# support plane across every hull edge. Returns each face's coplanar points,
+# outward normal and boundary polygon (`_convex_face_hull` with this `eps`),
+# or `nothing` unless the faces close up into a consistently oriented surface.
 function _convex_wrapped_support_faces(points::Vector{Vec3{Float64}}, eps::Float64)
     n = length(points)
     plane_eps = 64 * eps
@@ -378,7 +378,7 @@ function _convex_wrapped_support_faces(points::Vector{Vec3{Float64}}, eps::Float
         end
     end
     b == 0 && return nothing
-    faces = Tuple{NTuple{3,Int},Vector{Int},Vec3{Float64}}[]
+    faces = Tuple{NTuple{3,Int},Vector{Int},Vec3{Float64},Vector{Int}}[]
     seen = Set{Vector{Int}}()
     edges = Set{Tuple{Int,Int}}()
     open_edges = Tuple{Int,Int}[]
@@ -404,7 +404,7 @@ function _convex_wrapped_support_faces(points::Vector{Vec3{Float64}}, eps::Float
         length(faces) > before && (v, u) in edges || return nothing
     end
     sort!(faces; by=first)
-    return [(coplanar, normal) for (_, coplanar, normal) in faces]
+    return [(coplanar, normal, hull) for (_, coplanar, normal, hull) in faces]
 end
 
 function _convex_face_hull(points::Vector{Vec3{Float64}}, face_indices::Vector{Int},
@@ -431,6 +431,20 @@ function _convex_face_hull(points::Vector{Vec3{Float64}}, face_indices::Vector{I
     for idx in face_indices
         d = points[idx] - center
         push!(projected, (dot(d, u), dot(d, v), idx))
+    end
+    sort!(projected, by=t -> (t[1], t[2], t[3]))
+    # Points whose first coordinates differ only by rounding (for example the
+    # stacked points of an edge that projects vertically) must reach the
+    # monotone chain in order along that edge, as exact ties would. Snap each
+    # run of first coordinates within `eps` of its start and re-sort by the
+    # second coordinate inside the run.
+    run_start = 1
+    @inbounds for k in 2:length(projected)
+        if projected[k][1] - projected[run_start][1] <= eps
+            projected[k] = (projected[run_start][1], projected[k][2], projected[k][3])
+        else
+            run_start = k
+        end
     end
     sort!(projected, by=t -> (t[1], t[2], t[3]))
 
@@ -478,6 +492,11 @@ function _convex_face_hull(points::Vector{Vec3{Float64}}, face_indices::Vector{I
     return hull
 end
 
+# Rounding-level tolerance in the normalized coordinates (|x| <= 1): 64x this
+# stays well above the rounding error of a plane-distance evaluation (a few
+# 1e-16), comparable to three.js ConvexHull's 3 * EPSILON * (|x| + |y| + |z|).
+const _CONVEX_TIGHT_EPS = 1e-15
+
 """
     ConvexGeometry(points)
 
@@ -488,22 +507,32 @@ function ConvexGeometry(points::AbstractVector{<:Vec3})
     clean, normalized, eps = _convex_clean_points(points)
     _convex_has_volume(normalized, eps) ||
         throw(ArgumentError("ConvexGeometry needs at least four non-coplanar points"))
-    # Below this size the reference enumeration is as fast as wrapping.
-    support_faces = length(normalized) <= 16 ? nothing :
-                    _convex_wrapped_support_faces(normalized, eps)
-    support_faces === nothing &&
-        (support_faces = _convex_support_faces(normalized, eps))
-    isempty(support_faces) &&
-        throw(ArgumentError("ConvexGeometry could not find hull support faces"))
-
+    # Gift wrapping certifies a closed hull surface. Points within the `eps`
+    # plane tolerance of one another's faces can make those tolerant face sets
+    # inconsistent; resolving them at rounding-level tolerance instead (as
+    # three.js ConvexHull does) splits them into separate facets. The
+    # exhaustive enumeration is the last resort.
+    wrapped = _convex_wrapped_support_faces(normalized, eps)
+    wrapped === nothing &&
+        (wrapped = _convex_wrapped_support_faces(normalized, _CONVEX_TIGHT_EPS))
     hulls = Tuple{Vector{Int},Vec3{Float64}}[]
-    sizehint!(hulls, length(support_faces))
+    if wrapped === nothing
+        support_faces = _convex_support_faces(normalized, eps)
+        isempty(support_faces) &&
+            throw(ArgumentError("ConvexGeometry could not find hull support faces"))
+        sizehint!(hulls, length(support_faces))
+        for (face_indices, normal) in support_faces
+            hull = _convex_face_hull(normalized, face_indices, normal, eps)
+            length(hull) >= 3 && push!(hulls, (hull, normal))
+        end
+    else
+        sizehint!(hulls, length(wrapped))
+        for (_, normal, hull) in wrapped
+            push!(hulls, (hull, normal))
+        end
+    end
     n_faces = 0
-    for (face_indices, normal) in support_faces
-        hull = _convex_face_hull(
-            normalized, face_indices, normal, eps)
-        length(hull) >= 3 || continue
-        push!(hulls, (hull, normal))
+    for (hull, _) in hulls
         n_faces = _geometry_checked_add(
             n_faces, length(hull) - 2, "ConvexGeometry face count")
     end
@@ -3054,9 +3083,10 @@ end
     return c, cpos_len
 end
 
-"""Feature edges whose adjacent faces differ in orientation by more than
+"""Feature edges whose adjacent faces differ in orientation by at least
 `threshold_angle`, plus boundary edges (three.js `EdgesGeometry`). Returned as a
-line BufferGeometry. Coincident vertices are merged by position first."""
+line BufferGeometry. Coincident vertices are merged by position first, and
+triangles with merged corners are skipped."""
 function edges_geometry(geo::BufferGeometry; threshold_angle=0.349)   # ≈20°
     _validate_triangle_geometry_indices(geo, "edges_geometry")
     threshold_angle = _geometry_finite_float(

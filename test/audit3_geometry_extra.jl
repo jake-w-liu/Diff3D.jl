@@ -199,3 +199,64 @@ end
     @test volume ≈ 4.164674768977892 rtol=1e-7
     @test area ≈ 12.527317847976624 rtol=1e-7
 end
+
+# Every directed triangle edge (by end positions) occurs once and its reverse
+# occurs too: the triangles form a closed, consistently wound surface.
+function _audit3_closed_surface(geometry)
+    edges = Dict{NTuple{2,NTuple{3,Float64}},Int}()
+    for face in 1:geometry.n_faces
+        corners = ntuple(3) do k
+            v = get_vertex(geometry, geometry.indices[3face - 3 + k])
+            (v.x, v.y, v.z)
+        end
+        for k in 1:3
+            edge = (corners[k], corners[mod1(k + 1, 3)])
+            edges[edge] = get(edges, edge, 0) + 1
+        end
+    end
+    return all(count == 1 && get(edges, (b, a), 0) == 1 for ((a, b), count) in edges)
+end
+
+@testset "ConvexGeometry face polygons keep stacked edge points in order" begin
+    # Pentagonal prism of height 2 with three points stacked on every vertical
+    # edge. The projected first coordinates of a stacked column differ only by
+    # rounding, which used to make a column midpoint a polygon corner and drop
+    # a real corner. node: three.js ConvexGeometry gives 16 triangles and
+    # volume 4.755282683625162 (Float32 positions); exact: 5 * sin(2π/5).
+    prism = [Vec3(cos(2π * i / 5), sin(2π * i / 5), Float64(i % 3)) for i in 1:15]
+    hull = ConvexGeometry(prism)
+    @test hull.n_faces == 16
+    @test _audit3_closed_surface(hull)
+    volume, _ = _audit3_volume_area(hull)
+    @test volume ≈ 5 * sin(2π / 5) rtol=1e-12
+end
+
+@testset "ConvexGeometry resolves near-coplanar point groups" begin
+    # A 2x2x2 cube's corners plus a 3x3 grid on every face, each grid point
+    # displaced 1e-7 * sin(7k) along its face normal: within the tolerant face
+    # search's plane tolerance, so its face sets are inconsistent. The
+    # exhaustive enumeration emitted 123 overlapping triangles enclosing a
+    # volume of 33.7. node: three.js ConvexGeometry gives 44 triangles and
+    # volume 8.0000012665987 (positions rounded to Float32, whose spacing near
+    # 1 is 1.2e-7).
+    points = Vec3{Float64}[]
+    k = 0
+    for axis in 1:3, side in (-1.0, 1.0), a in (-0.5, 0.0, 0.5), b in (-0.5, 0.0, 0.5)
+        k += 1
+        d = side + 1e-7 * sin(7k)
+        push!(points, axis == 1 ? Vec3(d, a, b) : axis == 2 ? Vec3(a, d, b) : Vec3(a, b, d))
+    end
+    append!(points, [Vec3(x, y, z) for x in (-1.0, 1.0), y in (-1.0, 1.0), z in (-1.0, 1.0)])
+    hull = ConvexGeometry(points)
+    @test hull.n_faces == 44
+    @test _audit3_closed_surface(hull)
+    volume, area = _audit3_volume_area(hull)
+    @test volume ≈ 8.0 atol=2e-6
+    @test area ≈ 24.0 atol=1e-6
+    # Every input point lies inside or on the hull.
+    @test all(1:hull.n_faces) do face
+        a = get_vertex(hull, hull.indices[3face - 2])
+        n = get_normal(hull, hull.indices[3face - 2])
+        all(dot(n, p - a) <= 1e-12 for p in points)
+    end
+end
