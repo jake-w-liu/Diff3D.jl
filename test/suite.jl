@@ -9659,8 +9659,12 @@ end
                2.0, -1.0, 0.0, 2.0, 1.0, 0.0]
         @test stroke_meshes[1].geometry.indices == [1, 2, 3, 1, 3, 4]
         @test stroke_meshes[2].material.color == Color3(1.0, 0.0, 0.0)
-        @test stroke_meshes[2].geometry.n_vertices == 21
-        @test stroke_meshes[2].geometry.n_faces == 9
+        # Three segment quads plus three miter joins; each miter join now
+        # also covers its p-outer1-outer2 triangle (4 vertices, 2 faces
+        # instead of 3/1), which the quads leave uncovered; the three.js
+        # pointsToStroke oracle covers it (audit3b_svg_loader.jl).
+        @test stroke_meshes[2].geometry.n_vertices == 24
+        @test stroke_meshes[2].geometry.n_faces == 12
         @test length(svg_stroke_meshes(stroke_mesh_path)) == 2
         direct_stroke = points_to_stroke_geometry([Vec2(0.0, 0.0), Vec2(2.0, 0.0)];
                                                   stroke_width=2.0)
@@ -9780,8 +9784,10 @@ end
         @test length(stroke_join_meshes) == 3
         @test stroke_join_meshes[1].geometry.n_vertices == 11
         @test stroke_join_meshes[1].geometry.n_faces == 5
-        @test stroke_join_meshes[2].geometry.n_vertices == 11
-        @test stroke_join_meshes[2].geometry.n_faces == 5
+        # The miter join covers p-outer1-miter-outer2 (audit3b_svg_loader.jl;
+        # was 11/5 with the p-outer1-outer2 triangle missing).
+        @test stroke_join_meshes[2].geometry.n_vertices == 12
+        @test stroke_join_meshes[2].geometry.n_faces == 6
         @test stroke_join_meshes[3].geometry.n_vertices == 16
         @test stroke_join_meshes[3].geometry.n_faces == 10
         miter_positions = stroke_join_meshes[2].geometry.positions
@@ -9959,7 +9965,10 @@ end
         </svg>
         """)
         pseudo_css_svg = load_svg(pseudo_css_path)
-        @test pseudo_css_svg.paths[1].style.fill == Color3(1.0, 0.0, 0.0)
+        # The <style> element is the root's first child, so the <g> is its
+        # second and `g:first-child` does not match (Selectors Level 4
+        # section 14.3; Chromium's computed fill for this document is black).
+        @test pseudo_css_svg.paths[1].style.fill == Color3(0.0, 0.0, 0.0)
         @test pseudo_css_svg.paths[1].style.stroke == Color3(0.0, 0.0, 1.0)
         @test pseudo_css_svg.paths[1].style.stroke_width == 3.0
         @test pseudo_css_svg.paths[2].style.fill_opacity == 0.5
@@ -10082,10 +10091,15 @@ end
         @test shapes == svg_shapes(svg_path; curve_segments=2, circle_segments=8)
         @test length(shapes[end]) == 8
         geo = svg_geometry(svg)
-        @test geo.n_vertices == 20
-        @test geo.n_faces == 12
+        # The open polyline (3 points, 1 triangle) and the open curve subpath
+        # (5 points, 3 triangles) fill as if closed (SVG 1.1 section 11.3);
+        # three.js r186 SVGLoader + ShapePath.toShapes oracle fills them with
+        # areas 1 and 2.25 (audit3b_svg_loader.jl). These counts were 20/12
+        # when open subpaths were skipped.
+        @test geo.n_vertices == 28
+        @test geo.n_faces == 16
         @test isempty(geo.groups)
-        @test svg_geometry(svg_path; curve_segments=2, circle_segments=8).n_faces == 12
+        @test svg_geometry(svg_path; curve_segments=2, circle_segments=8).n_faces == 16
         rm(svg_path)
 
         view_path = tempname() * ".svg"

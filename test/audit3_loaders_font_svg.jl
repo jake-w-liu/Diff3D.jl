@@ -54,8 +54,10 @@ end
           [Vec2(101.0, 2.0), Vec2(101.0, 2.0), Vec2(6.0, 2.0), Vec2(6.0, 3.0),
            Vec2(6.0, 9.0)]
     @test [p.style.fill for p in doc.paths] ==
-          [Color3(1.0, 0.0, 0.0), Color3(0.0, 128 / 255, 0.0), Color3(1.0, 0.0, 0.0),
-           Color3(0.0, 0.0, 1.0), Color3(0.0, 0.0, 0.0)]
+          [Color3(1.0, 0.0, 0.0), Color3(0.0, 0.21586050010324417, 0.0),
+           Color3(1.0, 0.0, 0.0), Color3(0.0, 0.0, 1.0), Color3(0.0, 0.0, 0.0)]
+    # green is #008000; its linear value 0.21586050010324417 is the oracle
+    # path.color (Color.setStyle with SRGBColorSpace, SVGLoader.js:245).
     @test [p.style.stroke for p in doc.paths] ==
           [Color3(0.0, 0.0, 0.0), Color3(0.0, 0.0, 0.0), Color3(1.0, 1.0, 0.0),
            nothing, nothing]
@@ -195,12 +197,17 @@ end
         """)
     first_element = [p for p in doc.paths if p.element_id == doc.paths[1].element_id]
     second_element = [p for p in doc.paths if p.element_id != doc.paths[1].element_id]
+    # These loops cross each other, where ShapePath.toShapes + Earcut emit
+    # overlapping triangles (oracle triangle-area sums 787.5 and 880.0, the
+    # previous expectations). The audit3b round fills crossing loops exactly
+    # under the fill rule (SVG 1.1 section 11.3) as disjoint pieces; the
+    # areas are the exact rational fill areas 216377841863/367853490 and
+    # 6376182959/8839675 from an independent Venn-cell inclusion-exclusion
+    # over the convex loops (audit3b_svg_loader.jl).
     first_geos = Diff3D._svg_fill_geometries(first_element)
-    @test length(first_geos) == 3
-    @test sum(_audit3_cap_area, first_geos) ≈ 787.5
+    @test sum(_audit3_cap_area, first_geos) ≈ 588.2174500043482
     second_geos = Diff3D._svg_fill_geometries(second_element)
-    @test length(second_geos) == 3
-    @test sum(_audit3_cap_area, second_geos) ≈ 880.0
+    @test sum(_audit3_cap_area, second_geos) ≈ 721.3141839490705
 end
 
 @testset "TextGeometry bevel follows ExtrudeGeometry's layer schedule" begin
@@ -309,37 +316,36 @@ end
 
 @testset "SVG paint accepts every CSS keyword, hsl() and rgba()" begin
     # three.js Color.setStyle (src/math/Color.js:6-30 keywords, 296-440
-    # parsing, 248-272 setHSL), read back in sRGB with getRGB(SRGBColorSpace).
-    # Oracle values; three.js stores linear channels and its rounded transfer
-    # constants (ColorManagement.js:205-215) shift the sRGB read-back by < 1e-5:
+    # parsing, 248-272 setHSL) with SRGBColorSpace as SVGLoader calls it
+    # (SVGLoader.js:23, 245): the result is in the linear working space.
+    # Oracle values `new Color().setStyle(s, SRGBColorSpace)` in node; the
+    # expectations were sRGB before the round-2 audit made SVG paint linear
+    # (audit3b_svg_loader.jl).
     oracle = [
-        "orange" => (1.0, 0.6470633984755783, 0.0),
-        "rebeccapurple" => (0.40000612249739637, 0.20000579378002176, 0.6000049954151406),
-        "navy" => (0.0, 0.0, 0.5019664769269617),
-        "lightgoldenrodyellow" => (0.9803924676542063, 0.9803924676542063, 0.8235319847543978),
-        "hsl(120,50%,50%)" => (0.2500060560461081, 0.7500034834463251, 0.25000605604610776),
-        "hsl(30, 100%, 25%)" => (0.5000057038898478, 0.25000605604610754, 0.0),
-        "hsla(300,40%,80%,0.5)" => (0.8800018064117537, 0.7200038245724022, 0.8800018064117535),
-        "hsl(0,0%,40%)" => (0.40000612249739637, 0.40000612249739637, 0.40000612249739637),
-        "hsl(390,100%,50%)" => (1.0, 0.5000057038898473, 0.0),
-        "hsl(200,60%,70%)" => (0.5200055837353184, 0.7600033657288716, 0.8800018064117535),
-        "rgba(255,128,0,0.25)" => (1.0, 0.5019664769269617, 0.0),
-        "rgb(10%,50%,100%)" => (0.10000475637218043, 0.5000057038898478, 1.0),
-        "#abc" => (0.6666710513191617, 0.7333370085461912, 0.8000028754620484),
+        "orange" => (1.0, 0.37626212298046485, 0.0),
+        "rebeccapurple" => (0.13286832154414627, 0.033104766565152086, 0.31854677811435356),
+        "navy" => (0.0, 0.0, 0.21586050010324417),
+        "lightgoldenrodyellow" => (0.9559733532482866, 0.9559733532482866, 0.6444796819634361),
+        "hsl(120,50%,50%)" => (0.05087608816465111, 0.5225215539594343, 0.050876088164650994),
+        "hsl(30, 100%, 25%)" => (0.2140411404715882, 0.0508760881646509, 0.0),
+        "hsla(300,40%,80%,0.5)" => (0.7484141034940689, 0.4769997845570289, 0.7484141034940685),
+        "hsl(0,0%,40%)" => (0.13286832154414627, 0.13286832154414627, 0.13286832154414627),
+        "hsl(390,100%,50%)" => (1.0, 0.2140411404715878, 0.0),
+        "hsl(200,60%,70%)" => (0.23302199929070042, 0.5382355235922686, 0.7484141034940685),
+        "rgba(255,128,0,0.25)" => (1.0, 0.21586050010324417, 0.0),
+        "rgb(10%,50%,100%)" => (0.01002282557165656, 0.2140411404715882, 1.0),
+        "#abc" => (0.4019777798219466, 0.4969329950515914, 0.6038273388475408),
+        "gray" => (0.21586050010324417, 0.21586050010324417, 0.21586050010324417),
     ]
     for (style, (r, g, b)) in oracle
-        color = Diff3D._svg_color(style)
-        @test isapprox(color.r, r; atol=1e-5) && isapprox(color.g, g; atol=1e-5) &&
-              isapprox(color.b, b; atol=1e-5)
+        @test Diff3D._svg_color(style) == Color3(r, g, b)
     end
-    # Exact values for the forms Diff3D already parsed are unchanged.
-    @test Diff3D._svg_color("gray") == Color3(128 / 255, 128 / 255, 128 / 255)
-    @test Diff3D._svg_color("#abc") == Color3(10 / 15, 11 / 15, 12 / 15)
     # The keyword table has all 148 entries of Color.NAMES.
     @test length(Diff3D._SVG_COLOR_KEYWORDS) == 148
     doc = _audit3_svg_document("""<svg><rect width="1" height="1" fill="Orange" stroke="hsl(240, 100%, 50%)"/></svg>""")
-    @test doc.paths[1].style.fill == Color3(1.0, 165 / 255, 0.0)
-    @test doc.paths[1].style.stroke == Color3(0.0, 0.0, 1.0)
+    @test doc.paths[1].style.fill == Color3(1.0, 0.37626212298046485, 0.0)
+    # Oracle: hsl(240, 100%, 50%) -> (0, 5.155834479353416e-17, 1).
+    @test doc.paths[1].style.stroke == Color3(0.0, 5.155834479353416e-17, 1.0)
     @test_throws "unsupported SVG color" Diff3D._svg_color("hsl(120,50,50)")
     @test_throws "alpha must be between 0 and 1" Diff3D._svg_color("rgba(1,2,3,2)")
     @test_throws "three channels" Diff3D._svg_color("rgb(1,2)")
