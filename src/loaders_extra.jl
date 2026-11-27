@@ -9138,49 +9138,98 @@ end
     UInt32(buf[i]) | (UInt32(buf[i + 1]) << 8) |
     (UInt32(buf[i + 2]) << 16) | (UInt32(buf[i + 3]) << 24)
 
+# Little-endian component loads; callers have bounds-checked the byte range.
+@inline _gltf_load_component(::Type{UInt8}, buf::AbstractVector{UInt8}, i::Int) =
+    @inbounds buf[i]
+@inline _gltf_load_component(::Type{Int8}, buf::AbstractVector{UInt8}, i::Int) =
+    reinterpret(Int8, @inbounds buf[i])
+@inline _gltf_load_component(::Type{UInt16}, buf::AbstractVector{UInt8}, i::Int) =
+    @inbounds _gltf_read_u16_le(buf, i)
+@inline _gltf_load_component(::Type{Int16}, buf::AbstractVector{UInt8}, i::Int) =
+    reinterpret(Int16, @inbounds _gltf_read_u16_le(buf, i))
+@inline _gltf_load_component(::Type{UInt32}, buf::AbstractVector{UInt8}, i::Int) =
+    @inbounds _gltf_read_u32_le(buf, i)
+@inline _gltf_load_component(::Type{Float32}, buf::AbstractVector{UInt8}, i::Int) =
+    reinterpret(Float32, @inbounds _gltf_read_u32_le(buf, i))
+
+# glTF 2.0 normalized-integer decoding (accessors, animation samplers):
+# unsigned c / (2^b - 1), signed max(c / (2^(b-1) - 1), -1).
+@inline _gltf_component_value(v::Float32, ::Bool) = Float64(v)
+@inline _gltf_component_value(v::Unsigned, normalized::Bool) =
+    normalized ? Float64(v) / Float64(typemax(v)) : Float64(v)
+@inline _gltf_component_value(v::Signed, normalized::Bool) =
+    normalized ? max(Float64(v) / Float64(typemax(v)), -1.0) : Float64(v)
+
+@noinline _gltf_nonfinite_float_error(offset::Int) =
+    error("glTF FLOAT accessor value at byte offset $offset must be finite")
+@noinline _gltf_accessor_read_error(sz::Int, offset::Int, len::Int) =
+    error("glTF accessor read of $sz bytes at offset $offset exceeds buffer length $len")
+
+function _gltf_component_type(ctype::Int)
+    ctype == 5126 && return Float32
+    ctype == 5125 && return UInt32
+    ctype == 5123 && return UInt16
+    ctype == 5121 && return UInt8
+    ctype == 5122 && return Int16
+    ctype == 5120 && return Int8
+    error("glTF componentType $ctype")
+end
+
 function _gltf_read_component(buf::AbstractVector{UInt8}, offset::Int, ctype::Int,
                               normalized::Bool)
     sz = _gltf_component_bytes(ctype)
     end_offset = _gltf_checked_byte_end(offset, sz, "accessor")
     (offset >= 0 && end_offset <= length(buf)) ||
-        error("glTF accessor read of $sz bytes at offset $offset exceeds buffer length $(length(buf))")
-    i = offset + 1
-    if ctype == 5126
-        value = Float64(reinterpret(Float32, _gltf_read_u32_le(buf, i)))
-        isfinite(value) ||
-            error("glTF FLOAT accessor value at byte offset $offset must be finite")
-        return value
-    elseif ctype == 5125
-        v = _gltf_read_u32_le(buf, i)
-        return normalized ? Float64(v) / Float64(typemax(UInt32)) : Float64(v)
-    elseif ctype == 5123
-        v = _gltf_read_u16_le(buf, i)
-        return normalized ? Float64(v) / Float64(typemax(UInt16)) : Float64(v)
-    elseif ctype == 5121
-        v = buf[i]
-        return normalized ? Float64(v) / Float64(typemax(UInt8)) : Float64(v)
-    elseif ctype == 5122
-        v = reinterpret(Int16, _gltf_read_u16_le(buf, i))
-        return normalized ? max(Float64(v) / Float64(typemax(Int16)), -1.0) : Float64(v)
-    elseif ctype == 5120
-        v = reinterpret(Int8, buf[i])
-        return normalized ? max(Float64(v) / Float64(typemax(Int8)), -1.0) : Float64(v)
-    end
-    error("glTF componentType $ctype")
+        _gltf_accessor_read_error(sz, offset, length(buf))
+    T = _gltf_component_type(ctype)
+    value = _gltf_component_value(_gltf_load_component(T, buf, offset + 1), normalized)
+    isfinite(value) || _gltf_nonfinite_float_error(offset)
+    return value
 end
 
 function _gltf_read_accessor_payload!(out::Vector{Float64}, buf::AbstractVector{UInt8}, offset::Int,
                                       count::Int, ncomp::Int, ctype::Int, stride::Int,
                                       normalized::Bool, component_offsets::O=nothing,
                                       out_offset::Int=0) where {O}
+    count > 0 && ncomp > 0 || return out
     compbytes = _gltf_component_bytes(ctype)
-    for e in 0:count-1
+    # Component offsets increase within an element, so the final component of
+    # the final element bounds every read; check that range once.
+    element_extent = _gltf_accessor_component_offset(component_offsets, ncomp - 1,
+                                                     compbytes) + compbytes
+    span = _gltf_checked_accessor_span(count, element_extent, stride, "accessor")
+    (offset >= 0 && stride >= 0 &&
+     _gltf_checked_byte_end(offset, span, "accessor") <= length(buf)) ||
+        _gltf_accessor_read_error(span, offset, length(buf))
+    out_offset >= 0 && out_offset + count * ncomp <= length(out) ||
+        throw(BoundsError(out, out_offset + count * ncomp))
+    ctype == 5126 && return _gltf_read_payload_kernel!(
+        out, buf, Float32, offset, count, ncomp, stride, normalized, component_offsets, out_offset)
+    ctype == 5125 && return _gltf_read_payload_kernel!(
+        out, buf, UInt32, offset, count, ncomp, stride, normalized, component_offsets, out_offset)
+    ctype == 5123 && return _gltf_read_payload_kernel!(
+        out, buf, UInt16, offset, count, ncomp, stride, normalized, component_offsets, out_offset)
+    ctype == 5121 && return _gltf_read_payload_kernel!(
+        out, buf, UInt8, offset, count, ncomp, stride, normalized, component_offsets, out_offset)
+    ctype == 5122 && return _gltf_read_payload_kernel!(
+        out, buf, Int16, offset, count, ncomp, stride, normalized, component_offsets, out_offset)
+    return _gltf_read_payload_kernel!(
+        out, buf, Int8, offset, count, ncomp, stride, normalized, component_offsets, out_offset)
+end
+
+function _gltf_read_payload_kernel!(out::Vector{Float64}, buf::AbstractVector{UInt8},
+                                    ::Type{T}, offset::Int, count::Int, ncomp::Int,
+                                    stride::Int, normalized::Bool,
+                                    component_offsets::O, out_offset::Int) where {T,O}
+    compbytes = sizeof(T)
+    @inbounds for e in 0:count-1
         base_offset = offset + e * stride
         base = out_offset + e * ncomp
         for c in 0:ncomp-1
-            component_offset = _gltf_accessor_component_offset(component_offsets, c, compbytes)
-            out[base + c + 1] = _gltf_read_component(buf, base_offset + component_offset,
-                                                   ctype, normalized)
+            byte = base_offset + _gltf_accessor_component_offset(component_offsets, c, compbytes)
+            value = _gltf_component_value(_gltf_load_component(T, buf, byte + 1), normalized)
+            T === Float32 && !isfinite(value) && _gltf_nonfinite_float_error(byte)
+            out[base + c + 1] = value
         end
     end
     return out
@@ -9192,24 +9241,25 @@ function _gltf_check_column_alignment(offset::Int, alignment::Int, label::String
     return nothing
 end
 
-function _gltf_checked_byte_end(offset::Int, len::Int, label::String)::Int
-    try
-        return Base.checked_add(offset, len)
-    catch err
-        err isa OverflowError || rethrow()
-        error("glTF $label byte range is outside the supported integer range")
-    end
+@noinline _gltf_byte_range_overflow_error(label::String) =
+    error("glTF $label byte range is outside the supported integer range")
+@noinline _gltf_byte_span_overflow_error(label::String) =
+    error("glTF $label byte span is outside the supported integer range")
+
+@inline function _gltf_checked_byte_end(offset::Int, len::Int, label::String)::Int
+    value, overflow = Base.Checked.add_with_overflow(offset, len)
+    overflow && _gltf_byte_range_overflow_error(label)
+    return value
 end
 
 function _gltf_checked_accessor_span(count::Int, element_size::Int, stride::Int,
                                      label::String)::Int
     count == 0 && return 0
-    try
-        return Base.checked_add(Base.checked_mul(count - 1, stride), element_size)
-    catch err
-        err isa OverflowError || rethrow()
-        error("glTF $label byte span is outside the supported integer range")
-    end
+    product, mul_overflow = Base.Checked.mul_with_overflow(count - 1, stride)
+    mul_overflow && _gltf_byte_span_overflow_error(label)
+    value, add_overflow = Base.Checked.add_with_overflow(product, element_size)
+    add_overflow && _gltf_byte_span_overflow_error(label)
+    return value
 end
 
 function _gltf_sparse_buffer_layout(gltf, buffers, sparse_def::AbstractDict,
