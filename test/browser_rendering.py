@@ -1340,8 +1340,10 @@ def main() -> None:
                                 raise AssertionError(f"{name}: WebGL errors {pixels['error']}, "
                                                      f"drained {pixels['glErrors']}, {errors}")
                             if name == "lighting_energy":
+                                # Ambient light 0.5 on albedo (0.4,0.6,0.8) through three.js BRDF_Lambert
+                                # (albedo/pi, common.glsl.js): 255*0.5*albedo/pi = (16.2,24.4,32.5).
                                 expected_cases={**{f"dark-{kind}":[0,0,0] for kind in ("lambert","phong","standard","physical")},
-                                    "ambient":[51,77,102],"emissive":[51,26,13],
+                                    "ambient":[16,24,32],"emissive":[51,26,13],
                                     **{f"back-{kind}":[0,0,0] for kind in ("directional","point","spot")}}
                                 for case_id,expected in expected_cases.items():
                                     select_render_case(page,case_id)
