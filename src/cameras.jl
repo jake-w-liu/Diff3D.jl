@@ -746,6 +746,98 @@ function view_matrix(c::OrthographicCamera)
     mat4_look_at(position, target, up)
 end
 
+# ------------------- Object3D transform API for cameras -------------------
+# A camera that is not rotation_driven is aimed by position/target/up, so the
+# rotation-based Object3D operations act on that aim instead of `rotation`.
+
+@noinline function _throw_camera_rotation_unused(camera::AbstractCamera)
+    throw(ArgumentError(
+        "$(nameof(typeof(camera))) is aimed by target and up; use look_at! or " *
+        "set rotation_driven=true before rotating it"))
+end
+
+@inline _object_rotation_settable(camera::AbstractCamera) =
+    camera.rotation_driven ? nothing : _throw_camera_rotation_unused(camera)
+
+# Local (parent-space) target and up that reproduce a world-space aim, the
+# inverse of `_camera_world_pose`.
+function _camera_local_aim(camera::AbstractCamera, world_target::Vec3, world_up::Vec3)
+    parent = get_parent(camera)
+    parent === nothing && return world_target, world_up
+    parent_world = _node_world_matrix(parent)
+    if camera.ignore_parent_scale
+        rotation = mat4_transpose(_rotation_without_scale(parent))
+        world_position = mat4_transform_point(parent_world, camera.position)
+        local_target = camera.position +
+            mat4_transform_direction(rotation, world_target - world_position)
+        return local_target, normalize(mat4_transform_direction(rotation, world_up))
+    end
+    inverse = mat4_inverse(parent_world)
+    return mat4_transform_point(inverse, world_target),
+           normalize(mat4_transform_direction(inverse, world_up))
+end
+
+"""
+    look_at!(camera::AbstractCamera, target; up=camera.up) -> camera
+
+Aim `camera` at the world-space `target`. As in three.js `Object3D.lookAt`
+for cameras, `rotation` is set so that the local -z axis points at `target`
+with `up` as the up hint, accounting for the parent's world rotation. A camera
+that is not `rotation_driven` also stores the equivalent parent-space
+`target`, so its view matrix looks at `target`.
+"""
+function look_at!(camera::AbstractCamera, target::Vec3; up::Vec3=camera.up)
+    point = _validated_camera_vector(target, nameof(typeof(camera)), :target)
+    up_vector = _validated_camera_vector(up, nameof(typeof(camera)), :up)
+    q = _look_at_quaternion(camera, point, up_vector, true)
+    rotation = euler_from_quaternion(quat_normalize(q), camera.rotation.order)
+    isfinite(rotation.x) && isfinite(rotation.y) && isfinite(rotation.z) ||
+        throw(ArgumentError("$(nameof(typeof(camera))) look_at! rotation is not finite"))
+    camera.rotation = rotation
+    if !camera.rotation_driven
+        local_target, _ = _camera_local_aim(camera, point, up_vector)
+        camera.target = _validated_camera_vector(
+            local_target, nameof(typeof(camera)), :target)
+    end
+    return camera
+end
+
+function translate_on_axis!(camera::AbstractCamera, axis::Vec3, distance::Real)
+    camera.rotation_driven && return invoke(
+        translate_on_axis!, Tuple{AbstractObject3D, Vec3, Real}, camera, axis, distance)
+    a = _validated_object_vector(axis, "translate_on_axis! axis")
+    d = _validated_object_scalar(distance, "translate_on_axis! distance")
+    position, target, up = _validated_camera_view_vectors(camera, nameof(typeof(camera)))
+    # Columns of the transposed look-at basis are the camera's local axes in
+    # its parent frame.
+    basis = mat4_transpose(mat4_look_at(position, target, up))
+    offset = mat4_transform_direction(basis, a) * d
+    camera.position = _validated_object_vector(position + offset, "translate_on_axis! position")
+    camera.target = _validated_object_vector(target + offset, "translate_on_axis! target")
+    return camera
+end
+
+"""
+    get_world_direction(camera::AbstractCamera) -> Vec3
+
+Unit world-space viewing direction of `camera` (three.js
+`Camera.getWorldDirection`), taken from its view matrix.
+"""
+get_world_direction(camera::AbstractCamera) =
+    -_camera_backward_from_view(view_matrix(camera))
+
+function attach!(parent::AbstractObject3D, camera::AbstractCamera)
+    camera.rotation_driven && return invoke(
+        attach!, Tuple{AbstractObject3D, AbstractObject3D}, parent, camera)
+    _, world_target, world_up = _camera_world_pose(camera)
+    invoke(attach!, Tuple{AbstractObject3D, AbstractObject3D}, parent, camera)
+    local_target, local_up = _camera_local_aim(camera, world_target, world_up)
+    kind = nameof(typeof(camera))
+    camera.target = _validated_camera_vector(local_target, kind, :target)
+    camera.up = _validated_camera_vector(local_up, kind, :up)
+    return parent
+end
+
 # ========================== StereoCamera ==========================
 # Produces a left/right eye camera pair for stereo rendering.
 

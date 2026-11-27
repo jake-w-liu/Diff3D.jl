@@ -403,3 +403,176 @@ end
         @test sample_cube(environment, 4.95 * axis + 2.75 * u - 1.25 * v) == wall
     end
 end
+
+# node rig: parent = Group with position (1,-2,0.5), rotation (0.3,-0.4,0.2,'XYZ'),
+# scale (2,0.5,1.5); child = Object3D with position (0.5,1,-1), rotation
+# (-0.2,0.7,0.1,'YXZ'), scale (1.2,0.8,1.1); parent.add(child);
+# parent.updateMatrixWorld(true). Each expectation below applies one
+# three.js call to a fresh rig (src/core/Object3D.js).
+function _b3_rig()
+    parent = Group()
+    parent.position = Vec3(1.0, -2.0, 0.5)
+    parent.rotation = Euler(0.3, -0.4, 0.2, :XYZ)
+    parent.scale = Vec3(2.0, 0.5, 1.5)
+    child = Object3D()
+    child.position = Vec3(0.5, 1.0, -1.0)
+    child.rotation = Euler(-0.2, 0.7, 0.1, :YXZ)
+    child.scale = Vec3(1.2, 0.8, 1.1)
+    add!(parent, child)
+    return parent, child
+end
+
+_b3_euler(e::Euler) = (e.x, e.y, e.z)
+_b3_vec(v::Vec3) = (v.x, v.y, v.z)
+
+@testset "audit3b: Object3D rotate, translate and lookAt match three.js" begin
+    # child.rotateOnAxis(new Vector3(0.6,0,0.8), 0.9) (Object3D.js:452-464).
+    _, c = _b3_rig()
+    @test Diff3D.rotate_on_axis!(c, Vec3(0.6, 0.0, 0.8), 0.9) === c
+    @test _b3_close(_b3_euler(c.rotation),
+                    (0.27230140869143943, 0.9386072633068203, 0.8464441350479441); atol=2e-15)
+    @test c.rotation.order == :YXZ
+    # child.rotateOnWorldAxis(new Vector3(0,0.6,0.8), -0.5) (Object3D.js:466-482).
+    _, c = _b3_rig()
+    Diff3D.rotate_on_world_axis!(c, Vec3(0.0, 0.6, 0.8), -0.5)
+    @test _b3_close(_b3_euler(c.rotation),
+                    (0.015008165482921016, 0.4276173052819045, -0.23761712002643362); atol=2e-15)
+    # rotateX(0.3); rotateY(-1.1); rotateZ(2.0) (Object3D.js:484-516).
+    _, c = _b3_rig()
+    Diff3D.rotate_x!(c, 0.3); Diff3D.rotate_y!(c, -1.1); Diff3D.rotate_z!(c, 2.0)
+    @test _b3_close(_b3_euler(c.rotation),
+                    (0.13221131292760066, -0.37810251164834063, 1.9563035026406066); atol=4e-15)
+    # translateOnAxis((0,0.6,0.8), 2.5); translateX(0.3); translateY(-0.7);
+    # translateZ(1.1) (Object3D.js:518-566).
+    _, c = _b3_rig()
+    Diff3D.translate_on_axis!(c, Vec3(0.0, 0.6, 0.8), 2.5)
+    Diff3D.translate_x!(c, 0.3); Diff3D.translate_y!(c, -0.7); Diff3D.translate_z!(c, 1.1)
+    @test _b3_close(_b3_vec(c.position),
+                    (2.5187764848680425, 2.425364205728319, 1.0573960205007469); atol=4e-15)
+    # child.lookAt(3,4,-5) with a rotated, scaled parent (Object3D.js:609-643).
+    _, c = _b3_rig()
+    Diff3D.look_at!(c, Vec3(3.0, 4.0, -5.0))
+    @test _b3_close(_b3_euler(c.rotation),
+                    (-0.564375449333802, -2.959204431168959, 0.1833341232107495); atol=4e-15)
+    # The world +z axis now points at the target.
+    direction = Diff3D.get_world_direction(c)
+    expected = normalize(Vec3(3.0, 4.0, -5.0) - Diff3D.get_world_position(c))
+    # (A non-uniformly scaled parent shears the world basis, so compare loosely.)
+    @test dot(direction, expected) > 0.9
+    # cam = new PerspectiveCamera(); cam.position.set(0.5,1,-1); parent.add(cam);
+    # cam.lookAt(3,4,-5): rotation (0.5719613004512871, 0.1538573050742357,
+    # -0.281669594726074).
+    p, _ = _b3_rig()
+    camera = PerspectiveCamera()
+    camera.position = Vec3(0.5, 1.0, -1.0)
+    add!(p, camera)
+    @test Diff3D.look_at!(camera, Vec3(3.0, 4.0, -5.0)) === camera
+    @test _b3_close(_b3_euler(camera.rotation),
+                    (0.5719613004512871, 0.1538573050742357, -0.281669594726074); atol=4e-15)
+    # The target-aimed view looks at the world target too.
+    world_position = Diff3D._camera_world_position(camera)
+    @test _b3_close(_b3_vec(Diff3D.get_world_direction(camera)),
+                    _b3_vec(normalize(Vec3(3.0, 4.0, -5.0) - world_position)); atol=1e-14)
+    # Target-aimed cameras reject rotation updates that their view ignores.
+    @test_throws ArgumentError Diff3D.rotate_x!(PerspectiveCamera(), 0.1)
+    driven = PerspectiveCamera(rotation_driven=true)
+    Diff3D.rotate_y!(driven, π / 2)
+    @test _b3_close(_b3_vec(Diff3D.get_world_direction(driven)), (-1.0, 0.0, 0.0); atol=1e-15)
+    # Translating a target-aimed camera moves along its view axes and keeps
+    # its aim: translateZ(-2) moves forward.
+    aimed = PerspectiveCamera()
+    aimed.position = Vec3(0.0, 0.0, 5.0)
+    Diff3D.translate_z!(aimed, -2.0)
+    Diff3D.translate_x!(aimed, 1.0)
+    @test _b3_close(_b3_vec(aimed.position), (1.0, 0.0, 3.0); atol=1e-15)
+    @test _b3_close(_b3_vec(aimed.target), (1.0, 0.0, -2.0); atol=1e-15)
+    @test_throws ArgumentError Diff3D.rotate_on_axis!(Object3D(), Vec3(NaN, 0.0, 0.0), 1.0)
+    @test_throws ArgumentError Diff3D.translate_x!(Object3D(), Inf)
+end
+
+@testset "audit3b: Object3D world queries and attach match three.js" begin
+    _, c = _b3_rig()
+    # child.localToWorld / worldToLocal of (0.3,-0.4,2), getWorldPosition,
+    # getWorldQuaternion, getWorldScale, getWorldDirection (Object3D.js:568-607,
+    # 1107-1175).
+    @test _b3_close(_b3_vec(Diff3D.local_to_world(c, Vec3(0.3, -0.4, 2.0))),
+                    (4.650882998934757, -1.2810309882085085, 3.089380511089116); atol=8e-15)
+    @test _b3_close(_b3_vec(Diff3D.world_to_local(c, Vec3(0.3, -0.4, 2.0))),
+                    (-0.9985803885541287, 3.5424140192045774, 1.49320645374909); atol=8e-15)
+    @test _b3_close(_b3_vec(Diff3D.get_world_position(c)),
+                    (2.395335324188442, -1.0351245538111036, -0.2887044480752682); atol=4e-15)
+    q = Diff3D.get_world_quaternion(c)
+    @test _b3_close((q.x, q.y, q.z, q.w),
+                    (-0.05623949599288058, 0.13900225665739435, 0.22821900161706882,
+                     0.949023139049116); atol=4e-15)
+    @test _b3_close(_b3_vec(Diff3D.get_world_scale(c)),
+                    (2.1501856536772337, 0.5188925230963557, 1.8630875980547872); atol=4e-15)
+    @test _b3_close(_b3_vec(Diff3D.get_world_direction(c)),
+                    (0.40375795465626624, -0.06703041616805701, 0.9124069472335936); atol=4e-15)
+    # p.scale.set(1.5,1.5,1.5); other = Group at (-3,1,2), rotation
+    # (0.1,0.2,-0.3), scale 0.7; other.attach(child) (Object3D.js:874-908).
+    # three.js documents attach for uniformly scaled ancestors only.
+    p, c = _b3_rig()
+    p.scale = Vec3(1.5, 1.5, 1.5)
+    other = Group()
+    other.position = Vec3(-3.0, 1.0, 2.0)
+    other.rotation = Euler(0.1, 0.2, -0.3)
+    other.scale = Vec3(0.7, 0.7, 0.7)
+    world_before = compute_world_matrix(c)
+    @test Diff3D.attach!(other, c) === other
+    @test get_parent(c) === other && c in get_children(other) && !(c in get_children(p))
+    @test _b3_close(_b3_vec(c.position),
+                    (7.780036580046055, 0.4518126884044902, -1.4669382268488709); atol=1e-14)
+    @test _b3_close(_b3_euler(c.rotation),
+                    (-0.13990365450192, 0.0049287595842766345, 0.6149576006039283); atol=4e-15)
+    @test c.rotation.order == :YXZ
+    @test _b3_close(_b3_vec(c.scale),
+                    (2.5714285714285725, 1.7142857142857146, 2.357142857142858); atol=1e-14)
+    @test isapprox(collect(compute_world_matrix(c).e), collect(world_before.e); atol=1e-14)
+    # A target-aimed camera keeps its world view when attached elsewhere.
+    p, _ = _b3_rig()
+    p.scale = Vec3(2.0, 2.0, 2.0)
+    camera = PerspectiveCamera()
+    camera.position = Vec3(0.5, 1.0, -1.0)
+    camera.target = Vec3(0.0, 2.0, 0.0)
+    add!(p, camera)
+    view_before = view_matrix(camera)
+    Diff3D.attach!(other, camera)
+    @test isapprox(collect(view_matrix(camera).e), collect(view_before.e); atol=1e-13)
+    @test_throws ArgumentError Diff3D.attach!(c, other)
+    singular = Group()
+    singular.scale = Vec3(0.0, 1.0, 1.0)
+    @test_throws ArgumentError Diff3D.attach!(singular, Object3D())
+end
+
+@testset "audit3b: Object3D traversal, lookup and removal match three.js" begin
+    root = Group(name="root")
+    a = Group(name="a")
+    b = Object3D(name="b")
+    hidden = Group(name="hidden")
+    hidden.visible = false
+    leaf = Object3D(name="leaf")
+    twin = Object3D(name="b")
+    add!(root, a); add!(a, b); add!(root, hidden); add!(hidden, leaf); add!(root, twin)
+    visited = String[]
+    Diff3D.traverse_visible(root, node -> push!(visited, node.name))
+    # traverseVisible skips invisible subtrees (Object3D.js:1265-1279).
+    @test visited == ["root", "a", "b", "b"]
+    ancestors = String[]
+    Diff3D.traverse_ancestors(leaf, node -> push!(ancestors, node.name))
+    # traverseAncestors visits parents only (Object3D.js:1281-1295).
+    @test ancestors == ["hidden", "root"]
+    # getObjectByName returns the first pre-order match (Object3D.js:1035-1071).
+    @test Diff3D.get_object_by_name(root, "b") === b
+    @test Diff3D.get_object_by_name(root, "missing") === nothing
+    @test Diff3D.get_object_by_id(root, leaf.id) === leaf
+    @test Diff3D.get_object_by_property(root, :visible, false) === hidden
+    @test Diff3D.get_object_by_property(root, :no_such_field, 1) === nothing
+    # removeFromParent / clear (Object3D.js:747-779).
+    @test Diff3D.remove_from_parent!(twin) === twin && get_parent(twin) === nothing
+    @test !(twin in get_children(root))
+    @test Diff3D.remove_from_parent!(twin) === twin
+    @test Diff3D.clear_children!(root) === root
+    @test isempty(get_children(root)) && get_parent(a) === nothing &&
+          get_parent(hidden) === nothing
+end
