@@ -824,10 +824,13 @@ end
 
 # Bounding-box margin around a triangle's screen extent. Pixels outside it get
 # no contribution, so a pixel at distance d from the edge loses coverage
-# sigmoid(-d/sigma). Pixel centres sit at index - 0.5, so the smallest truncated
-# distance is about margin - 0.5: with sigma >= 1/3 that is up to
-# sigmoid(-2.5) = 0.076 of coverage per face. The aggregate weights coverage by
-# exp(logit - m) against a background weight exp(-1/gamma - m), so the colour
+# sigmoid(-d/sigma). The bounds are floor(min - margin) and ceil(max + margin)
+# and pixel centres sit at index - 0.5, so an excluded centre is at least
+# margin + 0.5 from the vertex extent: with margin = 3 sigma the dropped
+# coverage per face is below sigmoid(-3) = 0.047 (0.029 at sigma = 1), and
+# with margin = 1 (sigma < 1/3) below sigmoid(-1.5/sigma) <= 0.011. The
+# aggregate weights coverage by exp(logit - m) against a background weight
+# exp(-1/gamma - m), so the colour
 # error of one dropped tail is bounded only by
 # sigmoid(-d/sigma) * exp((1 - depth)/gamma) relative to the background, not by
 # sigma alone. A bound eps on it needs d >= sigma * (log(1/eps) + 2/gamma),
