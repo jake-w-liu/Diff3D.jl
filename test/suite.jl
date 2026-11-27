@@ -10781,7 +10781,8 @@ end
               "newmtl red\nKd 0.8 0.2 0.1\nKs 0.5 0.5 0.5\nNs 64\nmap_Kd -s 1 1 diffuse.png\n")
         mats = load_mtl(joinpath(dir, "m.mtl"))
         @test haskey(mats, "red")
-        @test mats["red"].color.r ≈ 0.8 && mats["red"].color.g ≈ 0.2
+        # Kd is sRGB and stored linear (MTLLoader.js:395-399 colorSpaceToWorking).
+        @test mats["red"].color.r ≈ 0.6038273388553378 && mats["red"].color.g ≈ 0.033104766570885055
         @test mats["red"].shininess ≈ 64.0
         @test mats["red"].map isa Texture
         @test sample_texture(mats["red"].map, 0.5, 0.5).r ≈ 0.25 atol=1/255
@@ -10792,7 +10793,7 @@ end
         @test geo.n_faces == 1
         @test geo.uvs == [0.0,0.0, 1.0,0.0, 0.0,1.0]
         @test face_mtl == ["red"]
-        @test haskey(m2, "red") && m2["red"].color.r ≈ 0.8
+        @test haskey(m2, "red") && m2["red"].color.r ≈ 0.6038273388553378
         @test m2["red"].map isa Texture
         stress_mtl = joinpath(dir, "stress.mtl")
         stress_io = IOBuffer()
@@ -16245,12 +16246,21 @@ end
 
             strip_obj = mode_object(5, [0, 1, 2, 3])
             @test strip_obj isa Mesh
-            @test strip_obj.geometry.indices == [1, 2, 3, 4, 3, 2]
+            # No NORMAL: flat shading (GLTFLoader.js:3559) gives each triangle
+            # its own corners, in the strip order (1,2,3), (4,3,2).
+            @test strip_obj.geometry.indices == 1:6
+            @test [get_vertex(strip_obj.geometry, i) for i in 1:6] ==
+                  [Vec3(0.0, 0, 0), Vec3(1.0, 0, 0), Vec3(0.0, 1, 0),
+                   Vec3(1.0, 1, 0), Vec3(0.0, 1, 0), Vec3(1.0, 0, 0)]
             @test strip_obj.geometry.n_faces == 2
 
             fan_obj = mode_object(6, [0, 1, 2, 3])
             @test fan_obj isa Mesh
-            @test fan_obj.geometry.indices == [1, 2, 3, 1, 3, 4]
+            # Fan order (1,2,3), (1,3,4), de-indexed as above.
+            @test fan_obj.geometry.indices == 1:6
+            @test [get_vertex(fan_obj.geometry, i) for i in 1:6] ==
+                  [Vec3(0.0, 0, 0), Vec3(1.0, 0, 0), Vec3(0.0, 1, 0),
+                   Vec3(0.0, 0, 0), Vec3(0.0, 1, 0), Vec3(1.0, 1, 0)]
             @test fan_obj.geometry.n_faces == 2
 
             @test_throws ErrorException load_gltf_asset(primitive_mode_path(7, [0, 1, 2]))
@@ -21187,8 +21197,9 @@ end
                       "property ushort red\nproperty ushort green\n" *
                       "property ushort blue\nend_header\n" *
                       "0 0 0 65535 32768 0\n")
+                # Channels are sRGB and stored linear (PLYLoader.js:629-643).
                 @test get_attribute(load_ply(path), :color).data ≈
-                      [1.0, 32768 / 65535, 0.0]
+                      srgb_to_linear.([1.0, 32768 / 65535, 0.0])
             finally
                 rm(path; force=true)
             end
@@ -21204,8 +21215,9 @@ end
                       "property uchar red\nproperty float green\n" *
                       "property uint blue\nend_header\n" *
                       "0 0 0 255 0.25 4294967295\n")
+                # Channels are sRGB and stored linear (PLYLoader.js:629-643).
                 @test get_attribute(load_ply(path), :color).data ==
-                      [1.0, 0.25, 1.0]
+                      srgb_to_linear.([1.0, 0.25, 1.0])
             finally
                 rm(path; force=true)
             end
@@ -21223,8 +21235,9 @@ end
                     write(io, Float32(0), Float32(0), Float32(0),
                           UInt16(65535), UInt16(32768), UInt16(0))
                 end
+                # Channels are sRGB and stored linear (PLYLoader.js:629-643).
                 @test get_attribute(load_ply(path), :color).data ≈
-                      [1.0, 32768 / 65535, 0.0]
+                      srgb_to_linear.([1.0, 32768 / 65535, 0.0])
             finally
                 rm(path; force=true)
             end

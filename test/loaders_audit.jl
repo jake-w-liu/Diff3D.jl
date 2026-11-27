@@ -193,8 +193,10 @@ end
         @test sort!(collect(keys(mats))) == ["a b", "plain"]
         a = mats["a b"]
         @test a.color == Color3(1.0, 0.0, 0.0)
-        @test sample_texture(a.map, 0.5, 0.5).r ≈ 0.25 atol=1/255
-        @test a.map.repeat == Vec2(2.0, 3.0) && a.map.offset == Vec2(0.5, 0.25)
+        # MTLLoader.js:150 keeps the last map_Kd (`info[key] = value`): e.png,
+        # without the -s/-o options of the replaced d.png statement.
+        @test sample_texture(a.map, 0.5, 0.5).r ≈ 0.75 atol=1/255
+        @test a.map.repeat == Vec2(1.0, 1.0) && a.map.offset == Vec2(0.0, 0.0)
         @test a.map.colorspace === :srgb
         @test a.emissive_map.colorspace === :srgb
         @test a.normal_map.colorspace === :linear

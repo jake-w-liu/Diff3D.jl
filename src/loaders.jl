@@ -763,29 +763,6 @@ function _obj_checked_index_range(tok::AbstractString, first_i::Int, last_i::Int
     return idx
 end
 
-function _obj_parse_corner(c::AbstractString, nverts_v::Int, nverts_uv::Int, nverts_n::Int)
-    first_i = firstindex(c)
-    last_i = lastindex(c)
-    slash1 = findnext(==('/'), c, first_i)
-    if slash1 === nothing
-        return (_obj_checked_index_range(c, first_i, last_i, nverts_v, :vertex), 0, 0)
-    end
-    vidx = _obj_checked_index_range(c, first_i, prevind(c, slash1), nverts_v, :vertex)
-    after1 = nextind(c, slash1)
-    slash2 = after1 <= last_i ? findnext(==('/'), c, after1) : nothing
-    if slash2 === nothing
-        uidx = after1 <= last_i ? _obj_checked_index_range(c, after1, last_i, nverts_uv, :uv) : 0
-        return (vidx, uidx, 0)
-    end
-    uidx = after1 < slash2 ? _obj_checked_index_range(c, after1, prevind(c, slash2), nverts_uv, :uv) : 0
-    after2 = nextind(c, slash2)
-    slash3 = after2 <= last_i ? findnext(==('/'), c, after2) : nothing
-    normal_last = slash3 === nothing ? last_i : prevind(c, slash3)
-    nidx = after2 <= normal_last ?
-           _obj_checked_index_range(c, after2, normal_last, nverts_n, :normal) : 0
-    return (vidx, uidx, nidx)
-end
-
 function _obj_find_slash_range(c::AbstractString, first_i::Int, last_i::Int)
     i = first_i
     while i <= last_i
@@ -829,16 +806,6 @@ function _obj_next_token_range(line::AbstractString, i::Int, last_i::Int)
     return (first_i, prevind(line, i), i, true)
 end
 
-_obj_emit_corner!(out_pos::Vector{Float64}, out_uvs::Vector{Float64},
-                  out_nrm::Vector{Float64}, indices::Vector{Int},
-                  verts::Vector{Float64}, file_uvs::Vector{Float64},
-                  file_normals::Vector{Float64}, corner::NTuple{3,Int},
-                  out_vi::Int, have_uvs::Bool, have_normals::Bool,
-                  missing_normals::Bool) =
-    _obj_emit_corner!(out_pos, out_uvs, out_nrm, indices, verts, file_uvs,
-                      file_normals, corner, out_vi, have_uvs, have_normals,
-                      missing_normals, nothing)
-
 # `corner_vertices`, when a vector, receives the file vertex index of every
 # emitted corner (load_obj uses it to expand per-vertex colours).
 function _obj_emit_corner!(out_pos::Vector{Float64}, out_uvs::Vector{Float64},
@@ -875,18 +842,6 @@ function _obj_emit_corner!(out_pos::Vector{Float64}, out_uvs::Vector{Float64},
     push!(indices, out_vi)
     return out_vi, have_uvs, have_normals, missing_normals
 end
-
-_obj_emit_face_record_range!(out_pos::Vector{Float64}, out_uvs::Vector{Float64},
-                             out_nrm::Vector{Float64}, indices::Vector{Int},
-                             verts::Vector{Float64}, file_uvs::Vector{Float64},
-                             file_normals::Vector{Float64}, line::AbstractString,
-                             nverts_v::Int, nverts_uv::Int, nverts_n::Int,
-                             out_vi::Int, have_uvs::Bool, have_normals::Bool,
-                             missing_normals::Bool) =
-    _obj_emit_face_record_range!(out_pos, out_uvs, out_nrm, indices, verts,
-                                 file_uvs, file_normals, line, nverts_v,
-                                 nverts_uv, nverts_n, out_vi, have_uvs,
-                                 have_normals, missing_normals, nothing)
 
 function _obj_emit_face_record_range!(out_pos::Vector{Float64}, out_uvs::Vector{Float64},
                                       out_nrm::Vector{Float64}, indices::Vector{Int},
@@ -1101,10 +1056,6 @@ function _obj_parse_vec3_tokens_state(parts, state, label::String, x_label::Stri
             _obj_parse_float(z_state[1], z_label), z_state[2])
 end
 
-_obj_parse_vec3_tokens(parts, state, label::String) =
-    _obj_parse_vec3_tokens(parts, state, label, string(label, " x"),
-                           string(label, " y"), string(label, " z"))
-
 function _obj_parse_vt_tokens(parts, state)
     u_state = _obj_required_token(parts, state, 1, "vt")
     v_state = iterate(parts, u_state[2])
@@ -1141,7 +1092,63 @@ next line, and vertex records written as `v x y z r g b` add a per-vertex
 kept only when every vertex that a face references carries one (otherwise
 three.js builds a colour attribute that does not line up with the corners).
 """
-function load_obj(path::String)
+load_obj(path::String) = _obj_load(path, false)[1]
+
+# Shared OBJ parser behind load_obj and load_obj_groups, so both produce the
+# same geometry for one file. With `groups`, it also records the `usemtl` name
+# of every triangle and loads the `mtllib` libraries; without it, those
+# statements are skipped as load_obj documents.
+# Per-object records load_obj_scene needs beyond the triangle geometry:
+# OBJLoader's objects (`o`/`g`), and its `l` and `p` primitives.
+mutable struct _OBJSceneRecords
+    object_names::Vector{String}
+    declared::Bool               # the current object came from an o/g line
+    face_object::Vector{Int}     # object of each triangle
+    line_object::Vector{Int}     # object of each segment
+    line_material::Vector{String}
+    line_vertices::Vector{Int}   # two file vertex indices per segment
+    point_object::Vector{Int}
+    point_material::Vector{String}
+    point_vertices::Vector{Int}
+    # Filled after parsing: file positions and linear colours (NaN when a v
+    # has none, empty when no v has one).
+    verts::Vector{Float64}
+    colors::Vector{Float64}
+end
+
+_OBJSceneRecords() = _OBJSceneRecords([""], false, Int[], Int[], String[], Int[],
+                                      Int[], String[], Int[], Float64[], Float64[])
+
+function _obj_start_object!(rec::_OBJSceneRecords, name::String)
+    # OBJLoader.js startObject: the initial object, until a declaration names
+    # it, takes the first o/g name.
+    if !rec.declared
+        rec.object_names[end] = name
+        rec.declared = true
+    else
+        push!(rec.object_names, name)
+    end
+    return rec
+end
+
+# Vertex indices of an `l` or `p` record (`v` or `v/vt` tokens).
+function _obj_primitive_vertices!(out::Vector{Int}, line::AbstractString, nverts_v::Int,
+                                  nverts_uv::Int, nverts_n::Int)
+    empty!(out)
+    last_i = lastindex(line)
+    i = nextind(line, firstindex(line))
+    while true
+        first_i, tok_last, i, found = _obj_next_token_range(line, i, last_i)
+        found || break
+        vidx, _, _ = _obj_parse_corner_range(line, first_i, tok_last,
+                                             nverts_v, nverts_uv, nverts_n)
+        push!(out, vidx)
+    end
+    return out
+end
+
+function _obj_load(path::String, groups::Bool,
+                   scene::Union{Nothing,_OBJSceneRecords}=nothing)
     verts = Float64[]            # v
     file_uvs = Float64[]         # vt
     file_normals = Float64[]     # vn
@@ -1154,6 +1161,10 @@ function load_obj(path::String)
     out_uvs = Float64[]
     out_nrm = Float64[]
     indices = Int[]
+    face_mtl = String[]
+    materials = Dict{String, MeshPhongMaterial}()
+    cur_mtl = ""
+    dir = dirname(path)
     have_normals = false
     have_uvs = false
     missing_normals = false
@@ -1167,6 +1178,8 @@ function load_obj(path::String)
     sizehint!(out_uvs, n_uv_hint == 0 ? 0 : 2 * emitted_hint)
     sizehint!(out_nrm, n_n_hint == 0 ? 0 : 3 * emitted_hint)
     sizehint!(indices, emitted_hint)
+    groups && sizehint!(face_mtl, n_tri_hint)
+    corner_scratch = Int[]
 
     # try/finally instead of a `do` block: the loop reassigns out_vi,
     # have_uvs, ... which a closure would box.
@@ -1205,6 +1218,12 @@ function load_obj(path::String)
                                              nverts_v, nverts_uv, nverts_n, out_vi,
                                              have_uvs, have_normals, missing_normals,
                                              colors_ok ? corner_vertices : nothing)
+            if groups
+                for _ in (length(face_mtl) + 1):(length(indices) ÷ 3)
+                    push!(face_mtl, cur_mtl)
+                    scene === nothing || push!(scene.face_object, length(scene.object_names))
+                end
+            end
             continue
         end
         parts = eachsplit(line)
@@ -1215,7 +1234,7 @@ function load_obj(path::String)
             x, y, z, state = _obj_parse_vec3_tokens_state(parts, tag_state[2],
                                                           "v", "v x", "v y", "v z")
             push!(verts, x, y, z)
-            if colors_ok
+            if colors_ok || scene !== nothing
                 # OBJLoader.js: `v x y z r g b` (data.length >= 7) carries an
                 # sRGB colour; `v x y z [w]` does not. A `#` token starts an
                 # inline comment, which load_obj has always ignored after z.
@@ -1252,6 +1271,36 @@ function load_obj(path::String)
             # Every `f` with corners took the face-record path above; only a
             # bare `f` reaches here.
             error("OBJ face requires at least 3 vertices")
+        elseif groups && tag == "mtllib"
+            _obj_required_arg(parts, tag_state[2],
+                              "OBJ mtllib requires a material library path")
+            _obj_load_mtllib!(materials, dir, _mtl_rest_of_line(line, tag))
+        elseif groups && tag == "usemtl"
+            _obj_required_arg(parts, tag_state[2], "OBJ usemtl requires a material name")
+            cur_mtl = String(_mtl_rest_of_line(line, tag))
+        elseif scene !== nothing && (tag == "o" || tag == "g")
+            _obj_start_object!(scene, String(_mtl_rest_of_line(line, tag)))
+        elseif scene !== nothing && tag == "l"
+            # OBJLoader.js addLineGeometry; a polyline a b c is the segments
+            # a-b and b-c.
+            _obj_primitive_vertices!(corner_scratch, line, length(verts) ÷ 3,
+                                     length(file_uvs) ÷ 2, length(file_normals) ÷ 3)
+            length(corner_scratch) >= 2 || error("OBJ line requires at least 2 vertices")
+            for k in 1:(length(corner_scratch) - 1)
+                push!(scene.line_vertices, corner_scratch[k], corner_scratch[k + 1])
+                push!(scene.line_object, length(scene.object_names))
+                push!(scene.line_material, cur_mtl)
+            end
+        elseif scene !== nothing && tag == "p"
+            # OBJLoader.js addPointGeometry
+            _obj_primitive_vertices!(corner_scratch, line, length(verts) ÷ 3,
+                                     length(file_uvs) ÷ 2, length(file_normals) ÷ 3)
+            isempty(corner_scratch) && error("OBJ point requires at least 1 vertex")
+            for v in corner_scratch
+                push!(scene.point_vertices, v)
+                push!(scene.point_object, length(scene.object_names))
+                push!(scene.point_material, cur_mtl)
+            end
         end
     end
     finally
@@ -1295,7 +1344,11 @@ function load_obj(path::String)
         end
         colors_ok && set_attribute!(geo, :color, colors, 3)
     end
-    return geo
+    if scene !== nothing
+        scene.verts = verts
+        scene.colors = file_colors
+    end
+    return geo, face_mtl, materials
 end
 
 # ========================== XYZ ==========================
@@ -1469,17 +1522,27 @@ end
     return 1.0
 end
 
-@noinline function _ply_color_range_error(row::Int, channel::String, t::Symbol)
-    error("PLY vertex row $row color channel $channel is outside the non-negative $t range")
+@noinline function _ply_color_range_error(element::String, row::Int, channel::String,
+                                          t::Symbol)
+    error("PLY $element row $row color channel $channel is outside the non-negative $t range")
 end
 
+@noinline _ply_color_finite_error(element::String, row::Int, channel::String) =
+    error("PLY $element row $row color channel $channel must be finite")
+
+# A colour channel as a linear value. Integer channels are first normalised by
+# their type's maximum; the channel is then read as sRGB, as PLYLoader.js
+# handleElement does with `_color.setRGB(..., SRGBColorSpace)`.
 @inline function _ply_normalize_color(value::Float64, t::Symbol, row::Int,
-                                      channel::String)
-    _ply_is_int(t) || return value
-    max_value = _ply_color_integer_max(t)
-    (value == floor(value) && 0.0 <= value <= max_value) ||
-        _ply_color_range_error(row, channel, t)
-    return value / max_value
+                                      channel::String, element::String="vertex")
+    isfinite(value) || _ply_color_finite_error(element, row, channel)
+    if _ply_is_int(t)
+        max_value = _ply_color_integer_max(t)
+        (value == floor(value) && 0.0 <= value <= max_value) ||
+            _ply_color_range_error(element, row, channel, t)
+        value /= max_value
+    end
+    return srgb_to_linear(value)
 end
 
 @inline function _ply_checked_add(a::Int, b::Int, context::String)
@@ -1778,29 +1841,15 @@ function _ply_header_line(bytes::Vector{UInt8}, i::Int, n::Int, eol::UInt8)
     return line, j + 1
 end
 
-# Triangulate a PLY face one corner at a time (0-based `idx` in, 1-based
-# indices out). A quad splits as (0,1,3), (1,2,3), as PLYLoader.js
-# handleElement does; larger polygons, which three.js drops, fan from corner 0.
-@inline function _ply_polygon_corner!(indices::Vector{Int}, k::Int, nitems::Int,
-                                      idx::Int, first_idx::Int, prev_idx::Int,
-                                      third_idx::Int)
-    if k == 1
-        first_idx = idx
-    elseif k == 2
-        prev_idx = idx
-    elseif nitems == 4
-        if k == 3
-            third_idx = idx
-        else
-            push!(indices, first_idx + 1, prev_idx + 1, idx + 1,
-                  prev_idx + 1, third_idx + 1, idx + 1)
-        end
-    else
-        push!(indices, first_idx + 1, prev_idx + 1, idx + 1)
-        prev_idx = idx
-    end
-    return first_idx, prev_idx, third_idx
+# Corners (1-based positions in a polygon of `n` corners) of its triangle `t`,
+# in the order PLYLoader.js handleElement emits them: a quad splits as
+# (0,1,3), (1,2,3); larger polygons, which three.js drops, fan from corner 0.
+@inline function _ply_triangle_corners(n::Int, t::Int)
+    n == 4 && return t == 1 ? (1, 2, 4) : (2, 3, 4)
+    return (1, t + 1, t + 2)
 end
+
+@inline _ply_triangle_count(n::Int) = n < 3 ? 0 : n - 2
 
 function _ply_checked_binary_skip(i::Int, n::Int, nbytes::Int)
     nbytes >= 0 || error("PLY binary skip size must be non-negative")
@@ -1810,21 +1859,63 @@ function _ply_checked_binary_skip(i::Int, n::Int, nbytes::Int)
 end
 
 """
-    load_ply(path) -> BufferGeometry
+    load_ply(path; property_name_mapping=Dict{String,String}(),
+             custom_property_mapping=Dict{Symbol,Vector{String}}()) -> BufferGeometry
 
 Load a Stanford `.ply` mesh (ASCII, `binary_little_endian`, or
-`binary_big_endian`). Reads the `vertex` element and the `face` element (a
-vertex-index list per face). Vertex properties are found by the names three.js
-`PLYLoader` accepts: `x|px|posx` (likewise y, z), `nx|normalx` (likewise ny,
-nz), `s|u|texture_u|tx` and `t|v|texture_v|ty` for uvs, and
-`red|diffuse_red|r|diffuse_r` (likewise green, blue). A quad face splits into
-triangles (0,1,3) and (1,2,3) as in `PLYLoader`; larger polygons are
-fan-triangulated. Returns a [`BufferGeometry`](@ref) with positions, uvs when
-present, normals (file normals when present, otherwise smooth normals via
-[`compute_vertex_normals!`](@ref)), and a `:color` vertex attribute when
-colours are present (integer channels normalised to `[0,1]`).
+`binary_big_endian`) like three.js `PLYLoader`. Reads the `vertex` element and
+the `face` element (a `vertex_indices` or `vertex_index` list per face). Vertex
+properties are found by the names `PLYLoader` accepts: `x|px|posx` (likewise
+y, z), `nx|normalx` (likewise ny, nz), `s|u|texture_u|tx` and
+`t|v|texture_v|ty` for uvs, and `red|diffuse_red|r|diffuse_r` (likewise green,
+blue). A quad face splits into triangles (0,1,3) and (1,2,3) as in
+`PLYLoader`; larger polygons, which `PLYLoader` drops, are fan-triangulated.
+
+Colours are read as sRGB and stored linear, as `PLYLoader` does; an integer
+channel is first divided by the maximum of its declared type. A face element
+with a `texcoord` list (two values per corner) or red/green/blue properties
+gives every triangle corner its face's texture coordinate or colour; the
+geometry is then non-indexed, as `PLYLoader` makes it with `toNonIndexed`, and
+those values replace any vertex uvs or colours.
+
+`property_name_mapping` renames file properties before they are matched, like
+`PLYLoader.setPropertyNameMapping` (for example
+`Dict("diffuse_red" => "red")`). `custom_property_mapping` adds vertex
+attributes, like `PLYLoader.setCustomPropertyNameMapping`: each entry
+`name => ["prop_a", "prop_b"]` stores those scalar vertex properties, unscaled,
+as attribute `name` with one component per listed property. Every listed
+property must exist.
+
+Returns a [`BufferGeometry`](@ref) with positions, uvs when present, normals
+(file normals when present, otherwise smooth normals from
+[`compute_vertex_normals!`](@ref) on the indexed mesh), and a `:color`
+attribute when colours are present.
 """
-function load_ply(path::String)
+function load_ply(path::String;
+                  property_name_mapping::AbstractDict=Dict{String,String}(),
+                  custom_property_mapping::AbstractDict=Dict{Symbol,Vector{String}}())
+    name_map = Dict{String,String}()
+    for (k, v) in property_name_mapping
+        (k isa AbstractString && v isa AbstractString) ||
+            throw(ArgumentError("load_ply property_name_mapping must map property names to property names"))
+        name_map[String(k)] = String(v)
+    end
+    custom = Tuple{Symbol,Vector{String}}[]
+    for (k, v) in custom_property_mapping
+        (k isa Union{Symbol,AbstractString} && v isa AbstractVector &&
+         !isempty(v) && all(x -> x isa AbstractString, v)) ||
+            throw(ArgumentError("load_ply custom_property_mapping must map an attribute name to a non-empty list of property names"))
+        attr = Symbol(k)
+        attr in (:position, :normal, :uv) &&
+            throw(ArgumentError("load_ply custom_property_mapping cannot replace the $attr attribute"))
+        push!(custom, (attr, String[String(x) for x in v]))
+    end
+    sort!(custom; by=first)
+    return _load_ply(path, name_map, custom)
+end
+
+function _load_ply(path::String, name_map::Dict{String,String},
+                   custom::Vector{Tuple{Symbol,Vector{String}}})
     bytes = read(path)
     n = length(bytes)
 
@@ -1832,8 +1923,8 @@ function load_ply(path::String)
     # `i` walks the byte offset; after "end_header" it marks the body start.
     format = :ascii                 # :ascii | :binary_little_endian | :binary_big_endian
     # Per element, in declared order: name, count, and an ordered property list.
-    # Vertex/scalar properties are stored as (:scalar, name, type, :none). A
-    # face list property is stored as (:list, name, count_type, index_type).
+    # Scalar properties are stored as (:scalar, name, type, :none). A list
+    # property is stored as (:list, name, count_type, item_type).
     # One concrete tuple type keeps the per-row loops type-stable.
     elements = Tuple{String,Int,Vector{Tuple{Symbol,String,Symbol,Symbol}}}[]
     i = 1
@@ -1875,20 +1966,26 @@ function load_ply(path::String)
                 # property list <count_type> <index_type> <name>
                 ct = _ply_parse_type(t[3], "list count")
                 it = _ply_parse_type(t[4], "list index")
-                push!(props, (:list, String(t[5]), ct, it))
+                pname = String(t[5])
+                push!(props, (:list, get(name_map, pname, pname), ct, it))
             else
                 length(t) >= 3 || error("PLY property declaration requires type and name")
-                push!(props, (:scalar, String(t[3]), _ply_parse_type(t[2], "property"), :none))
+                pname = String(t[3])
+                push!(props, (:scalar, get(name_map, pname, pname),
+                              _ply_parse_type(t[2], "property"), :none))
             end
         elseif tag == "end_header"
             break
         end
     end
 
-    # --- Locate vertex/face elements and column roles. ---
+    # --- Read the elements. ---
     positions = Float64[]; normals = Float64[]; colors = Float64[]; uvs = Float64[]
     indices = Int[]
+    custom_data = [Float64[] for _ in custom]
     have_normals = false; have_color = false; have_uv = false
+    # Per emitted triangle corner, from face texcoord lists and face colours.
+    face_uvs = Float64[]; face_colors = Float64[]
     read_binary = format === :binary_big_endian ? _ply_read_be : _ply_read_le
     function checked_list_count(cnt)
         isfinite(cnt) && cnt >= 0 && cnt == floor(cnt) ||
@@ -1905,6 +2002,20 @@ function load_ply(path::String)
         iidx = Int(idx)
         return iidx
     end
+    # Column of the first property among the candidate names, tried in order
+    # (PLYLoader.js getAttributeDescriptor findProperty), or 0.
+    function find_col(props, candidates::String...)
+        for name in candidates
+            c = findfirst(p -> p[2] == name, props)
+            c === nothing || return c
+        end
+        return 0
+    end
+    function require_scalar(props, element::String, c::Int)
+        props[c][1] === :scalar ||
+            error("PLY $element property $(props[c][2]) must be scalar")
+        return c
+    end
 
     # Transfer owned ASCII bytes to String storage once. Numeric tokens then
     # share its trailing NUL and do not allocate a string per field.
@@ -1912,64 +2023,52 @@ function load_ply(path::String)
 
     for (ename, ecount, props) in elements
         _ply_preflight_element(ecount, props, format, _ply_available_bytes(n, i), ename)
+        # Scalar values of the current row, by property column.
+        rowvals = zeros(Float64, length(props))
         if ename == "vertex"
-            # Map property name -> column index for the roles we read.
-            names = String[p[2] for p in props]
             types = Symbol[p[1] === :scalar ? p[3] : :u32 for p in props]
-            # First property found among the candidate names, tried in order
-            # (PLYLoader.js getAttributeDescriptor findProperty).
-            function col(candidates::String...)
-                for name in candidates
-                    c = findfirst(==(name), names)
-                    c === nothing || return c
+            ix = find_col(props, "x", "px", "posx"); iy = find_col(props, "y", "py", "posy")
+            iz = find_col(props, "z", "pz", "posz")
+            (ix == 0 || iy == 0 || iz == 0) && error("PLY vertex element lacks x/y/z")
+            foreach(c -> require_scalar(props, "vertex", c), (ix, iy, iz))
+            inx = find_col(props, "nx", "normalx"); iny = find_col(props, "ny", "normaly")
+            inz = find_col(props, "nz", "normalz")
+            have_normals = inx != 0 && iny != 0 && inz != 0
+            have_normals && foreach(c -> require_scalar(props, "vertex", c), (inx, iny, inz))
+            ir = find_col(props, "red", "diffuse_red", "r", "diffuse_r")
+            ig = find_col(props, "green", "diffuse_green", "g", "diffuse_g")
+            ib = find_col(props, "blue", "diffuse_blue", "b", "diffuse_b")
+            have_color = ir != 0 && ig != 0 && ib != 0
+            have_color && foreach(c -> require_scalar(props, "vertex", c), (ir, ig, ib))
+            ius = find_col(props, "s", "u", "texture_u", "tx")
+            ivt = find_col(props, "t", "v", "texture_v", "ty")
+            have_uv = ius != 0 && ivt != 0
+            have_uv && foreach(c -> require_scalar(props, "vertex", c), (ius, ivt))
+            custom_cols = Vector{Int}[]
+            for (attr, pnames) in custom
+                cols = Int[]
+                for pname in pnames
+                    c = findfirst(p -> p[2] == pname, props)
+                    c === nothing &&
+                        error("PLY vertex element has no property $pname for custom attribute $attr")
+                    push!(cols, require_scalar(props, "vertex", c))
                 end
-                return nothing
-            end
-            ix = col("x", "px", "posx"); iy = col("y", "py", "posy")
-            iz = col("z", "pz", "posz")
-            (ix === nothing || iy === nothing || iz === nothing) && error("PLY vertex element lacks x/y/z")
-            for c in (ix, iy, iz)
-                props[c][1] === :scalar ||
-                    error("PLY vertex property $(props[c][2]) must be scalar")
-            end
-            inx = col("nx", "normalx"); iny = col("ny", "normaly")
-            inz = col("nz", "normalz")
-            have_normals = inx !== nothing && iny !== nothing && inz !== nothing
-            if have_normals
-                for c in (inx, iny, inz)
-                    props[c][1] === :scalar ||
-                        error("PLY vertex property $(props[c][2]) must be scalar")
-                end
-            end
-            ir = col("red", "diffuse_red", "r", "diffuse_r")
-            ig = col("green", "diffuse_green", "g", "diffuse_g")
-            ib = col("blue", "diffuse_blue", "b", "diffuse_b")
-            have_color = ir !== nothing && ig !== nothing && ib !== nothing
-            if have_color
-                for c in (ir, ig, ib)
-                    props[c][1] === :scalar ||
-                        error("PLY vertex property $(props[c][2]) must be scalar")
-                end
-            end
-            ius = col("s", "u", "texture_u", "tx"); ivt = col("t", "v", "texture_v", "ty")
-            have_uv = ius !== nothing && ivt !== nothing
-            if have_uv
-                for c in (ius, ivt)
-                    props[c][1] === :scalar ||
-                        error("PLY vertex property $(props[c][2]) must be scalar")
-                end
+                push!(custom_cols, cols)
             end
             coord_count = _ply_checked_mul(ecount, 3, "vertex coordinate count")
             positions = Vector{Float64}(undef, coord_count)
             have_normals && (normals = Vector{Float64}(undef, coord_count))
             have_color && (colors = Vector{Float64}(undef, coord_count))
             have_uv && (uvs = Vector{Float64}(undef, 2 * ecount))
+            for (k, cols) in enumerate(custom_cols)
+                custom_data[k] = Vector{Float64}(undef, _ply_checked_mul(
+                    ecount, length(cols), "custom attribute size"))
+            end
 
-            if format == :ascii
-                p = i
-                for v in 0:ecount-1
-                    b3 = v * 3
-                    for (c, prop) in enumerate(props)
+            p = i
+            for v in 0:ecount-1
+                for (c, prop) in enumerate(props)
+                    if format == :ascii
                         first, last, p = _ply_next_ascii_token(body, p, n)
                         first != 0 ||
                             _ply_ascii_missing_property_error("vertex", v + 1, prop[2])
@@ -1980,8 +2079,7 @@ function load_ply(path::String)
                                 val, prop[3], "vertex", v + 1, prop[2])
                             nitems = checked_list_count(count_value)
                             for item in 1:nitems
-                                first, last, p = _ply_next_ascii_token(
-                                    body, p, n)
+                                first, last, p = _ply_next_ascii_token(body, p, n)
                                 first != 0 ||
                                     _ply_ascii_missing_property_error(
                                         "vertex", v + 1, prop[2])
@@ -1990,77 +2088,49 @@ function load_ply(path::String)
                                     prop[2], prop[4], item)
                             end
                         else
-                            val = _ply_ascii_typed_value(
+                            rowvals[c] = _ply_ascii_typed_value(
                                 val, types[c], "vertex", v + 1, prop[2])
-                            if c == ix
-                                positions[b3+1] = val
-                            elseif c == iy
-                                positions[b3+2] = val
-                            elseif c == iz
-                                positions[b3+3] = val
-                            elseif have_normals && c == inx
-                                normals[b3+1] = val
-                            elseif have_normals && c == iny
-                                normals[b3+2] = val
-                            elseif have_normals && c == inz
-                                normals[b3+3] = val
-                            elseif have_color && c == ir
-                                colors[b3+1] = _ply_normalize_color(
-                                    val, types[c], v + 1, prop[2])
-                            elseif have_color && c == ig
-                                colors[b3+2] = _ply_normalize_color(
-                                    val, types[c], v + 1, prop[2])
-                            elseif have_color && c == ib
-                                colors[b3+3] = _ply_normalize_color(
-                                    val, types[c], v + 1, prop[2])
-                            elseif have_uv && c == ius
-                                uvs[2v+1] = val
-                            elseif have_uv && c == ivt
-                                uvs[2v+2] = val
-                            end
                         end
+                    elseif prop[1] !== :scalar
+                        # A list property on the vertex element (rare but legal)
+                        # is count + items; consume both so the byte cursor
+                        # stays aligned for the next vertex.
+                        cnt, i = read_binary(body, i, prop[3])
+                        nitems = checked_list_count(cnt)
+                        i = _ply_checked_binary_skip(i, n, _ply_checked_mul(
+                            nitems, _PLY_SIZE[prop[4]], "list payload byte count"))
+                    else
+                        val, i = read_binary(body, i, types[c])
+                        rowvals[c] = _ply_checked_finite_vertex(val, v + 1, prop[2])
                     end
                 end
-                i = p
-            else
-                # Binary: read every property in declared order; keep the roles.
-                for v in 0:ecount-1
-                    b3 = v * 3
-                    for (c, p) in enumerate(props)
-                        if p[1] !== :scalar
-                            # A list property on the vertex element (rare but
-                            # legal) is count + items; consume both so the byte
-                            # cursor stays aligned for the next vertex instead of
-                            # reading a single value and desyncing every row after.
-                            cnt, i = read_binary(body, i, p[3])
-                            nitems = checked_list_count(cnt)
-                            i = _ply_checked_binary_skip(i, n, _ply_checked_mul(
-                                nitems, _PLY_SIZE[p[4]], "list payload byte count"))
-                            continue
-                        end
-                        val, i = read_binary(body, i, types[c])
-                        val = _ply_checked_finite_vertex(val, v + 1, p[2])
-                        if c == ix; positions[b3+1] = val
-                        elseif c == iy; positions[b3+2] = val
-                        elseif c == iz; positions[b3+3] = val
-                        elseif have_normals && c == inx; normals[b3+1] = val
-                        elseif have_normals && c == iny; normals[b3+2] = val
-                        elseif have_normals && c == inz; normals[b3+3] = val
-                        elseif have_color && c == ir
-                            colors[b3+1] = _ply_normalize_color(
-                                val, types[c], v + 1, p[2])
-                        elseif have_color && c == ig
-                            colors[b3+2] = _ply_normalize_color(
-                                val, types[c], v + 1, p[2])
-                        elseif have_color && c == ib
-                            colors[b3+3] = _ply_normalize_color(
-                                val, types[c], v + 1, p[2])
-                        elseif have_uv && c == ius; uvs[2v+1] = val
-                        elseif have_uv && c == ivt; uvs[2v+2] = val
-                        end
+                b3 = 3v
+                positions[b3+1] = rowvals[ix]
+                positions[b3+2] = rowvals[iy]
+                positions[b3+3] = rowvals[iz]
+                if have_normals
+                    normals[b3+1] = rowvals[inx]
+                    normals[b3+2] = rowvals[iny]
+                    normals[b3+3] = rowvals[inz]
+                end
+                if have_color
+                    colors[b3+1] = _ply_normalize_color(rowvals[ir], types[ir], v + 1, props[ir][2])
+                    colors[b3+2] = _ply_normalize_color(rowvals[ig], types[ig], v + 1, props[ig][2])
+                    colors[b3+3] = _ply_normalize_color(rowvals[ib], types[ib], v + 1, props[ib][2])
+                end
+                if have_uv
+                    uvs[2v+1] = rowvals[ius]
+                    uvs[2v+2] = rowvals[ivt]
+                end
+                for (k, cols) in enumerate(custom_cols)
+                    data = custom_data[k]
+                    base = length(cols) * v
+                    for (j, c) in enumerate(cols)
+                        data[base + j] = rowvals[c]
                     end
                 end
             end
+            format == :ascii && (i = p)
         elseif ename == "face"
             # Prefer the conventional named vertex-index list. Fall back to the
             # first list for files that use a non-standard property name.
@@ -2072,20 +2142,33 @@ function load_ply(path::String)
             list_col === nothing &&
                 (list_col = findfirst(p -> p[1] === :list, props))
             list_col === nothing && error("PLY face element has no list property")
+            # PLYLoader.js reads a `texcoord` list and red/green/blue face
+            # properties (getAttributeDescriptor on the face element).
+            tc_col = findfirst(p -> p[1] === :list && p[2] == "texcoord", props)
+            tc_col == list_col && (tc_col = nothing)
+            fr = find_col(props, "red", "diffuse_red", "r", "diffuse_r")
+            fg = find_col(props, "green", "diffuse_green", "g", "diffuse_g")
+            fb = find_col(props, "blue", "diffuse_blue", "b", "diffuse_b")
+            face_color = fr != 0 && fg != 0 && fb != 0
+            face_color && foreach(c -> require_scalar(props, "face", c), (fr, fg, fb))
             face_hint = _ply_checked_mul(ecount, 3, "face index hint")
             sizehint!(indices, _ply_checked_add(
                 length(indices), face_hint, "face index hint"))
-            if format == :ascii
-                nverts = length(positions) ÷ 3
-                p = i
-                for face_row in 1:ecount
-                    for (prop_col, prop) in enumerate(props)
+            nverts = length(positions) ÷ 3
+            corners = Int[]
+            texcoords = Float64[]
+            p = i
+            for face_row in 1:ecount
+                empty!(corners)
+                empty!(texcoords)
+                for (prop_col, prop) in enumerate(props)
+                    if format == :ascii
                         first, last, p = _ply_next_ascii_token(body, p, n)
                         first != 0 ||
                             _ply_ascii_missing_property_error(
                                 "face", face_row, prop[2])
                         if prop[1] === :scalar
-                            _ply_validate_ascii_property_value(
+                            rowvals[prop_col] = _ply_validate_ascii_property_value(
                                 body, first, last, "face", face_row,
                                 prop[2], prop[3])
                             continue
@@ -2095,7 +2178,6 @@ function load_ply(path::String)
                         count_value = _ply_ascii_typed_value(
                             raw_count, prop[3], "face", face_row, prop[2])
                         nitems = checked_list_count(count_value)
-                        first_idx = prev_idx = third_idx = 0
                         for k in 1:nitems
                             first, last, p = _ply_next_ascii_token(body, p, n)
                             first != 0 ||
@@ -2107,47 +2189,72 @@ function load_ply(path::String)
                                 typed_index = _ply_ascii_typed_value(
                                     raw_index, prop[4], "face", face_row,
                                     prop[2], k)
-                                idx = checked_vertex_index(typed_index, nverts)
-                                first_idx, prev_idx, third_idx = _ply_polygon_corner!(
-                                    indices, k, nitems, idx, first_idx, prev_idx,
-                                    third_idx)
+                                push!(corners, checked_vertex_index(typed_index, nverts))
+                            elseif prop_col == tc_col
+                                push!(texcoords, _ply_validate_ascii_property_value(
+                                    body, first, last, "face", face_row,
+                                    prop[2], prop[4], k))
                             else
                                 _ply_validate_ascii_property_value(
                                     body, first, last, "face", face_row,
                                     prop[2], prop[4], k)
                             end
                         end
-                    end
-                end
-                i = p
-            else
-                nverts = length(positions) ÷ 3
-                for face_row in 1:ecount
-                    for (prop_col, prop) in enumerate(props)
+                    else
                         if prop[1] === :scalar
-                            _, i = read_binary(body, i, prop[3])
+                            rowvals[prop_col], i = read_binary(body, i, prop[3])
                             continue
                         end
                         cnt, i = read_binary(body, i, prop[3])
                         # A signed count type (e.g. `char`) can decode negative;
                         # validate before consuming the declared list payload.
                         nitems = checked_list_count(cnt)
-                        if prop_col != list_col
+                        if prop_col == list_col
+                            for _ in 1:nitems
+                                val, i = read_binary(body, i, prop[4])
+                                push!(corners, checked_vertex_index(val, nverts))
+                            end
+                        elseif prop_col == tc_col
+                            for _ in 1:nitems
+                                val, i = read_binary(body, i, prop[4])
+                                isfinite(val) ||
+                                    error("PLY face row $face_row property $(prop[2]) must be finite")
+                                push!(texcoords, val)
+                            end
+                        else
                             i = _ply_checked_binary_skip(i, n, _ply_checked_mul(
                                 nitems, _PLY_SIZE[prop[4]],
                                 "list payload byte count"))
-                            continue
-                        end
-                        first_idx = prev_idx = third_idx = 0
-                        for k in 1:nitems
-                            val, i = read_binary(body, i, prop[4])
-                            idx = checked_vertex_index(val, nverts) # 0-based
-                            first_idx, prev_idx, third_idx = _ply_polygon_corner!(
-                                indices, k, nitems, idx, first_idx, prev_idx,
-                                third_idx)
                         end
                     end
                 end
+                ncorners = length(corners)
+                ntri = _ply_triangle_count(ncorners)
+                ntri == 0 && continue
+                if tc_col !== nothing
+                    length(texcoords) == 2 * ncorners ||
+                        error("PLY face row $face_row texcoord has $(length(texcoords)) values; expected $(2 * ncorners)")
+                end
+                if face_color
+                    r = _ply_normalize_color(rowvals[fr], props[fr][3], face_row, props[fr][2], "face")
+                    g = _ply_normalize_color(rowvals[fg], props[fg][3], face_row, props[fg][2], "face")
+                    b = _ply_normalize_color(rowvals[fb], props[fb][3], face_row, props[fb][2], "face")
+                end
+                for t in 1:ntri
+                    for c in _ply_triangle_corners(ncorners, t)
+                        push!(indices, corners[c] + 1)
+                        if tc_col !== nothing
+                            push!(face_uvs, texcoords[2c-1], texcoords[2c])
+                        end
+                        face_color && push!(face_colors, r, g, b)
+                    end
+                end
+            end
+            format == :ascii && (i = p)
+            # Every corner needs the per-face data once any face element has it.
+            for (data, width, what) in ((face_uvs, 2, "texcoord"), (face_colors, 3, "colors"))
+                (isempty(data) || length(data) == width * length(indices)) ||
+                    error("PLY face elements disagree on face $what")
             end
         else
             # Unknown element: skip its rows so the byte cursor stays aligned.
@@ -2190,6 +2297,8 @@ function load_ply(path::String)
             end
         end
     end
+    isempty(custom) || any(e -> e[1] == "vertex", elements) ||
+        error("PLY custom_property_mapping requires a vertex element")
 
     nverts = length(positions) ÷ 3
     nfaces = length(indices) ÷ 3
@@ -2197,5 +2306,39 @@ function load_ply(path::String)
                          have_uv ? uvs : Float64[], indices, nverts, nfaces)
     have_normals || compute_vertex_normals!(geo)
     have_color && set_attribute!(geo, :color, colors, 3)
+    for (k, (attr, pnames)) in enumerate(custom)
+        set_attribute!(geo, attr, custom_data[k], length(pnames))
+    end
+    (isempty(face_uvs) && isempty(face_colors)) && return geo
+    geo = _ply_non_indexed(geo)
+    isempty(face_uvs) || (geo.uvs = face_uvs)
+    isempty(face_colors) || set_attribute!(geo, :color, face_colors, 3)
     return geo
+end
+
+# Data of `w` components per vertex expanded to one entry per index.
+function _ply_expand_by_index(data::AbstractVector, w::Int, idx::Vector{Int})
+    out = Vector{Float64}(undef, w * length(idx))
+    @inbounds for (k, v) in enumerate(idx)
+        for j in 1:w
+            out[w * (k - 1) + j] = data[w * (v - 1) + j]
+        end
+    end
+    return out
+end
+
+# Expand an indexed geometry so each triangle corner owns its vertex data
+# (three.js BufferGeometry.toNonIndexed).
+function _ply_non_indexed(geo::BufferGeometry)
+    idx = geo.indices
+    m = length(idx)
+    out = BufferGeometry(_ply_expand_by_index(geo.positions, 3, idx),
+                         _ply_expand_by_index(geo.normals, 3, idx),
+                         isempty(geo.uvs) ? Float64[] : _ply_expand_by_index(geo.uvs, 2, idx),
+                         collect(1:m), m, geo.n_faces)
+    for (name, attr) in geo.attributes
+        set_attribute!(out, name, _ply_expand_by_index(attr.data, attr.item_size, idx),
+                       attr.item_size)
+    end
+    return out
 end
