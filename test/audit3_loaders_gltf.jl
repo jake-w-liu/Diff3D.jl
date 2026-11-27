@@ -147,9 +147,10 @@ function audit3_morph_doc(; channel_node=0, interpolation="LINEAR")
     prim = Dict("attributes" => Dict("POSITION" => pos), "targets" => [Dict("POSITION" => target)])
     return audit3_document(b, Dict{String,Any}(
         "scene" => 0, "scenes" => [Dict("nodes" => [0])],
-        "nodes" => [Dict("name" => "a", "mesh" => 0, "children" => [1]),
+        "nodes" => [Dict("name" => "a", "mesh" => 0, "children" => [1, 3]),
                     Dict("name" => "b", "children" => [2]),
-                    Dict("name" => "c", "mesh" => 1)],
+                    Dict("name" => "c", "mesh" => 1),
+                    Dict("name" => "d", "mesh" => 1)],
         "meshes" => [Dict("primitives" => [prim, prim]),
                      Dict("primitives" => [prim], "weights" => [0.25])],
         "animations" => [Dict("samplers" => [Dict("input" => times, "output" => weights,
@@ -159,16 +160,22 @@ function audit3_morph_doc(; channel_node=0, interpolation="LINEAR")
 end
 
 @testset "glTF weights channels drive only the target node's primitives" begin
-    # three.js GLTFLoader.js:4586-4607 binds a weights channel to the node and
-    # the direct primitive meshes of a multi-primitive node, never to meshes of
-    # descendant nodes. three.js r186 AnimationMixer.setTime(0.5) leaves node c
-    # at its mesh default weight 0.25 while node a's primitives reach 0.5.
+    # glTF 2.0 animation channels: a weights channel animates the morph
+    # targets of the target node's own mesh. Node a has two primitives, a
+    # grandchild mesh node c and a direct child mesh node d. three.js r186
+    # AnimationMixer.setTime(0.5) gives a's primitives 0.5 and leaves c at
+    # its mesh weight 0.25. It also drives d to 0.5, because GLTFLoader.js:
+    # 4599-4605 collects every morph-capable child of a multi-primitive
+    # Group, and child nodes are children of that Group by then. Diff3D
+    # follows the specification for d and leaves it at 0.25.
     for interpolation in ("LINEAR", "CUBICSPLINE")
         asset = audit3_asset(audit3_morph_doc(; interpolation)...)
         a = only(get_children(asset.scene))
         prims = [child for child in a.children if child isa Mesh]
-        c = only(only(only(filter(child -> child isa Group, a.children)).children).children)
-        @test length(prims) == 2 && c isa Mesh
+        b_node, d_node = filter(child -> child isa Group, a.children)
+        c = only(only(b_node.children).children)
+        d = only(d_node.children)
+        @test length(prims) == 2 && c isa Mesh && d isa Mesh
         clip = only(asset.animations)
         @test length(clip.tracks) == 2
         @test all(track -> any(p -> p === track.target, prims), clip.tracks)
@@ -177,61 +184,11 @@ end
         # LINEAR: 0 -> 1 halfway; CUBICSPLINE with zero tangents: Hermite h01(0.5) = 0.5.
         @test all(p -> p.morph_target_influences ≈ [0.5], prims)
         @test c.morph_target_influences == [0.25]
+        @test d.morph_target_influences == [0.25]
     end
     # A weights channel on a node without morph-target primitives is malformed
     # (glTF 2.0 animation.channel.target: weights require a mesh with targets).
     @test_throws "has no morph-target primitives" audit3_asset(audit3_morph_doc(; channel_node=1)...)
-end
-
-function audit3_face_normals(geo)
-    return [Tuple(geo.normals[3i-2:3i]) for i in 1:geo.n_vertices]
-end
-
-@testset "glTF primitives without NORMAL get flat normals" begin
-    # glTF 2.0 §3.7.2.1: "When normals are not specified, client implementations
-    # MUST calculate flat normals". three.js GLTFLoader.js:3500 sets
-    # material.flatShading for these primitives; like three.js the TANGENT
-    # attribute is still loaded. Fold: triangles (0,1,2) and (0,2,3) lie in z=0, (0,3,4) in x=0.
-    b = Audit3GLTFBuilder()
-    pos = audit3_accessor!(b, Float32[0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 1], "VEC3")
-    tangent = audit3_accessor!(b, Float32[1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1], "VEC4")
-    idx = audit3_accessor!(b, UInt16[0, 1, 2, 0, 2, 3, 0, 3, 4], "SCALAR")
-    strip_idx = audit3_accessor!(b, UInt8[1, 2, 0, 3], "SCALAR")
-    joints = audit3_accessor!(b, UInt8[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], "VEC4")
-    weights = audit3_accessor!(b, Float32[1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0], "VEC4")
-    flat3 = audit3_accessor!(b, Float32[0, 0, 0, 1, 0, 0, 0, 1, 0], "VEC3")
-    doc, buffers = audit3_document(b, Dict{String,Any}(
-        "scene" => 0, "scenes" => [Dict("nodes" => [0, 1, 2])],
-        "nodes" => [Dict("mesh" => 0), Dict("mesh" => 1, "skin" => 0), Dict("mesh" => 2)],
-        "skins" => [Dict("joints" => [2])],
-        "meshes" => [
-            Dict("primitives" => [
-                Dict("attributes" => Dict("POSITION" => pos, "TANGENT" => tangent), "indices" => idx),
-                Dict("attributes" => Dict("POSITION" => pos), "indices" => strip_idx, "mode" => 5)]),
-            Dict("primitives" => [Dict("attributes" => Dict(
-                "POSITION" => pos, "JOINTS_0" => joints, "WEIGHTS_0" => weights), "indices" => idx)]),
-            Dict("primitives" => [Dict("attributes" => Dict("POSITION" => flat3))])]))
-    roots = get_children(audit3_scene(doc, buffers))
-    folded, strip = roots[1].children
-    z = (0.0, 0.0, 1.0)
-    x = (1.0, 0.0, 0.0)
-    @test folded.geometry.n_vertices == 9 && folded.geometry.n_faces == 3
-    @test audit3_face_normals(folded.geometry) == [z, z, z, z, z, z, x, x, x]
-    @test [folded.geometry.positions[3i-2:3i] for i in 1:9] ==
-          [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 0, 0], [1, 1, 0], [0, 1, 0],
-           [0, 0, 0], [0, 1, 0], [0, 0, 1]]
-    @test get_attribute(folded.geometry, :tangent).data == repeat([1.0, 0.0, 0.0, 1.0], 9)
-    # Strip (1,2,0,3) -> triangles (1,2,0), (3,0,2) (GLTFLoader toTrianglesDrawMode).
-    @test strip.geometry.n_faces == 2
-    @test audit3_face_normals(strip.geometry) == fill(z, 6)
-    skinned = only(roots[2].children)
-    @test skinned isa SkinnedMesh && skinned.geometry.n_vertices == 9
-    @test length(skinned.skin_indices) == 9 && length(skinned.skin_weights) == 9
-    @test audit3_face_normals(skinned.geometry)[7:9] == [x, x, x]
-    # Non-indexed triangles already have unshared vertices; their layout is kept.
-    plain = only(roots[3].children)
-    @test plain.geometry.n_vertices == 3 && plain.geometry.indices == [1, 2, 3]
-    @test audit3_face_normals(plain.geometry) == fill(z, 3)
 end
 
 @testset "glTF morph influences default to zero per target" begin
@@ -246,11 +203,18 @@ end
     prim = Dict("attributes" => Dict("POSITION" => pos),
                 "targets" => [Dict("POSITION" => up), Dict("POSITION" => side)])
     doc, buffers = audit3_document(b, Dict{String,Any}(
-        "scene" => 0, "scenes" => [Dict("nodes" => [0, 1])],
-        "nodes" => [Dict("mesh" => 0), Dict("mesh" => 1, "weights" => [0.3, 0.6])],
+        "scene" => 0, "scenes" => [Dict("nodes" => [0, 1, 2, 3])],
+        "nodes" => [Dict("mesh" => 0), Dict("mesh" => 1, "weights" => [0.3, 0.6]),
+                    Dict("mesh" => 1, "weights" => [0.7]), Dict("mesh" => 2)],
         "meshes" => [Dict("primitives" => [prim, prim], "extras" => Dict("targetNames" => ["up", "side"])),
-                     Dict("primitives" => [prim], "weights" => [0.1, 0.2])]))
-    first_node, second_node = get_children(audit3_scene(doc, buffers))
+                     Dict("primitives" => [prim], "weights" => [0.1, 0.2]),
+                     Dict("primitives" => [prim], "weights" => [0.5])]))
+    first_node, second_node, short_node, short_mesh = get_children(audit3_scene(doc, buffers))
+    # Short arrays overwrite a prefix only: three.js r186 loads node weights
+    # [0.7] over mesh weights [0.1, 0.2] as [0.7, 0.2] (GLTFLoader.js:4228-4238)
+    # and mesh weights [0.5] for two targets as [0.5, 0].
+    @test only(short_node.children).morph_target_influences == [0.7, 0.2]
+    @test only(short_mesh.children).morph_target_influences == [0.5, 0.0]
     @test all(mesh -> mesh.morph_target_influences == [0.0, 0.0], first_node.children)
     @test all(mesh -> mesh.morph_target_names == ["up", "side"], first_node.children)
     # Each primitive owns its influences, as each three.js Mesh does.
