@@ -51,3 +51,23 @@ end
         @test forward == reverse_gradient(audit3_relative_depth_sum, p)
     end
 end
+
+@testset "Reverse rem and sign derivatives follow the primal branch" begin
+    # rem(a, b) = a - b * div(a, b), so d/db = -div(a, b). In Float64,
+    # div(1.0, 0.1) == 9 (0.1 is slightly above 1/10) while 1.0 / 0.1 rounds
+    # to 10.0; the derivative must use the quotient the remainder used.
+    @test rem(1.0, 0.1) ≈ 1.0 - 9 * 0.1
+    @test reverse_gradient(x -> rem(x[1], x[2]), [1.0, 0.1]) == [1.0, -9.0]
+    @test reverse_gradient(x -> rem(1.0, x[1]), [0.1]) == [-9.0]
+    @test reverse_gradient(x -> rem(x[1], x[2]), [-1.0, 0.1]) == [1.0, 9.0]
+    # b = 0.1 sits just above the quotient-10 boundary (b < 0.1 gives
+    # quotient 10), so the branch the primal uses is the one to its right.
+    h = 1e-7
+    @test (rem(1.0, 0.1 + h) - rem(1.0, 0.1)) / h ≈ -9.0 rtol=1e-6
+    # sign is piecewise constant: zero derivative everywhere, including at 0
+    # (ForwardDiff agrees). Base's generic sign returns x itself at zero.
+    for x in (-2.0, -0.0, 0.0, 3.0)
+        @test reverse_gradient(v -> sign(v[1]) + 2v[1], [x]) == [2.0]
+        @test ForwardDiff.gradient(v -> sign(v[1]) + 2v[1], [x]) == [2.0]
+    end
+end

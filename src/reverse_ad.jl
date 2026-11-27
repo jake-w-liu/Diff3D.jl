@@ -464,15 +464,22 @@ function Base.mod(a::Real, b::ADVar)
     q = fld(af, b.val)
     _ad_record(mod(af, b.val), (b,), (-q,))
 end
+# rem(a, b) = a - b * div(a, b). The exact `div` matches the primal remainder;
+# truncating the rounded quotient `a / b` can step past it (rem(1.0, 0.1)
+# subtracts 9 * 0.1, while 1.0 / 0.1 rounds to 10.0).
 function Base.rem(a::ADVar, b::ADVar)
-    q = trunc(a.val / b.val)
+    q = div(a.val, b.val)
     _ad_record(rem(a.val, b.val), (a, b), (1.0, -q))
 end
 function Base.rem(a::Real, b::ADVar)
     af = Float64(a)
-    q = trunc(af / b.val)
+    q = div(af, b.val)
     _ad_record(rem(af, b.val), (b,), (-q,))
 end
+
+# Base's `sign(x)` returns `x` itself at zero, which would pass a unit
+# derivative through a piecewise-constant function. ForwardDiff gives zero.
+Base.sign(a::ADVar) = _ad_constant(sign(a.val))
 
 # Discrete quotient operations carry no derivative, matching ForwardDiff.
 Base.div(a::ADVar, b::ADVar, r::RoundingMode) = div(a.val, b.val, r)
