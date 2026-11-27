@@ -492,6 +492,25 @@ function _orbit_zoom_now!(oc::OrbitControls, factor)
     s = _orbit_spherical(oc)
     _orbit_apply!(oc, Spherical(s.radius * factor, s.phi, s.theta))
 end
+
+# log(floatmax(Float64)): exp of any value in ±this range is finite and nonzero.
+const _ORBIT_MAX_LOG_DOLLY = log(floatmax(Float64))
+
+# Throw, without changing any state, when dollying by `scale` would leave the
+# camera unrepresentable (the orthographic zoom or the perspective placement
+# becomes non-finite or zero after the configured limits).
+function _orbit_check_dolly(oc::OrbitControls, scale::Float64)
+    oc.camera isa OrthographicCamera && (_orbit_ortho_zoom(oc, scale); return nothing)
+    s = _orbit_constrained(oc, _orbit_spherical(oc))
+    q = _orbit_up_quaternion(oc)
+    offset = _orbit_rotate_vector(
+        Quaternion(-q.x, -q.y, -q.z, q.w),
+        spherical_to_cartesian(_orbit_constrained(
+            oc, Spherical(s.radius * scale, s.phi, s.theta))))
+    _checked_control_vec3(_orbit_limited_target(oc, oc.target) + offset,
+                          "OrbitControls camera position")
+    return nothing
+end
 function _camera_pan_basis(camera::AbstractCamera, target::Vec3{Float64})
     fwd = _direction_between(camera.position, target)
     raw_right = cross(fwd, camera.up)
@@ -572,8 +591,15 @@ function orbit_zoom!(oc::OrbitControls, factor)
         # into [min_distance, max_distance] — the same graceful handling the rest
         # of the controller uses.
         f > 0 || return _orbit_zoom_now!(oc, f)
-        zoom_velocity = _checked_control_scalar(
-            oc.v_zoom + log(f), "OrbitControls zoom velocity")
+        # The residual saturates at the largest representable factor, so
+        # exp() of it, or of any damped share of it, stays finite and nonzero.
+        zoom_velocity = clamp(oc.v_zoom + log(f),
+                              -_ORBIT_MAX_LOG_DOLLY, _ORBIT_MAX_LOG_DOLLY)
+        # orbit_update! applies at most the whole residual, so a residual whose
+        # complete dolly already leaves the representable range is rejected
+        # here, as the immediate path rejects that factor, instead of being
+        # queued and making every later update throw.
+        _orbit_check_dolly(oc, exp(zoom_velocity))
         oc.v_zoom = zoom_velocity
         return oc
     end
