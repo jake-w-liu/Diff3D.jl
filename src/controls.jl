@@ -1454,36 +1454,197 @@ end
 
 # ========================== Clock ==========================
 
+"""
+    Clock(auto_start::Bool=true)
+
+Frame timer modelled on three.js `Clock` (src/core/Clock.js), in seconds.
+Fields: `start_time` (time of the last start), `last_time` (three.js
+`oldTime`), `elapsed_time` (time accumulated while running), `running` and
+`auto_start`.
+
+`Clock()` starts at construction, so `start_time` is set immediately and the
+first `clock_delta!` returns the time since construction (three.js starts on
+the first `getDelta`, which returns 0). `Clock(false)` is created stopped:
+`clock_delta!` returns 0 until `clock_start!`. A stopped clock with
+`auto_start` set restarts on the next `clock_delta!`, which returns 0, as
+three.js does; `clock_stop!` clears `auto_start`.
+
+Every `now` argument defaults to the current monotonic time in seconds; pass
+it explicitly for deterministic stepping.
+"""
 mutable struct Clock
     start_time::Float64
     last_time::Float64
     running::Bool
+    auto_start::Bool
+    elapsed_time::Float64
 end
 
 @inline _clock_now() = Float64(time_ns()) / 1.0e9
 
-Clock() = (t = _clock_now(); Clock(t, t, true))
+# Positional form kept from 1.0: a running clock whose elapsed time is the
+# span since `start_time` already measured up to `last_time`.
+Clock(start_time::Real, last_time::Real, running::Bool) =
+    Clock(Float64(start_time), Float64(last_time), running, true,
+          Float64(last_time) - Float64(start_time))
+
+function Clock(auto_start::Bool=true)
+    t = _clock_now()
+    return Clock(t, t, auto_start, auto_start, 0.0)
+end
 
 function _validate_clock(c::Clock)
     _checked_control_scalar(c.start_time, "Clock start_time")
     _checked_control_scalar(c.last_time, "Clock last_time")
+    _checked_control_scalar(c.elapsed_time, "Clock elapsed_time")
     return nothing
 end
 
+"""
+    clock_start!(clock[, now]) -> clock
+
+Start (or restart) `clock` at `now`: three.js `Clock.start` sets the start
+and previous times to `now`, zeroes the elapsed time and sets `running`.
+"""
+function clock_start!(c::Clock, now=_clock_now())
+    current = _checked_control_scalar(now, "Clock current time")
+    c.start_time = current
+    c.last_time = current
+    c.elapsed_time = 0.0
+    c.running = true
+    return c
+end
+
+"""
+    clock_stop!(clock[, now]) -> clock
+
+Stop `clock` after accumulating the time up to `now` (three.js `Clock.stop`
+calls `getElapsedTime` first). A stopped clock keeps its elapsed time and
+returns 0 from `clock_delta!`; `auto_start` is cleared, so only
+`clock_start!` runs it again.
+"""
+function clock_stop!(c::Clock, now=_clock_now())
+    clock_delta!(c, now)
+    c.running = false
+    c.auto_start = false
+    return c
+end
+
+"""
+    clock_elapsed(clock[, now]) -> Float64
+
+Seconds the clock has run up to `now`: the accumulated `elapsed_time` plus,
+while running, the span since the last `clock_delta!`. A stopped clock
+returns its accumulated time. Unlike three.js `getElapsedTime`, it does not
+consume the pending delta, so a following `clock_delta!` still measures from
+the previous `clock_delta!`.
+"""
 function clock_elapsed(c::Clock, now=_clock_now())
     _validate_clock(c)
     current = _checked_control_scalar(now, "Clock current time")
+    c.running || return c.elapsed_time
     return _checked_control_scalar(
-        current - c.start_time, "Clock elapsed time")
+        c.elapsed_time + (current - c.last_time), "Clock elapsed time")
 end
 
+"""
+    clock_delta!(clock[, now]) -> Float64
+
+Seconds since the previous `clock_delta!` (or start), as three.js
+`Clock.getDelta`: the time is added to `elapsed_time` and `last_time`
+advances to `now`. A stopped clock returns 0; a stopped clock with
+`auto_start` starts at `now` and returns 0.
+"""
 function clock_delta!(c::Clock, now=_clock_now())
     _validate_clock(c)
     current = _checked_control_scalar(now, "Clock current time")
+    if c.auto_start && !c.running
+        clock_start!(c, current)
+        return 0.0
+    end
+    c.running || return 0.0
     d = _checked_control_scalar(current - c.last_time, "Clock delta")
+    elapsed = _checked_control_scalar(c.elapsed_time + d, "Clock elapsed time")
     c.last_time = current
+    c.elapsed_time = elapsed
     return d
 end
+
+"""
+    FrameTimer(now=current time) -> FrameTimer
+
+Frame timer modelled on three.js `Timer` (src/core/Timer.js), the r183
+replacement for `Clock`, in seconds. Call `timer_update!` once per frame,
+then read the frame's `timer_delta` and the accumulated `timer_elapsed`;
+reading never changes the timer. `time_scale` (three.js `setTimescale`)
+scales every later delta. The Page Visibility hook of three.js
+(`connect`/`disconnect`) has no headless counterpart.
+
+Fields: `start_time` (absolute), `previous_time` and `current_time`
+(relative to `start_time`), `delta`, `elapsed` and `time_scale`.
+"""
+mutable struct FrameTimer
+    start_time::Float64
+    previous_time::Float64
+    current_time::Float64
+    delta::Float64
+    elapsed::Float64
+    time_scale::Float64
+end
+
+FrameTimer(now=_clock_now()) =
+    FrameTimer(_checked_control_scalar(now, "FrameTimer start time"),
+               0.0, 0.0, 0.0, 0.0, 1.0)
+
+"""
+    timer_update!(timer[, timestamp]) -> timer
+
+Advance `timer` to the absolute `timestamp` (seconds, default now), as
+three.js `Timer.update`: the frame delta is the span since the previous
+update (or `timer_reset!`) times `time_scale`, and it is added to the
+elapsed time.
+"""
+function timer_update!(t::FrameTimer, timestamp=_clock_now())
+    now = _checked_control_scalar(timestamp, "FrameTimer timestamp")
+    scale = _checked_control_scalar(t.time_scale, "FrameTimer time_scale")
+    previous = t.current_time
+    current = _checked_control_scalar(now - t.start_time, "FrameTimer current time")
+    delta = _checked_control_scalar((current - previous) * scale, "FrameTimer delta")
+    elapsed = _checked_control_scalar(t.elapsed + delta, "FrameTimer elapsed time")
+    t.previous_time = previous
+    t.current_time = current
+    t.delta = delta
+    t.elapsed = elapsed
+    return t
+end
+
+"""
+    timer_reset!(timer[, now]) -> timer
+
+Measure the next `timer_update!` delta from `now` instead of the previous
+update (three.js `Timer.reset`); the current delta and elapsed time are kept.
+"""
+function timer_reset!(t::FrameTimer, now=_clock_now())
+    current = _checked_control_scalar(now, "FrameTimer current time")
+    t.current_time = _checked_control_scalar(current - t.start_time,
+                                             "FrameTimer current time")
+    return t
+end
+
+"""
+    timer_delta(timer) -> Float64
+
+Scaled seconds between the two latest `timer_update!` calls (three.js
+`Timer.getDelta`); 0 before the first update.
+"""
+timer_delta(t::FrameTimer) = t.delta
+
+"""
+    timer_elapsed(timer) -> Float64
+
+Sum of every scaled frame delta so far (three.js `Timer.getElapsed`).
+"""
+timer_elapsed(t::FrameTimer) = t.elapsed
 
 # ========================== Animation ==========================
 
