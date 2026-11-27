@@ -59,3 +59,37 @@ end
         @test expected[findfirst(==((:repeat, 1, true, -1.0, 2.5)), grid)] == 0.0
     end
 end
+
+# The viewer's top-level `const name=...` line, as emitted.
+function _audit3_viewer_const(html::AbstractString, name::AbstractString)
+    for line in eachsplit(html, '\n')
+        startswith(line, "  const $name=") && return String(line)
+    end
+    error("viewer constant $name not found")
+end
+
+@testset "shadow depth pass divides clip z by w per fragment" begin
+    # three.js depth.glsl.js passes gl_Position.zw (:41) and divides in the fragment shader
+    # (:91). The old pass divided per vertex; perspective-correct interpolation of that
+    # quotient is linear in world space, but z/w is not, so a spot-light shadow camera stored
+    # depths nearer than its own surfaces. Modelled with the viewer's spotShadowMatrix on a
+    # 20x20 floor lit from (-8,6,-8), 722 of 760 interior samples fell more than the 0.0015
+    # bias behind the stored depth (worst 0.346); dividing interpolated z and w leaves 0.
+    html = _audit3_viewer_html()
+    dvsh = _audit3_viewer_const(html, "DVSH")
+    dfsh = _audit3_viewer_const(html, "DFSH")
+    pdfsh = _audit3_viewer_const(html, "PDFSH")
+    @test !occursin("clip.z/clip.w", html)
+    @test occursin("varying vec2 vShadowZW;", dvsh)
+    @test occursin("vShadowZW=clip.zw; gl_Position=clip;", dvsh)
+    @test occursin("varying vec2 vShadowZW;", dfsh)
+    @test occursin("clamp(vShadowZW.x/vShadowZW.y*.5+.5,0.0,1.0)", dfsh)
+    # The point-shadow programs strip that assignment; the pattern must still match, and the
+    # varying keeps one type across both stages.
+    for name in ("PDVSH", "PDVSH_BONE_TEXTURE")
+        @test occursin(".replace(\"vShadowZW=clip.zw; gl_Position=clip;\",\"gl_Position=clip;\")",
+                       _audit3_viewer_const(html, name))
+    end
+    @test occursin("varying vec2 vShadowZW;", pdfsh)
+    @test !occursin("vShadowDepth", html)
+end
