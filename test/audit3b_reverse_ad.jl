@@ -270,10 +270,14 @@ end
     image = soft_render(vertices, faces, colors, vp, 64, 64, config)
     @test eltype(image) === Float32
     if Base.JLOptions().opt_level > 0
+        # With several threads the 4096-pixel image takes the parallel column
+        # path, which allocates only its task objects (soft_render docstring);
+        # any per-pixel allocation would need at least 16 B x 4096 = 64 KiB.
+        allocation_ok(bytes) = Threads.nthreads() == 1 ? bytes == 0 : bytes < 64 * 1024
         workspace = SoftRenderWorkspace{Float32}()
-        @test audit3b_soft_allocations(vertices, faces, colors, vp, config, workspace) == 0
+        @test allocation_ok(audit3b_soft_allocations(vertices, faces, colors, vp, config, workspace))
         workspace64 = SoftRenderWorkspace{Float64}()
-        @test audit3b_soft_allocations(audit3b_sphere_inputs(Float64)..., workspace64) == 0
+        @test allocation_ok(audit3b_soft_allocations(audit3b_sphere_inputs(Float64)..., workspace64))
     end
 end
 
