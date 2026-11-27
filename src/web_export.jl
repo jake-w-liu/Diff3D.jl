@@ -5315,12 +5315,14 @@ function _web_write_webgl_html(io::IO, data_json::String, title::String;
   // (WebGLRenderer.js:1992-1998). Those two are written here as well because either one, left
   // hostile, can blank the canvas with no GL error. Per-object state (cull face, line width, depth
   // test and depth mask) is still set by draw(). Viewport and scissor are always reissued, never
-  // cached: resizing the canvas changes the drawing buffer but not the stored viewport.
+  // cached: resizing the canvas changes the drawing buffer but not the stored viewport. The depth
+  // function is the one every draw uses: three.js materials default to LessEqualDepth
+  // (Material.js:211, applied per draw by WebGLState.setMaterial), as the CPU renderers' depth test.
   function resetGLState(){
     gl.bindFramebuffer(gl.FRAMEBUFFER,null);
     gl.disable(gl.SCISSOR_TEST); gl.disable(gl.STENCIL_TEST); gl.disable(gl.POLYGON_OFFSET_FILL);
     gl.disable(gl.SAMPLE_ALPHA_TO_COVERAGE); gl.disable(gl.SAMPLE_COVERAGE); gl.disable(gl.CULL_FACE);
-    gl.colorMask(true,true,true,true); gl.depthMask(true); gl.depthFunc(gl.LESS); gl.depthRange(0,1); gl.clearDepth(1);
+    gl.colorMask(true,true,true,true); gl.depthMask(true); gl.depthFunc(gl.LEQUAL); gl.depthRange(0,1); gl.clearDepth(1);
     gl.frontFace(gl.CCW); gl.cullFace(gl.BACK); gl.polygonOffset(0,0); gl.sampleCoverage(1,false); gl.lineWidth(1);
     // Blending is NormalBlending for transparent materials only; opaque ones draw with blending
     // off (WebGLState.js setMaterial:765-767, setBlending:611-622 and :674-676).

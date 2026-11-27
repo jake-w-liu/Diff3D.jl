@@ -411,3 +411,50 @@ end
     @test _rp_close(hits[1].point,
                     Vec3(1.4824200956400264, 1.5545905911654725, 4.862590721403739); rtol=1e-12)
 end
+
+@testset "render-parity: oblique emission layering ignores the base normalMap" begin
+    # meshphysical.glsl.js computes Fcc from dot(geometryClearcoatNormal, V),
+    # and clearcoatNormal is nonPerturbedNormal unless a clearcoatNormalMap is
+    # set (clearcoat_normal_fragment_begin.glsl.js), so a base normalMap must
+    # not move the layering of the emission. With no lights and a black base
+    # the pixel is emissive · (1 - clearcoat · Fcc(N·V)) at an oblique N·V.
+    angle = 1.0
+    camera = OrthographicCamera(left=-1.0, right=1.0, top=1.0, bottom=-1.0,
+                                near=1.0, far=2.0e5)
+    # Far away, so the view direction of every fragment and face centre is
+    # within 1e-5 rad of the camera axis.
+    camera.position = Vec3(1.0e5 * sin(angle), 0.0, 1.0e5 * cos(angle))
+    camera.target = Vec3(0.0, 0.0, 0.0)
+    nv = cos(angle)
+    w = exp2((-5.55473 * nv - 6.98316) * nv)
+    for normal_map in (nothing, _rp_tilt_map(0.4, 0.1)), shading in (:flat, :smooth),
+        clearcoat in (1.0, 0.5)
+        material = MeshPhysicalMaterial(color=Color3(0.0, 0.0, 0.0), clearcoat=clearcoat,
+                                        emissive=Color3(0.5, 0.25, 0.125),
+                                        normal_map=normal_map)
+        scene = Scene(background=Color3(0.0, 0.0, 0.0))
+        add!(scene, Mesh(PlaneGeometry(width=1.5, height=1.5), material))
+        target = RenderTarget(16, 16)
+        render!(target, scene, camera; shading=shading)
+        layer = 1 - clearcoat * (0.04 * (1 - w) + w)
+        @test target.color[8, 8, :] ≈ [0.5, 0.25, 0.125] .* layer atol=1e-6
+    end
+end
+
+@testset "render-parity: WebGL export depth-tests with LessEqual" begin
+    # The CPU renderers' LessEqual depth test is three.js's per-material
+    # default (Material.js:211, set per draw by WebGLState.setMaterial); the
+    # standalone WebGL viewer uses the same function rather than GL's LESS.
+    scene = Scene()
+    add!(scene, Mesh(PlaneGeometry(), MeshBasicMaterial()))
+    path = tempname() * ".html"
+    try
+        save_webgl_html(path, [WebGLExportCase("plane", "Plane", "", scene)];
+                        chrome=false)
+        html = read(path, String)
+        @test occursin("gl.depthFunc(gl.LEQUAL)", html)
+        @test !occursin("gl.depthFunc(gl.LESS)", html)
+    finally
+        rm(path; force=true)
+    end
+end
