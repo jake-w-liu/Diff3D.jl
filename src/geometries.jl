@@ -1052,20 +1052,25 @@ function compute_face_normal(g::BufferGeometry, face_idx::Int)
     triangle_normal(Triangle(v1, v2, v3))
 end
 
+# Face ranges of the draw groups, each checked to lie within the faces.
+function _group_face_ranges(g::BufferGeometry, context::String)
+    ranges = Vector{UnitRange{Int}}(undef, length(g.groups))
+    for (k, (start, count, _)) in enumerate(g.groups)
+        last_face = _geometry_checked_add(start, count - 1,
+                                          "$context group range")
+        (count == 0 || (start >= 1 && last_face <= g.n_faces)) ||
+            throw(ArgumentError(
+                "$context group $k must lie within the geometry's faces"))
+        ranges[k] = start:last_face
+    end
+    return ranges
+end
+
 # Faces visited by `compute_tangents!`: the draw groups when present
 # (BufferGeometry.js:923-944), otherwise every face.
 function _tangent_face_ranges(g::BufferGeometry)
     isempty(g.groups) && return [1:g.n_faces]
-    ranges = Vector{UnitRange{Int}}(undef, length(g.groups))
-    for (k, (start, count, _)) in enumerate(g.groups)
-        last_face = _geometry_checked_add(start, count - 1,
-                                          "compute_tangents! group range")
-        (count == 0 || (start >= 1 && last_face <= g.n_faces)) ||
-            throw(ArgumentError(
-                "compute_tangents! group $k must lie within the geometry's faces"))
-        ranges[k] = start:last_face
-    end
-    return ranges
+    return _group_face_ranges(g, "compute_tangents!")
 end
 
 @inline _tangent_vec3(data::Vector{Float64}, vi::Int) =
@@ -1186,76 +1191,64 @@ function _box_write_vertex!(positions::Vector{Float64}, normals_arr::Vector{Floa
     return nothing
 end
 
-function _box_add_quad_face!(positions::Vector{Float64}, normals_arr::Vector{Float64},
-                             uvs_arr::Vector{Float64}, indices::Vector{Int},
-                             vi::Int, out::Int, p1, p2, p3, p4, n)
-    base = vi + 1
-    _box_write_vertex!(positions, normals_arr, uvs_arr, base, p1, n, 0.0, 0.0)
-    _box_write_vertex!(positions, normals_arr, uvs_arr, base + 1, p2, n, 1.0, 0.0)
-    _box_write_vertex!(positions, normals_arr, uvs_arr, base + 2, p3, n, 1.0, 1.0)
-    _box_write_vertex!(positions, normals_arr, uvs_arr, base + 3, p4, n, 0.0, 1.0)
-    indices[out] = base
-    indices[out + 1] = base + 1
-    indices[out + 2] = base + 2
-    indices[out + 3] = base
-    indices[out + 4] = base + 2
-    indices[out + 5] = base + 3
-    return vi + 4, out + 6
-end
+# BoxGeometry.js:99-150 `buildPlane`: a (grid_x + 1) × (grid_y + 1) vertex grid
+# with `vector[u] = x * udir`, `vector[v] = y * vdir`, `vector[w] = depth / 2`.
+# `u`, `v`, `w` are axis numbers (1 = x, 2 = y, 3 = z).
+@inline _box_axis_vec(u::Int, v::Int, w::Int, a::Float64, b::Float64, c::Float64) =
+    Vec3(u == 1 ? a : v == 1 ? b : c, u == 2 ? a : v == 2 ? b : c, u == 3 ? a : v == 3 ? b : c)
 
-# Grid points of a side, `a + (b - a) * t` as in BoxGeometry.js:111-115
-# (`iy * segmentHeight - heightHalf`). A constant coordinate stays exact and
-# t == 1 returns `b`, so subdivided sides share their edge vertices exactly
-# with the neighbouring sides.
-@inline _box_lerp(a::Float64, b::Float64, t::Float64) =
-    t == 1.0 ? b : a + (b - a) * t
-@inline _box_lerp(a::Vec3, b::Vec3, t::Float64) =
-    Vec3(_box_lerp(a.x, b.x, t), _box_lerp(a.y, b.y, t), _box_lerp(a.z, b.z, t))
-
-function _box_add_grid_face!(positions::Vector{Float64}, normals_arr::Vector{Float64},
-                             uvs_arr::Vector{Float64}, indices::Vector{Int},
-                             vi::Int, out::Int, p1, p2, p3, p4, n,
-                             u_segments::Int, v_segments::Int)
-    base = vi + 1
-    row = u_segments + 1
-    for j in 0:v_segments
-        tv = j / v_segments
-        left = _box_lerp(p1, p4, tv)
-        right = _box_lerp(p2, p3, tv)
-        for i in 0:u_segments
-            tu = i / u_segments
-            p = _box_lerp(left, right, tu)
-            _box_write_vertex!(positions, normals_arr, uvs_arr,
-                               base + j * row + i, p, n, tu, tv)
+function _box_build_plane!(positions::Vector{Float64}, normals_arr::Vector{Float64},
+                           uvs_arr::Vector{Float64}, indices::Vector{Int},
+                           vi::Int, out::Int, u::Int, v::Int, w::Int,
+                           udir::Float64, vdir::Float64, width::Float64,
+                           height::Float64, depth::Float64, grid_x::Int, grid_y::Int)
+    segment_width = width / grid_x
+    segment_height = height / grid_y
+    width_half = width / 2
+    height_half = height / 2
+    depth_half = depth / 2
+    row = grid_x + 1
+    # BoxGeometry.js:131 orients each side by the sign of its signed offset,
+    # so a negative dimension keeps the normals pointing away from the center
+    # and a zero one gives -1.
+    n = _box_axis_vec(u, v, w, 0.0, 0.0, depth > 0 ? 1.0 : -1.0)
+    dst = vi
+    for iy in 0:grid_y
+        y = iy * segment_height - height_half
+        for ix in 0:grid_x
+            x = ix * segment_width - width_half
+            dst += 1
+            _box_write_vertex!(positions, normals_arr, uvs_arr, dst,
+                               _box_axis_vec(u, v, w, x * udir, y * vdir, depth_half),
+                               n, ix / grid_x, 1 - iy / grid_y)
         end
     end
-    for j in 0:(v_segments - 1), i in 0:(u_segments - 1)
-        a = base + j * row + i
-        b = a + 1
-        d0 = a + row
-        c = d0 + 1
+    for iy in 0:(grid_y - 1), ix in 0:(grid_x - 1)
+        a = vi + ix + row * iy + 1
+        b = vi + ix + row * (iy + 1) + 1
+        c = vi + (ix + 1) + row * (iy + 1) + 1
+        d = vi + (ix + 1) + row * iy + 1
         indices[out] = a
         indices[out + 1] = b
-        indices[out + 2] = c
-        indices[out + 3] = a
+        indices[out + 2] = d
+        indices[out + 3] = b
         indices[out + 4] = c
-        indices[out + 5] = d0
+        indices[out + 5] = d
         out += 6
     end
-    return vi + row * (v_segments + 1), out
+    return dst, out
 end
 
-function _box_add_face!(positions::Vector{Float64}, normals_arr::Vector{Float64},
-                        uvs_arr::Vector{Float64}, indices::Vector{Int},
-                        vi::Int, out::Int, use_quad_faces::Bool,
-                        p1, p2, p3, p4, n, u_segments::Int, v_segments::Int)
-    return use_quad_faces ?
-        _box_add_quad_face!(positions, normals_arr, uvs_arr, indices,
-                            vi, out, p1, p2, p3, p4, n) :
-        _box_add_grid_face!(positions, normals_arr, uvs_arr, indices,
-                            vi, out, p1, p2, p3, p4, n, u_segments, v_segments)
-end
+"""
+    BoxGeometry(; width=1, height=1, depth=1, width_segments=1, height_segments=1,
+                depth_segments=1)
 
+Axis-aligned box centred on the origin (three.js `BoxGeometry`). Each side is a
+separate grid of vertices with flat normals, built in three.js's order (+x,
+-x, +y, -y, +z, -z) with its vertex layout, UVs and triangles, so indices and
+raycast `face_index` values match three.js. three.js's per-side draw groups are
+not added.
+"""
 function BoxGeometry(; width=1.0, height=1.0, depth=1.0,
                      width_segments=1, height_segments=1, depth_segments=1)
     width = _geometry_finite_float(width, "BoxGeometry width")
@@ -1264,11 +1257,6 @@ function BoxGeometry(; width=1.0, height=1.0, depth=1.0,
     ws = _geometry_segment_count("width_segments", width_segments)
     hs = _geometry_segment_count("height_segments", height_segments)
     ds = _geometry_segment_count("depth_segments", depth_segments)
-    w, h, d = width/2, height/2, depth/2
-    # BoxGeometry.js:131 orients each side by the sign of its signed offset
-    # (`depth > 0 ? 1 : -1`), so a negative dimension keeps the normals
-    # pointing away from the center and a zero one gives both sides -1.
-    side(offset) = offset > 0 ? 1.0 : -1.0
 
     # Vertices are duplicated per face so each face keeps flat normals and UVs.
     n_verts = 2 * ((ws + 1) * (hs + 1) +
@@ -1281,35 +1269,20 @@ function BoxGeometry(; width=1.0, height=1.0, depth=1.0,
     normals_arr = Vector{Float64}(undef, position_len)
     uvs_arr = Vector{Float64}(undef, uv_len)
     indices = Vector{Int}(undef, index_len)
-    use_quad_faces = ws == 1 && hs == 1 && ds == 1
 
     vi = 0
     out = 1
-
-    # +Z face
-    vi, out = _box_add_face!(positions, normals_arr, uvs_arr, indices, vi, out,
-                             use_quad_faces, Vec3(-w,-h,d), Vec3(w,-h,d),
-                             Vec3(w,h,d), Vec3(-w,h,d), Vec3(0.0, 0.0, side(depth)), ws, hs)
-    # -Z face
-    vi, out = _box_add_face!(positions, normals_arr, uvs_arr, indices, vi, out,
-                             use_quad_faces, Vec3(w,-h,-d), Vec3(-w,-h,-d),
-                             Vec3(-w,h,-d), Vec3(w,h,-d), Vec3(0.0, 0.0, side(-depth)), ws, hs)
-    # +Y face
-    vi, out = _box_add_face!(positions, normals_arr, uvs_arr, indices, vi, out,
-                             use_quad_faces, Vec3(-w,h,d), Vec3(w,h,d),
-                             Vec3(w,h,-d), Vec3(-w,h,-d), Vec3(0.0, side(height), 0.0), ws, ds)
-    # -Y face
-    vi, out = _box_add_face!(positions, normals_arr, uvs_arr, indices, vi, out,
-                             use_quad_faces, Vec3(-w,-h,-d), Vec3(w,-h,-d),
-                             Vec3(w,-h,d), Vec3(-w,-h,d), Vec3(0.0, side(-height), 0.0), ws, ds)
-    # +X face
-    vi, out = _box_add_face!(positions, normals_arr, uvs_arr, indices, vi, out,
-                             use_quad_faces, Vec3(w,-h,d), Vec3(w,-h,-d),
-                             Vec3(w,h,-d), Vec3(w,h,d), Vec3(side(width), 0.0, 0.0), ds, hs)
-    # -X face
-    vi, out = _box_add_face!(positions, normals_arr, uvs_arr, indices, vi, out,
-                             use_quad_faces, Vec3(-w,-h,-d), Vec3(-w,-h,d),
-                             Vec3(-w,h,d), Vec3(-w,h,-d), Vec3(side(-width), 0.0, 0.0), ds, hs)
+    # BoxGeometry.js:63-68: px, nx, py, ny, pz, nz.
+    for (u, v, w, udir, vdir, sw, sh, sd, gx, gy) in (
+            (3, 2, 1, -1.0, -1.0, depth, height, width, ds, hs),
+            (3, 2, 1, 1.0, -1.0, depth, height, -width, ds, hs),
+            (1, 3, 2, 1.0, 1.0, width, depth, height, ws, ds),
+            (1, 3, 2, 1.0, -1.0, width, depth, -height, ws, ds),
+            (1, 2, 3, 1.0, -1.0, width, height, depth, ws, hs),
+            (1, 2, 3, -1.0, -1.0, width, height, -depth, ws, hs))
+        vi, out = _box_build_plane!(positions, normals_arr, uvs_arr, indices, vi, out,
+                                    u, v, w, udir, vdir, sw, sh, sd, gx, gy)
+    end
 
     BufferGeometry(positions, normals_arr, uvs_arr, indices, n_verts, n_faces)
 end
@@ -1363,17 +1336,17 @@ function SphereGeometry(; radius=1.0, width_segments=32, height_segments=16,
         v = j / height_segments
         θ = theta_start + v * theta_length
         # SphereGeometry.js:81-82 places each ring at y = radius * cos(theta)
-        # with ringRadius = sqrt(radius^2 - y^2) = |radius| * |sin(theta)|,
-        # which is never negative: sweeps outside [0, pi] fold back onto the
-        # sphere and a negative radius mirrors only y.
-        abs_sinθ = abs(sin(θ))
+        # with ringRadius = sqrt(radius^2 - y^2), which is never negative:
+        # sweeps outside [0, pi] fold back onto the sphere and a negative
+        # radius mirrors only y. The same operations make a pole ring exactly
+        # zero, so pole vertices coincide as in three.js. A radius whose square
+        # overflows or leaves the normal range (three.js gets NaN, or a sphere
+        # collapsed onto the y axis) uses the equivalent |radius| * |sin(theta)|.
         cosθ = cos(θ)
-        ring_radius = abs(radius) * abs_sinθ
         y = radius * cosθ
-        # SphereGeometry.js:113 normalizes the vertex, i.e. its direction
-        # from the center; a zero radius leaves zero normals.
-        ny_dir = radius > 0 ? cosθ : radius < 0 ? -cosθ : 0.0
-        ring_dir = iszero(radius) ? 0.0 : abs_sinθ
+        radius_sq = radius * radius
+        ring_radius = isfinite(radius_sq) && radius_sq >= floatmin(Float64) ?
+                      sqrt(radius_sq - y * y) : abs(radius) * abs(sin(θ))
         # three.js centers each pole vertex's u between its ring neighbours.
         u_offset = j == 0 && theta_start == 0 ? 0.5 / width_segments :
                    j == height_segments && bottom_pole ? -0.5 / width_segments : 0.0
@@ -1386,10 +1359,15 @@ function SphereGeometry(; radius=1.0, width_segments=32, height_segments=16,
             x = -ring_radius * cosϕ
             z = ring_radius * sinϕ
 
-            nx, ny, nz = -ring_dir * cosϕ, ny_dir, ring_dir * sinϕ
-            nl = hypot(nx, ny, nz)
+            # SphereGeometry.js:113 normalizes the vertex (Vector3.normalize
+            # multiplies by 1 / length); a zero radius leaves zero normals.
+            length_sq = x * x + y * y + z * z
+            nl = isfinite(length_sq) && length_sq >= floatmin(Float64) ?
+                 sqrt(length_sq) : hypot(x, y, z)
+            nx, ny, nz = x, y, z
             if nl > 0
-                nx /= nl; ny /= nl; nz /= nl
+                inverse = 1 / nl
+                nx *= inverse; ny *= inverse; nz *= inverse
             end
 
             vi = j * (width_segments + 1) + i + 1
@@ -2106,11 +2084,12 @@ const _ICOSAHEDRON_BASE_VERTS = Vec3{Float64}[
     Vec3(-_ICOSAHEDRON_T,  0.0,  1.0),
 ]
 
+# IcosahedronGeometry.js:34-39, one-based, in three.js's corner order.
 const _ICOSAHEDRON_BASE_FACES = NTuple{3,Int}[
     (1,12,6), (1,6,2), (1,2,8), (1,8,11), (1,11,12),
     (2,6,10), (6,12,5), (12,11,3), (11,8,7), (8,2,9),
     (4,10,5), (4,5,3), (4,3,7), (4,7,9), (4,9,10),
-    (10,6,5), (5,12,3), (3,11,7), (7,8,9), (9,2,10),
+    (5,10,6), (3,5,12), (7,3,11), (9,7,8), (10,9,2),
 ]
 
 function IcosahedronGeometry(; radius=1.0, detail=0)
@@ -2358,4 +2337,349 @@ function merge_vertices(geo::BufferGeometry; tolerance::Real=1e-4)
                           use_uvs ? gather(geo.uvs, 2) : Float64[],
                           new_indices, m, geo.n_faces, attributes,
                           copy(geo.groups), geo.draw_range)
+end
+
+# ===================== BufferGeometry utilities (three.js) =====================
+
+function _vertex_attribute_cover(data::AbstractVector, item_size::Int, n_vertices::Int,
+                                 context::String, label)
+    length(data) >= _geometry_checked_mul(n_vertices, item_size, "$context $label length") ||
+        throw(ArgumentError("$context $label must cover n_vertices"))
+    return data
+end
+
+function _gather_vertex_data(data::AbstractVector, item_size::Int, entries::AbstractVector{Int})
+    out = similar(data, length(entries) * item_size)
+    @inbounds for (dst, src) in enumerate(entries)
+        copyto!(out, (dst - 1) * item_size + 1, data, (src - 1) * item_size + 1, item_size)
+    end
+    return out
+end
+
+"""
+    to_non_indexed(geometry) -> BufferGeometry
+
+Return a copy of `geometry` in which every index entry has its own vertex
+(three.js `BufferGeometry.toNonIndexed`). Positions, normals, UVs and every
+named attribute (morph targets included) are gathered through the index, and
+draw groups are copied; as in three.js the draw range is not. Triangle
+geometry keeps one face per three consecutive vertices, with indices
+`1:3n_faces`; for unindexed geometry (empty `indices`) the geometry itself is
+returned, as three.js returns `this`. Line geometry with an index becomes
+unindexed line geometry.
+
+Normals, UVs and named attributes that do not cover `n_vertices` raise an
+`ArgumentError`.
+"""
+function to_non_indexed(geo::BufferGeometry)
+    _validate_triangle_geometry_indices(geo, "to_non_indexed")
+    isempty(geo.indices) && return geo
+    n = geo.n_vertices
+    entries = geo.n_faces > 0 ? view(geo.indices, 1:3geo.n_faces) : geo.indices
+    isempty(geo.normals) || _vertex_attribute_cover(geo.normals, 3, n, "to_non_indexed", "normals")
+    isempty(geo.uvs) || _vertex_attribute_cover(geo.uvs, 2, n, "to_non_indexed", "uvs")
+    for (name, attr) in geo.attributes
+        _vertex_attribute_cover(attr.data, attr.item_size, n, "to_non_indexed", "attribute $name")
+    end
+    m = length(entries)
+    attributes = Dict{Symbol,BufferAttribute}()
+    for (name, attr) in geo.attributes
+        attributes[name] = BufferAttribute(_gather_vertex_data(attr.data, attr.item_size, entries),
+                                           attr.item_size)
+    end
+    return BufferGeometry(_gather_vertex_data(geo.positions, 3, entries),
+                          isempty(geo.normals) ? Float64[] : _gather_vertex_data(geo.normals, 3, entries),
+                          isempty(geo.uvs) ? Float64[] : _gather_vertex_data(geo.uvs, 2, entries),
+                          geo.n_faces > 0 ? collect(1:m) : Int[], m, geo.n_faces,
+                          attributes, copy(geo.groups))
+end
+
+# Vector3.normalize divides by `length() || 1`; the scaled length keeps the
+# direction of normals whose squared length overflows or underflows.
+@inline function _normalize_components(x::Float64, y::Float64, z::Float64)
+    length_sq = x * x + y * y + z * z
+    len = isfinite(length_sq) && length_sq >= floatmin(Float64) ? sqrt(length_sq) :
+          hypot(x, y, z)
+    iszero(len) && return x, y, z
+    inverse = 1 / len
+    return x * inverse, y * inverse, z * inverse
+end
+
+"""
+    normalize_normals!(geometry) -> geometry
+
+Scale every vertex normal to unit length (three.js
+`BufferGeometry.normalizeNormals`); zero normals stay zero. Throws an
+`ArgumentError` when the geometry has vertices but no normal for each of them.
+"""
+function normalize_normals!(geo::BufferGeometry)
+    _validate_geometry_vertices(geo, "normalize_normals!")
+    normals = geo.normals
+    length(normals) >= 3geo.n_vertices ||
+        throw(ArgumentError("normalize_normals! requires a normal for every vertex"))
+    @inbounds for vi in 1:geo.n_vertices
+        base = 3vi - 2
+        normals[base], normals[base + 1], normals[base + 2] =
+            _normalize_components(normals[base], normals[base + 1], normals[base + 2])
+    end
+    return geo
+end
+
+_point_z(p::Vec3) = p.z
+_point_z(p::Vec2) = zero(p.x)
+
+"""
+    set_from_points!(geometry, points) -> geometry
+
+Set vertex positions from a vector of `Vec3` or `Vec2` points (`z = 0`), as
+three.js `BufferGeometry.setFromPoints` does. A geometry without vertices gets
+one vertex per point (typically for a line, as faces and other attributes are
+not created). Otherwise the first `length(points)` positions are overwritten;
+more points than vertices raise an `ArgumentError` (three.js warns and drops
+them). Points with non-finite coordinates raise an `ArgumentError`; the
+geometry is checked before anything changes, so an error leaves it unmodified.
+"""
+function set_from_points!(geo::BufferGeometry, points::AbstractVector{<:Union{Vec2,Vec3}})
+    _validate_geometry_vertices(geo, "set_from_points!")
+    n_points = length(points)
+    creates_vertices = geo.n_vertices == 0
+    creates_vertices || n_points <= geo.n_vertices ||
+        throw(ArgumentError("set_from_points! has $n_points points for " *
+                            "$(geo.n_vertices) vertices"))
+    values = Vector{Float64}(undef, _geometry_checked_mul(
+        3, n_points, "set_from_points! position length"))
+    for (i, p) in enumerate(points)
+        base = 3i - 2
+        values[base] = _geometry_finite_float(p.x, "set_from_points! point")
+        values[base + 1] = _geometry_finite_float(p.y, "set_from_points! point")
+        values[base + 2] = _geometry_finite_float(_point_z(p), "set_from_points! point")
+    end
+    if creates_vertices
+        geo.positions = values
+        geo.n_vertices = n_points
+    else
+        copyto!(geo.positions, 1, values, 1, length(values))
+    end
+    return geo
+end
+
+"""
+    delete_attribute!(geometry, name::Symbol) -> geometry
+
+Remove a vertex attribute (three.js `BufferGeometry.deleteAttribute`):
+`:normal` empties the normals and `:uv` the UVs, and any other name removes
+that named attribute. Removing an attribute that does not exist does nothing.
+Positions define the vertices and cannot be deleted (`ArgumentError`).
+"""
+function delete_attribute!(geo::BufferGeometry, name::Symbol)
+    name === :position &&
+        throw(ArgumentError("delete_attribute! cannot remove the positions"))
+    name === :normal && (geo.normals = Float64[])
+    name === :uv && (geo.uvs = Float64[])
+    delete!(geo.attributes, name)
+    return geo
+end
+
+"""
+    estimate_bytes_used(geometry) -> Int
+
+Bytes held by the geometry's vertex and index arrays: positions, normals, UVs,
+every named attribute and the indices (three.js
+`BufferGeometryUtils.estimateBytesUsed`, which counts its typed arrays the same
+way). Diff3D stores `Float64` coordinates and `Int` indices, so the figure is
+larger than three.js's `Float32` estimate for the same mesh.
+"""
+function estimate_bytes_used(geo::BufferGeometry)
+    bytes = sizeof(geo.positions) + sizeof(geo.normals) + sizeof(geo.uvs) + sizeof(geo.indices)
+    for attr in values(geo.attributes)
+        bytes += sizeof(attr.data)
+    end
+    return bytes
+end
+
+"""
+    merge_groups!(geometry) -> geometry
+
+Reorder the faces so that draw groups with the same material index are
+contiguous, then merge them (three.js `BufferGeometryUtils.mergeGroups`).
+Groups are sorted by material index and then start, the faces of each group
+are concatenated in that order (faces outside every group are dropped, faces in
+overlapping groups repeat), and adjacent groups with the same material become
+one. A geometry without groups is returned unchanged. Groups outside the faces
+raise an `ArgumentError`.
+"""
+function merge_groups!(geo::BufferGeometry)
+    _validate_triangle_geometry_indices(geo, "merge_groups!")
+    isempty(geo.groups) && return geo
+    ranges = _group_face_ranges(geo, "merge_groups!")
+    # Array.prototype.sort is stable; sort a permutation the same way.
+    order = sortperm(eachindex(geo.groups);
+                     by=k -> (geo.groups[k][3], geo.groups[k][1]), alg=MergeSort)
+    total = sum(k -> length(ranges[k]), order; init=0)
+    indices = Vector{Int}(undef, _geometry_checked_mul(3, total, "merge_groups! index length"))
+    out = 0
+    for k in order, face in ranges[k]
+        base = 3face - 3
+        @inbounds for c in 1:3
+            indices[out + c] = geo.indices[base + c]
+        end
+        out += 3
+    end
+    groups = NTuple{3,Int}[]
+    start = 1
+    for k in order
+        _, count, material = geo.groups[k]
+        if !isempty(groups) && groups[end][3] == material
+            first_face, merged, _ = groups[end]
+            groups[end] = (first_face, merged + count, material)
+        else
+            push!(groups, (start, count, material))
+        end
+        start += count
+    end
+    geo.indices = indices
+    geo.n_faces = total
+    geo.groups = groups
+    return geo
+end
+
+"""
+    to_triangles_draw_mode!(geometry, mode::Symbol) -> geometry
+
+Convert triangle-strip or triangle-fan topology to a triangle list (three.js
+`BufferGeometryUtils.toTrianglesDrawMode`). The strip or fan order is
+`geometry.indices`, or the vertex order `1:n_vertices` when there are no
+indices; `mode` is `:triangle_strip` or `:triangle_fan`, and `:triangles`
+returns the geometry unchanged. A strip alternates the winding of odd
+triangles as WebGL does, and a fan pivots on its first entry. The result has
+`count - 2` faces and no draw groups. Fewer than three entries or an unknown
+mode raise an `ArgumentError`.
+"""
+function to_triangles_draw_mode!(geo::BufferGeometry, mode::Symbol)
+    mode === :triangles && return geo
+    mode in (:triangle_strip, :triangle_fan) ||
+        throw(ArgumentError("to_triangles_draw_mode! mode must be :triangles, " *
+                            ":triangle_strip or :triangle_fan"))
+    _validate_indexed_geometry(geo, "to_triangles_draw_mode!")
+    source = isempty(geo.indices) ? collect(1:geo.n_vertices) : geo.indices
+    count = length(source)
+    count >= 3 ||
+        throw(ArgumentError("to_triangles_draw_mode! needs at least three entries"))
+    n_triangles = count - 2
+    indices = Vector{Int}(undef, _geometry_checked_mul(3, n_triangles, "to_triangles_draw_mode! index length"))
+    @inbounds for i in 1:n_triangles
+        base = 3i - 2
+        if mode === :triangle_fan
+            indices[base], indices[base + 1], indices[base + 2] = source[1], source[i + 1], source[i + 2]
+        elseif isodd(i)
+            indices[base], indices[base + 1], indices[base + 2] = source[i], source[i + 1], source[i + 2]
+        else
+            indices[base], indices[base + 1], indices[base + 2] = source[i + 2], source[i + 1], source[i]
+        end
+    end
+    geo.indices = indices
+    geo.n_faces = n_triangles
+    empty!(geo.groups)
+    return geo
+end
+
+# BufferGeometryUtils.js toCreasedNormals hashes positions as
+# Math.trunc(x * (1 + 1e-10) * 1e2); Math.trunc(-0.3) is -0, which compares
+# equal to 0, so -0.0 folds into 0.0.
+@inline _creased_hash(x::Float64) = trunc(x * ((1 + 1e-10) * 1e2)) + 0.0
+
+"""
+    to_creased_normals(geometry; crease_angle=π/3) -> BufferGeometry
+
+Return an unindexed copy of `geometry` (see [`to_non_indexed`](@ref)) with
+normals that are smooth across edges whose faces meet at less than
+`crease_angle` radians and creased elsewhere (three.js
+`BufferGeometryUtils.toCreasedNormals`). Corners at the same position (to two
+decimal places, truncated as three.js does) share an averaging set; each
+corner's normal is the normalized sum of the unit normals of the faces around
+its position whose dot product with its own face normal exceeds
+`cos(crease_angle)`.
+"""
+function to_creased_normals(geo::BufferGeometry; crease_angle::Real=π / 3)
+    crease_dot = cos(_geometry_finite_float(crease_angle, "to_creased_normals crease_angle"))
+    _validate_triangle_geometry_indices(geo, "to_creased_normals")
+    geo.n_faces == 0 && geo.n_vertices == 0 && return BufferGeometry()
+    geo.n_faces > 0 ||
+        throw(ArgumentError("to_creased_normals requires triangle geometry"))
+    result = to_non_indexed(geo)
+    p = result.positions
+    vertex_count = result.n_vertices
+    face_count = vertex_count ÷ 3
+    face_normals = Vector{Float64}(undef, 3face_count)
+    @inbounds for f in 1:face_count
+        f9 = 9f - 9
+        ax, ay, az = p[f9 + 1], p[f9 + 2], p[f9 + 3]
+        bx, by, bz = p[f9 + 4], p[f9 + 5], p[f9 + 6]
+        cx, cy, cz = p[f9 + 7], p[f9 + 8], p[f9 + 9]
+        v1x, v1y, v1z = cx - bx, cy - by, cz - bz
+        v2x, v2y, v2z = ax - bx, ay - by, az - bz
+        nx = v1y * v2z - v1z * v2y
+        ny = v1z * v2x - v1x * v2z
+        nz = v1x * v2y - v1y * v2x
+        len = sqrt(nx * nx + ny * ny + nz * nz)
+        inverse = 1 / (iszero(len) || isnan(len) ? 1.0 : len)
+        face_normals[3f - 2] = nx * inverse
+        face_normals[3f - 1] = ny * inverse
+        face_normals[3f] = nz * inverse
+    end
+    ids = Vector{Int}(undef, vertex_count)
+    lookup = Dict{NTuple{3,Float64},Int}()
+    sizehint!(lookup, vertex_count)
+    unique_count = 0
+    @inbounds for i in 1:vertex_count
+        key = (_creased_hash(p[3i - 2]), _creased_hash(p[3i - 1]), _creased_hash(p[3i]))
+        # NaN !== NaN, so three.js never matches such a vertex.
+        id = any(isnan, key) ? 0 : get(lookup, key, 0)
+        if id == 0
+            unique_count += 1
+            id = unique_count
+            any(isnan, key) || (lookup[key] = id)
+        end
+        ids[i] = id
+    end
+    offsets = zeros(Int, unique_count + 1)
+    @inbounds for i in 1:vertex_count
+        offsets[ids[i] + 1] += 1
+    end
+    offsets[1] = 1
+    @inbounds for i in 1:unique_count
+        offsets[i + 1] += offsets[i]
+    end
+    cursors = offsets[1:unique_count]
+    bucket_faces = Vector{Int}(undef, vertex_count)
+    @inbounds for f in 1:face_count, c in 0:2
+        id = ids[3f - 2 + c]
+        bucket_faces[cursors[id]] = f
+        cursors[id] += 1
+    end
+    normals = Vector{Float64}(undef, 3vertex_count)
+    @inbounds for f in 1:face_count
+        nx, ny, nz = face_normals[3f - 2], face_normals[3f - 1], face_normals[3f]
+        for c in 0:2
+            i = 3f - 2 + c
+            id = ids[i]
+            sx = sy = sz = 0.0
+            for k in offsets[id]:(offsets[id + 1] - 1)
+                o = bucket_faces[k]
+                ox, oy, oz = face_normals[3o - 2], face_normals[3o - 1], face_normals[3o]
+                if nx * ox + ny * oy + nz * oz > crease_dot
+                    sx += ox
+                    sy += oy
+                    sz += oz
+                end
+            end
+            len = sqrt(sx * sx + sy * sy + sz * sz)
+            inverse = 1 / (iszero(len) || isnan(len) ? 1.0 : len)
+            normals[3i - 2] = sx * inverse
+            normals[3i - 1] = sy * inverse
+            normals[3i] = sz * inverse
+        end
+    end
+    result.normals = normals
+    return result
 end

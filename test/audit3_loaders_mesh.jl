@@ -364,15 +364,16 @@ end
 
 @testset "PLY exporter matches three.js PLYExporter" begin
     # three.js r186 PLYExporter.parse(mesh, null, {binary: true, littleEndian})
-    # of the BoxGeometry(width=1, height=2, depth=3) position/normal/uv/index
-    # buffers (Float64Array attributes, so every property is `double`).
+    # of new THREE.BoxGeometry(1, 2, 3) with its position/normal/uv attributes
+    # copied into Float64Array (so every property is `double`) and its index
+    # kept; BoxGeometry now uses three.js's vertex order, so the bytes match.
     box = BoxGeometry(width=1.0, height=2.0, depth=3.0)
     le = read(Diff3D.save_ply(tempname() * ".ply", box; binary=true, little_endian=true))
     be = read(Diff3D.save_ply(tempname() * ".ply", box; binary=true))
     @test bytes2hex(sha256(le)) ==
-          "cc312e4406ac8f4cbb8151d189eb88eea4149ebbc78143d5ee9cb36ca8f298ae"
+          "515e345aba5680406b9e54c5390c35ec402ba4f6ffc45fe06a0d10c1861386c2"
     @test bytes2hex(sha256(be)) ==
-          "2629d8e5f5cc315285aaf93991e9e251fe1fcd65c0ff6866884565900ceec068"
+          "0369b944da9e3700ad81053a324acbefc718f3d381fb0a696452a86639bb5a7e"
 
     # ASCII layout (PLYExporter.js): header, one row per vertex, '3 a b c'
     # per face, then a final '\n'.

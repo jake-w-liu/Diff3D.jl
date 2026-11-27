@@ -64,12 +64,14 @@ using Diff3D
     @test overflowing_length.normals ≈ expected rtol=2e-14
 
     for scale in (1e-200, 1e-160, 1e-12, 1.0, 1e200), slices in (1, 3)
-        geometry = ParametricGeometry((u, v) -> Vec3(0.0, scale * u, scale * v),
-                                      slices, 2)
+        # ParametricGeometry's own normals are finite differences
+        # (ParametricGeometry.js:85-111), so recompute the area-weighted ones.
+        geometry = compute_vertex_normals!(
+            ParametricGeometry((u, v) -> Vec3(0.0, scale * u, scale * v), slices, 2))
         @test all(i -> get_normal(geometry, i) == Vec3(1.0, 0.0, 0.0),
                   1:geometry.n_vertices)
-        slanted = ParametricGeometry((u, v) -> Vec3(scale * u, scale * v,
-                                                   scale * (u + v)), slices, 2)
+        slanted = compute_vertex_normals!(
+            ParametricGeometry((u, v) -> Vec3(scale * u, scale * v, scale * (u + v)), slices, 2))
         @test slanted.normals ≈ reference_normals(slanted) rtol=2e-14
     end
 
@@ -83,6 +85,8 @@ using Diff3D
         compute_vertex_normals!(geometry)
         @test geometry.normals == repeat([0.0, 0.0, 1.0], 3)
     end
+    # A surface with a zero v-difference has cross(pu, pv) = 0, which
+    # Vector3.normalize leaves zero (ParametricGeometry.js:111).
     flat = ParametricGeometry((u, v) -> Vec3(u, 0.0, 0.0), 2, 2)
     @test all(iszero, flat.normals)
 end

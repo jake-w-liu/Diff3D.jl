@@ -2283,11 +2283,14 @@ end
             @test -1.0 <= geo.positions[k+2] <= 1.0
         end
 
-        # Default single-segment output keeps the historical first face layout.
-        @test get_face(geo, 1) == (1, 2, 3)
-        @test get_vertex(geo, 1) == Vec3(-1.0, -1.0, 1.0)
-        @test get_vertex(geo, 2) == Vec3(1.0, -1.0, 1.0)
-        @test get_vertex(geo, 3) == Vec3(1.0, 1.0, 1.0)
+        # three.js order: the px side comes first (BoxGeometry.js:76) and
+        # buildPlane emits face (a, b, d) = (0, 2, 1) over the vertices
+        # (1, 1, 1), (1, 1, -1), (1, -1, 1) (BoxGeometry.js:111-160; node
+        # prints these for new THREE.BoxGeometry(2, 2, 2)).
+        @test get_face(geo, 1) == (1, 3, 2)
+        @test get_vertex(geo, 1) == Vec3(1.0, 1.0, 1.0)
+        @test get_vertex(geo, 2) == Vec3(1.0, 1.0, -1.0)
+        @test get_vertex(geo, 3) == Vec3(1.0, -1.0, 1.0)
         @test_opt_alloc 4096 BoxGeometry(width=2.0, height=2.0, depth=2.0)
 
         seg = BoxGeometry(width=2.0, height=4.0, depth=6.0,
@@ -7055,7 +7058,10 @@ end
         union_geo = csg_union(cube, shifted)
         subtract_geo = csg_subtract(cube, shifted)
         intersect_geo = csg_intersect(cube, shifted)
-        @test union_geo.n_faces == 24
+        # The BSP splits depend on the input face order; with BoxGeometry in
+        # three.js order the union has 40 triangles (24 before), enclosing
+        # the same 10.8 volume.
+        @test union_geo.n_faces == 40
         @test subtract_geo.n_faces == 16
         @test intersect_geo.n_faces == 16
         for geo in (union_geo, subtract_geo, intersect_geo)
@@ -23341,18 +23347,24 @@ end
         )
         geometry = ParametricGeometry(
             extreme_plane, 1, 1)
+        # ParametricGeometry.js:85-111 takes one-sided differences; here they
+        # overflow at the first vertex (three.js prints Inf/NaN normals) and
+        # vanish at the others, where the step-function surface is constant
+        # over the 1e-5 step (three.js prints zero normals there).
         @test all(isfinite, geometry.normals)
-        @test all(
-            i -> get_normal(geometry, i) ==
-                Vec3(1.0, 0.0, 0.0),
-            1:geometry.n_vertices)
+        @test get_normal(geometry, 1) == Vec3(1.0, 0.0, 0.0)
+        @test all(iszero, geometry.normals[4:end])
 
+        # new ParametricGeometry((u, v, t) => t.set(u, v, 0), 2, 2) normals,
+        # printed by three.js r186 (cross(pu, pv).normalize() rounds some to
+        # 0.9999999999999999).
         ordinary = ParametricGeometry(
             (u, v) -> Vec3(u, v, 0.0), 2, 2)
-        @test all(
-            i -> get_normal(ordinary, i) ==
-                Vec3(0.0, 0.0, 1.0),
-            1:ordinary.n_vertices)
+        @test ordinary.normals[3:3:end] ==
+              [1.0, 0.9999999999999999, 0.9999999999999999, 0.9999999999999999,
+               1.0, 1.0, 0.9999999999999999, 1.0, 1.0]
+        @test all(iszero, ordinary.normals[1:3:end]) &&
+              all(iszero, ordinary.normals[2:3:end])
     end
 
     @testset "fresh audit round 151 fixes" begin
@@ -24232,7 +24244,9 @@ end
 end
 
 @testset "fresh audit round 171 fixes" begin
-    expected_counts = (24, 16, 16)
+    # Union count for BoxGeometry in three.js face order (BSP splits depend on
+    # input order; 24 with the earlier order).
+    expected_counts = (40, 16, 16)
     for scale in (1.0e-300, 1.0e-9, 1.0e-3, 1.0, 1.0e3, 1.0e9, 1.0e300)
         cube = BoxGeometry(width=2scale, height=2scale, depth=2scale)
         shifted = transform_geometry(
@@ -24274,7 +24288,7 @@ end
         mat4_translation(0.7e-300, 0.0, 0.0))
     shifted_without_normals.normals = Float64[]
     tiny_union = csg_union(tiny_without_normals, shifted_without_normals)
-    @test tiny_union.n_faces == 24
+    @test tiny_union.n_faces == 40
     @test all(isfinite, tiny_union.normals)
     @test all(normal -> isapprox(normal, 1.0; rtol=1.0e-12, atol=0.0),
               norm(get_normal(tiny_union, vi)) for vi in 1:tiny_union.n_vertices)
@@ -29366,17 +29380,23 @@ end
          1.0, 1.0, 0.0],
         Float64[], Float64[], [1, 2, 3, 2, 4, 3], 4, 2)
     @test edges_geometry(coplanar).n_vertices ÷ 2 == 4
-    @test_opt_alloc 0 Diff3D._pkey(
-        Vec3(1.0, 2.0, 3.0), Vec3(0.5, 1.5, 2.5), 1.0)
-    @test Diff3D._edge_relative_key_component(
-        1.0, 0.0, nextfloat(0.0)) == 1.0
+    # three.js EdgesGeometry.js:33-34 and :79-81 weld corners by
+    # Math.round(coordinate * 1e4); an overflowing product stays Infinity.
+    @test_opt_alloc 0 Diff3D._edges_hash_component(1.23456)
+    @test Diff3D._edges_hash_component(largest) == Inf
 
-    for scale in (1.0e-300, 1.0e-100, 1.0e-7, 1.0,
-                  1.0e100, 1.0e300)
+    # Absolute four-decimal welding as in three.js: node prints 0, 0, 0, 12
+    # edges for BoxGeometry scaled by 1e-300, 1e-100, 1e-7 and 1 (every corner
+    # of the small boxes rounds to the same hash). At 1e100 and 1e300
+    # three.js's face normals (Triangle.js:66-81) underflow to zero or
+    # overflow to NaN and it prints 18 and 0; Diff3D rescales those normals
+    # and keeps the 12 true edges.
+    for (scale, expected) in ((1.0e-300, 0), (1.0e-100, 0), (1.0e-7, 0),
+                              (1.0, 12), (1.0e100, 12), (1.0e300, 12))
         scaled_box = transform_geometry(
             BoxGeometry(), mat4_scaling(scale, scale, scale))
         scaled_edges = edges_geometry(scaled_box)
-        @test scaled_edges.n_vertices ÷ 2 == 12
+        @test scaled_edges.n_vertices ÷ 2 == expected
         @test all(isfinite, scaled_edges.positions)
     end
 end

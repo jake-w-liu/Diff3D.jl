@@ -121,8 +121,15 @@ function _csg_polygon(vertices::Vector{CSGVertex}, epsilon::Float64)
     return CSGPolygon(vertices, CSGPlane(plane.normal, plane.w, epsilon))
 end
 
-function _csg_polygon_flip(poly::CSGPolygon)
-    vertices = [_csg_vertex_flip(v) for v in Iterators.reverse(poly.vertices)]
+# Flips a polygon by reversing and negating its vertex list in place. Every
+# polygon's vertex list belongs to exactly one BSP node during an operation
+# (splitting builds new lists and moves unsplit polygons), so no other
+# polygon sees the change.
+function _csg_polygon_flip!(poly::CSGPolygon)
+    vertices = reverse!(poly.vertices)
+    @inbounds for i in eachindex(vertices)
+        vertices[i] = _csg_vertex_flip(vertices[i])
+    end
     return CSGPolygon(vertices, CSGPlane(
         -poly.plane.normal, -poly.plane.w, poly.plane.epsilon))
 end
@@ -143,11 +150,18 @@ end
     return polygon_type
 end
 
+# Placeholder vertex list for back fragments that are not built.
+const _CSG_NO_VERTICES = CSGVertex[]
+
 function _csg_split_polygon(plane::CSGPlane, polygon::CSGPolygon,
                             coplanar_front::Vector{CSGPolygon},
                             coplanar_back::Vector{CSGPolygon},
                             front::Vector{CSGPolygon},
-                            back::Vector{CSGPolygon})
+                            back::Vector{CSGPolygon},
+                            keep_back::Bool=true)
+    # With keep_back = false the caller discards everything behind the plane
+    # (clipping against a node without a back subtree), so those polygons and
+    # back fragments are not built at all.
     coplanar = 0
     front_type = 1
     back_type = 2
@@ -158,18 +172,18 @@ function _csg_split_polygon(plane::CSGPlane, polygon::CSGPolygon,
     if polygon_type == coplanar
         if dot(plane.normal, polygon.plane.normal) > 0.0
             push!(coplanar_front, polygon)
-        else
+        elseif keep_back
             push!(coplanar_back, polygon)
         end
     elseif polygon_type == front_type
         push!(front, polygon)
     elseif polygon_type == back_type
-        push!(back, polygon)
+        keep_back && push!(back, polygon)
     elseif polygon_type == spanning
         f = Vector{CSGVertex}(undef, n + 1)
-        b = Vector{CSGVertex}(undef, n + 1)
+        b = keep_back ? Vector{CSGVertex}(undef, n + 1) : _CSG_NO_VERTICES
         empty!(f)
-        empty!(b)
+        keep_back && empty!(b)
         for i in 1:n
             j = i == n ? 1 : i + 1
             vi = polygon.vertices[i]
@@ -177,14 +191,14 @@ function _csg_split_polygon(plane::CSGPlane, polygon::CSGPolygon,
             ti = _csg_vertex_type(plane, vi)
             tj = _csg_vertex_type(plane, vj)
             ti != back_type && push!(f, vi)
-            ti != front_type && push!(b, vi)
+            keep_back && ti != front_type && push!(b, vi)
             if (ti | tj) == spanning
                 denom = dot(plane.normal, vj.pos - vi.pos)
                 if abs(denom) > plane.epsilon
                     t = (plane.w - dot(plane.normal, vi.pos)) / denom
                     v = _csg_vertex_lerp(vi, vj, clamp(t, 0.0, 1.0))
                     push!(f, v)
-                    push!(b, v)
+                    keep_back && push!(b, v)
                 end
             end
         end
@@ -192,33 +206,47 @@ function _csg_split_polygon(plane::CSGPlane, polygon::CSGPolygon,
         # operation-wide tolerance instead of deriving a larger tolerance from
         # either fragment's current extent.
         fp = _csg_polygon(f, polygon.plane.epsilon)
-        bp = _csg_polygon(b, polygon.plane.epsilon)
         fp !== nothing && push!(front, fp)
-        bp !== nothing && push!(back, bp)
+        if keep_back
+            bp = _csg_polygon(b, polygon.plane.epsilon)
+            bp !== nothing && push!(back, bp)
+        end
     end
     return nothing
 end
 
-function _csg_build!(node::CSGNode, polygons::Vector{CSGPolygon})
+# Consumes `polygons`: its storage is reused for the polygons behind the
+# node's plane. Each input yields at most one back polygon, so the back list is
+# compacted in place, in order, ahead of the read position; a convex solid,
+# whose BSP is a chain of back nodes, then needs no list per level.
+function _csg_build!(node::CSGNode, polygons::Vector{CSGPolygon},
+                     split_back::Vector{CSGPolygon}=CSGPolygon[])
     isempty(polygons) && return node
     node.plane === nothing && (node.plane = polygons[1].plane)
     front = CSGPolygon[]
-    back = CSGPolygon[]
-    for p in polygons
-        _csg_split_polygon(node.plane::CSGPlane, p, node.polygons,
-                           node.polygons, front, back)
+    n_back = 0
+    for i in eachindex(polygons)
+        _csg_split_polygon(node.plane::CSGPlane, polygons[i], node.polygons,
+                           node.polygons, front, split_back)
+        if !isempty(split_back)
+            n_back += 1
+            polygons[n_back] = only(split_back)
+            empty!(split_back)
+        end
     end
+    back = resize!(polygons, n_back)
     if !isempty(front)
         node.front === nothing && (node.front = CSGNode())
-        _csg_build!(node.front::CSGNode, front)
+        _csg_build!(node.front::CSGNode, front, split_back)
     end
     if !isempty(back)
         node.back === nothing && (node.back = CSGNode())
-        _csg_build!(node.back::CSGNode, back)
+        _csg_build!(node.back::CSGNode, back, split_back)
     end
     return node
 end
 
+# Builds a BSP tree from `polygons`, consuming the vector (see _csg_build!).
 function _csg_node(polygons::Vector{CSGPolygon})
     node = CSGNode()
     _csg_build!(node, polygons)
@@ -246,7 +274,7 @@ function _csg_all_polygons(node::CSGNode)
 end
 
 function _csg_invert!(node::CSGNode)
-    map!(_csg_polygon_flip, node.polygons, node.polygons)
+    map!(_csg_polygon_flip!, node.polygons, node.polygons)
     node.plane !== nothing && (node.plane = _csg_plane_flip(node.plane))
     node.front !== nothing && _csg_invert!(node.front)
     node.back !== nothing && _csg_invert!(node.back)
@@ -256,10 +284,11 @@ end
 
 function _csg_clip_polygons(node::CSGNode, polygons::Vector{CSGPolygon})
     (isempty(polygons) || node.plane === nothing) && return copy(polygons)
+    keep_back = node.back !== nothing
     front = CSGPolygon[]
-    back = CSGPolygon[]
+    back = keep_back ? CSGPolygon[] : front
     for p in polygons
-        _csg_split_polygon(node.plane::CSGPlane, p, front, back, front, back)
+        _csg_split_polygon(node.plane::CSGPlane, p, front, back, front, back, keep_back)
     end
     if !isempty(front) && node.front !== nothing
         front = _csg_clip_polygons(node.front, front)
@@ -499,22 +528,23 @@ function csg_evaluate(a::BufferGeometry, b::BufferGeometry, operation::Symbol)
     throw(ArgumentError("unsupported CSG operation: $operation"))
 end
 
-function _validate_transform_geometry(geo::BufferGeometry)
-    _validate_triangle_geometry_indices(geo, "transform_geometry")
+function _validate_transform_geometry(geo::BufferGeometry,
+                                     context::String="transform_geometry")
+    _validate_triangle_geometry_indices(geo, context)
     required_normal_values = 3 * geo.n_vertices
     (isempty(geo.normals) || length(geo.normals) >= required_normal_values) ||
         throw(ArgumentError(
-            "transform_geometry normals length must cover n_vertices"))
+            "$context normals length must cover n_vertices"))
     has_attribute(geo, :tangent) || return nothing
     tangent = get_attribute(geo, :tangent)
     tangent.item_size >= 3 ||
         throw(ArgumentError(
-            "transform_geometry tangent item_size must be at least 3"))
+            "$context tangent item_size must be at least 3"))
     geo.n_vertices <= typemax(Int) ÷ tangent.item_size ||
-        throw(ArgumentError("transform_geometry tangent buffer is too large"))
+        throw(ArgumentError("$context tangent buffer is too large"))
     length(tangent.data) >= geo.n_vertices * tangent.item_size ||
         throw(ArgumentError(
-            "transform_geometry tangent data must cover n_vertices"))
+            "$context tangent data must cover n_vertices"))
     return nothing
 end
 
@@ -682,4 +712,207 @@ function transform_geometry(geo::BufferGeometry, matrix::Mat4)
     _transform_geometry_morphs!(attributes, geo, matrix, normal_matrix, affine, direction_sign)
     return BufferGeometry(positions, normals, uvs, indices, geo.n_vertices, geo.n_faces,
                           attributes, copy(geo.groups), geo.draw_range)
+end
+
+# ---------------------------------------------------------------------------
+# In-place transforms: three.js BufferGeometry.applyMatrix4 and the helpers
+# built on it (BufferGeometry.js:204-401).
+# ---------------------------------------------------------------------------
+
+# Matrix3.getNormalMatrix: the inverse transpose of the upper-left 3×3 block,
+# embedded without translation. A singular block gives the zero matrix, as
+# Matrix3.invert does.
+function _geometry_normal_matrix(m::Mat4)
+    e = m.e
+    linear = Mat4((Float64(e[1]), Float64(e[2]), Float64(e[3]), 0.0,
+                   Float64(e[5]), Float64(e[6]), Float64(e[7]), 0.0,
+                   Float64(e[9]), Float64(e[10]), Float64(e[11]), 0.0,
+                   0.0, 0.0, 0.0, 1.0))
+    return mat4_transpose(mat4_inverse(linear))
+end
+
+function _apply_matrix4_directions!(data::Vector{Float64}, item_size::Int,
+                                    n_vertices::Int, matrix::Mat4)
+    @inbounds for vi in 1:n_vertices
+        base = (vi - 1) * item_size
+        direction = Vec3(data[base + 1], data[base + 2], data[base + 3])
+        transformed, _ = _transform_geometry_direction_pair(
+            matrix, direction, Vec3(), 1.0)
+        data[base + 1] = transformed.x
+        data[base + 2] = transformed.y
+        data[base + 3] = transformed.z
+    end
+    return data
+end
+
+"""
+    apply_matrix4!(geometry, matrix) -> geometry
+
+Transform `geometry` in place by the 4×4 `matrix` (three.js
+`BufferGeometry.applyMatrix4`): positions are transformed as points (with the
+perspective divide), normals by the normal matrix (the inverse transpose of the
+upper-left 3×3 block; zero when it is singular) and renormalized, and the
+`x, y, z` of a `:tangent` attribute as directions and renormalized, keeping its
+handedness `w`. As in three.js the triangle winding is kept, so a mirroring
+matrix turns the faces inside out (use [`transform_geometry`](@ref) to keep
+them front-facing).
+
+Unlike three.js, which leaves `morphAttributes` untouched, `morphPosition<k>`
+deltas are transformed by the matrix's linear part and `morphNormal<k>` /
+`morphTangent<k>` deltas so that each morphed direction is the transformed,
+renormalized base direction plus the delta; this keeps morph targets attached
+to the moved geometry, and it needs an affine matrix. Bounds are not cached on
+a geometry, so later `compute_bounding_box` and `compute_bounding_sphere` calls
+see the new positions.
+
+The geometry is validated before anything changes; an `ArgumentError` leaves
+it unmodified.
+"""
+function apply_matrix4!(geo::BufferGeometry, matrix::Mat4)
+    _validate_transform_geometry(geo, "apply_matrix4!")
+    all(isfinite, matrix.e) ||
+        throw(ArgumentError("apply_matrix4! matrix entries must be finite"))
+    affine = iszero(matrix.e[4]) && iszero(matrix.e[8]) && iszero(matrix.e[12]) &&
+             !iszero(matrix.e[16])
+    has_normals = !isempty(geo.normals)
+    has_morphs = any(name -> occursin(r"^morph(Position|Normal|Tangent)[0-9]+$", String(name)),
+                     keys(geo.attributes))
+    normal_matrix = has_normals || has_morphs ? _geometry_normal_matrix(matrix) : Mat4()
+    # Every fallible step (tangent and morph conversion) runs before the
+    # positions and normals are overwritten.
+    attributes = geo.attributes
+    if has_morphs
+        morphs = Dict{Symbol,BufferAttribute}()
+        _transform_geometry_morphs!(morphs, geo, matrix, normal_matrix, affine, 1.0)
+    end
+    tangent = nothing
+    if has_attribute(geo, :tangent)
+        source = get_attribute(geo, :tangent)
+        data = Vector{Float64}(undef, length(source.data))
+        @inbounds for i in eachindex(source.data)
+            data[i] = _geometry_finite_float(source.data[i], "apply_matrix4! tangent data")
+        end
+        tangent = BufferAttribute(_apply_matrix4_directions!(
+            data, source.item_size, geo.n_vertices, matrix), source.item_size)
+    end
+    positions = geo.positions
+    @inbounds for vi in 1:geo.n_vertices
+        p = mat4_transform_point(matrix, get_vertex(geo, vi))
+        base = 3vi - 2
+        positions[base] = p.x
+        positions[base + 1] = p.y
+        positions[base + 2] = p.z
+    end
+    has_normals && _apply_matrix4_directions!(geo.normals, 3, geo.n_vertices, normal_matrix)
+    tangent === nothing || (attributes[:tangent] = tangent)
+    if has_morphs
+        for (name, attribute) in morphs
+            attributes[name] = attribute
+        end
+    end
+    return geo
+end
+
+"""
+    apply_quaternion!(geometry, q) -> geometry
+
+Rotate `geometry` in place by the quaternion `q` (three.js
+`BufferGeometry.applyQuaternion`); see [`apply_matrix4!`](@ref).
+"""
+apply_quaternion!(geo::BufferGeometry, q::Quaternion) = apply_matrix4!(geo, quat_to_mat4(q))
+
+"""
+    rotate_geometry_x!(geometry, angle) -> geometry
+
+Rotate `geometry` in place by `angle` radians about the x axis (three.js
+`BufferGeometry.rotateX`); see [`apply_matrix4!`](@ref).
+"""
+rotate_geometry_x!(geo::BufferGeometry, angle::Real) =
+    apply_matrix4!(geo, mat4_rotation_x(_geometry_finite_float(angle, "rotate_geometry_x! angle")))
+
+"""
+    rotate_geometry_y!(geometry, angle) -> geometry
+
+Rotate `geometry` in place by `angle` radians about the y axis (three.js
+`BufferGeometry.rotateY`); see [`apply_matrix4!`](@ref).
+"""
+rotate_geometry_y!(geo::BufferGeometry, angle::Real) =
+    apply_matrix4!(geo, mat4_rotation_y(_geometry_finite_float(angle, "rotate_geometry_y! angle")))
+
+"""
+    rotate_geometry_z!(geometry, angle) -> geometry
+
+Rotate `geometry` in place by `angle` radians about the z axis (three.js
+`BufferGeometry.rotateZ`); see [`apply_matrix4!`](@ref).
+"""
+rotate_geometry_z!(geo::BufferGeometry, angle::Real) =
+    apply_matrix4!(geo, mat4_rotation_z(_geometry_finite_float(angle, "rotate_geometry_z! angle")))
+
+"""
+    translate_geometry!(geometry, x, y, z) -> geometry
+
+Translate `geometry` in place (three.js `BufferGeometry.translate`); see
+[`apply_matrix4!`](@ref).
+"""
+translate_geometry!(geo::BufferGeometry, x::Real, y::Real, z::Real) =
+    apply_matrix4!(geo, mat4_translation(
+        _geometry_finite_float(x, "translate_geometry! x"),
+        _geometry_finite_float(y, "translate_geometry! y"),
+        _geometry_finite_float(z, "translate_geometry! z")))
+
+"""
+    scale_geometry!(geometry, x, y, z) -> geometry
+
+Scale `geometry` in place along the axes (three.js `BufferGeometry.scale`).
+As in three.js the winding is kept, so a negative factor such as
+`scale_geometry!(sphere, -1, 1, 1)` turns the faces inside out (the usual way
+to view a panorama from inside a sphere). See [`apply_matrix4!`](@ref).
+"""
+scale_geometry!(geo::BufferGeometry, x::Real, y::Real, z::Real) =
+    apply_matrix4!(geo, mat4_scaling(
+        _geometry_finite_float(x, "scale_geometry! x"),
+        _geometry_finite_float(y, "scale_geometry! y"),
+        _geometry_finite_float(z, "scale_geometry! z")))
+
+"""
+    look_at_geometry!(geometry, target::Vec3) -> geometry
+
+Rotate `geometry` in place so that its +z axis points from the origin towards
+`target`, with +y as the up direction (three.js `BufferGeometry.lookAt`, which
+applies the rotation an `Object3D` at the origin takes in `lookAt`). A zero
+`target` keeps +z. See [`apply_matrix4!`](@ref).
+"""
+function look_at_geometry!(geo::BufferGeometry, target::Vec3)
+    t = Vec3(_geometry_finite_float(target.x, "look_at_geometry! target"),
+             _geometry_finite_float(target.y, "look_at_geometry! target"),
+             _geometry_finite_float(target.z, "look_at_geometry! target"))
+    # Object3D.lookAt (Object3D.js:458-490) builds Matrix4.lookAt(target,
+    # position, up) for a non-camera, i.e. the basis whose z points at the
+    # target; mat4_look_at returns that basis transposed (a view matrix).
+    view = mat4_look_at(t, Vec3(0.0, 0.0, 0.0), Vec3(0.0, 1.0, 0.0))
+    e = view.e
+    basis = Mat4((e[1], e[5], e[9], 0.0,
+                  e[2], e[6], e[10], 0.0,
+                  e[3], e[7], e[11], 0.0,
+                  0.0, 0.0, 0.0, 1.0))
+    # Object3D.updateMatrix composes the matrix from the quaternion.
+    return apply_matrix4!(geo, quat_to_mat4(quat_from_rotation_matrix(basis)))
+end
+
+"""
+    center_geometry!(geometry) -> geometry
+
+Translate `geometry` in place so that the centre of its bounding box
+([`compute_bounding_box`](@ref), which includes morph position targets) is at
+the origin (three.js `BufferGeometry.center`). An empty geometry is unchanged.
+"""
+function center_geometry!(geo::BufferGeometry)
+    _validate_transform_geometry(geo, "center_geometry!")
+    geo.n_vertices == 0 && return geo
+    box = compute_bounding_box(geo)
+    # Box3.getCenter is (min + max) * 0.5; the midpoint is formed without
+    # overflowing for extreme finite bounds.
+    return translate_geometry!(geo, -_geometry_midpoint(box.min.x, box.max.x),
+                               -_geometry_midpoint(box.min.y, box.max.y),
+                               -_geometry_midpoint(box.min.z, box.max.z))
 end

@@ -73,8 +73,8 @@ _audit3_bounding_box_allocations(g) = @allocated compute_bounding_box(g)
           [1, 2, 0, 2, 3, 0, 3, 4, 0] .+ 1
 end
 
-# Per-side normals of a one-segment box in Diff3D's side order
-# (+Z, -Z, +Y, -Y, +X, -X; four vertices each).
+# Per-side normals of a one-segment box in three.js's side order
+# (BoxGeometry.js:76-81: px, nx, py, ny, pz, nz; four vertices each).
 _audit3_box_side_normals(geo) =
     [Tuple(geo.normals[3(4side - 3) - 2:3(4side - 3)]) for side in 1:6]
 
@@ -86,18 +86,19 @@ _audit3_box_side_normals(geo) =
     # px (-1,0,0), nx (1,0,0), py (0,1,0), ny (0,-1,0), pz (0,0,1), nz (0,0,-1):
     # the mirrored x sides keep pointing away from the center.
     @test _audit3_box_side_normals(BoxGeometry(width=-1.0, height=2.0, depth=3.0)) ==
-          [(0, 0, 1), (0, 0, -1), (0, 1, 0), (0, -1, 0), (-1, 0, 0), (1, 0, 0)]
+          [(-1, 0, 0), (1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1)]
     @test _audit3_box_side_normals(BoxGeometry(width=1.0, height=-2.0, depth=-3.0)) ==
-          [(0, 0, -1), (0, 0, 1), (0, -1, 0), (0, 1, 0), (1, 0, 0), (-1, 0, 0)]
+          [(1, 0, 0), (-1, 0, 0), (0, -1, 0), (0, 1, 0), (0, 0, -1), (0, 0, 1)]
     # new THREE.BoxGeometry(1, 1, 0).attributes.normal: pz and nz are both
     # (0, 0, -1) because neither 0 nor -0 is > 0.
     @test _audit3_box_side_normals(BoxGeometry(width=1.0, height=1.0, depth=0.0)) ==
-          [(0, 0, -1), (0, 0, -1), (0, 1, 0), (0, -1, 0), (1, 0, 0), (-1, 0, 0)]
-    # Subdivided sides use the same rule. The +X side follows 2 * 12 (z sides)
-    # and 2 * 9 (y sides) vertices and has 3 * 4 vertices of its own.
+          [(1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, -1), (0, 0, -1)]
+    # Subdivided sides use the same rule. The px side comes first
+    # (BoxGeometry.js:76) with (depth_segments + 1) * (height_segments + 1)
+    # = 3 * 4 vertices.
     seg = BoxGeometry(width=-2.0, height=1.0, depth=1.0, width_segments=2,
                       height_segments=3, depth_segments=2)
-    plus_x = 43:54
+    plus_x = 1:12
     @test all(vi -> get_normal(seg, vi) == Vec3(-1.0, 0.0, 0.0), plus_x)
     @test all(vi -> get_vertex(seg, vi).x == -1.0, plus_x)
 
