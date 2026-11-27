@@ -206,3 +206,66 @@ end
     lit = soft_render_scene(lit_scene, lit_camera, 16, 16; sigma=1e-4, gamma=1e-4)
     @test soft[8, 8, 1] < 0.5 * lit[8, 8, 1]
 end
+
+@testset "Fallback API summaries only cover names without a docstring" begin
+    # src/docs.jl attaches a one-line summary only when a name has no
+    # docstring, so a fallback entry for a documented name can never show.
+    meta = Base.Docs.meta(Diff3D)
+    for table in (Diff3D._API_TYPE_DOCS, Diff3D._API_FUNCTION_DOCS, Diff3D._GENERIC_DOCS),
+        name in keys(table)
+        docs = meta[Base.Docs.Binding(Diff3D, name)].docs
+        @test all(d -> endswith(string(d.data[:path]), "docs.jl"), values(docs))
+    end
+    # Docstrings that sat on internal helpers now document the exported names.
+    doc_text(name) = join((join(string.(collect(d.text)))
+                           for d in values(meta[Base.Docs.Binding(Diff3D, name)].docs)), "\n")
+    @test occursin("Mean squared error", doc_text(:loss_mse))
+    @test occursin("infinite line", doc_text(:point_line_distance))
+    @test occursin("closed segment", doc_text(:point_segment_distance))
+    @test occursin("Signed screen-space distance", doc_text(:signed_distance_to_triangle))
+end
+
+function audit3b_sphere_inputs(::Type{T}) where {T}
+    geo = SphereGeometry(radius=1.0, width_segments=16, height_segments=8)
+    vertices = [Vec3{T}(T(geo.positions[3i - 2]), T(geo.positions[3i - 1]), T(geo.positions[3i]))
+                for i in 1:geo.n_vertices]
+    faces = [get_face(geo, f) for f in 1:geo.n_faces]
+    colors = [Color3{T}(T(0.2 + 0.6 * (f % 7) / 7), T(0.5), T(0.3)) for f in 1:geo.n_faces]
+    vp = convert(Mat4{T}, mat4_perspective(0.8, 1.0, 0.1, 100.0) *
+                 mat4_look_at(Vec3(0.0, 0.0, 3.5), Vec3(0.0, 0.0, 0.0), Vec3(0.0, 1.0, 0.0)))
+    config = SoftRasterizerConfig(sigma=T(1.0), gamma=T(0.1),
+                                  bg_color=Color3{T}(T(0), T(0), T(0)), eps=T(1e-8))
+    return vertices, faces, colors, vp, config
+end
+
+function audit3b_soft_allocations(vertices, faces, colors, vp, config, workspace)
+    soft_render(vertices, faces, colors, vp, 64, 64, config; workspace)
+    return @allocated soft_render(vertices, faces, colors, vp, 64, 64, config; workspace)
+end
+
+@testset "Float32 soft distances stay Float32 and render without allocation" begin
+    # The generic distance helpers floored lengths with the Float64 literals
+    # 1e-20 and 1e-12, so Float32 coverage was computed in Float64 and the
+    # pixel accumulators changed type mid-loop. Float64 and AD inputs keep the
+    # Float64 literal (bit-identical results).
+    @test point_line_distance(1f0, 2f0, 0f0, 0f0, 3f0, 1f0) isa Float32
+    @test point_segment_distance(1f0, 2f0, 0f0, 0f0, 3f0, 1f0) isa Float32
+    @test point_segment_distance(1f0, 2f0, 0f0, 0f0, 0f0, 0f0) isa Float32
+    @test signed_distance_to_triangle(1f0, 2f0, 0f0, 0f0, 3f0, 1f0, 0f0, 3f0) isa Float32
+    @test signed_distance_to_triangle(1f0, 1f0, 0f0, 0f0, 3f0, 0f0, 0f0, 3f0) isa Float32
+    # |cross((1,2)-(0,0), (3,1))| / |(3,1)| = 5 / sqrt(10).
+    @test point_line_distance(1f0, 2f0, 0f0, 0f0, 3f0, 1f0) ≈ 5f0 / sqrt(10f0)
+    # 224 faces, 64 x 64: a Float32 workspace render is allocation-free (the
+    # round-1 lead reported 4.75 MB; no allocation reproduced on 1.10 or 1.13).
+    vertices, faces, colors, vp, config = audit3b_sphere_inputs(Float32)
+    @test length(faces) == 224
+    image = soft_render(vertices, faces, colors, vp, 64, 64, config)
+    @test eltype(image) === Float32
+    if Base.JLOptions().opt_level > 0
+        workspace = SoftRenderWorkspace{Float32}()
+        @test audit3b_soft_allocations(vertices, faces, colors, vp, config, workspace) == 0
+        workspace64 = SoftRenderWorkspace{Float64}()
+        @test audit3b_soft_allocations(audit3b_sphere_inputs(Float64)..., workspace64) == 0
+    end
+end
+

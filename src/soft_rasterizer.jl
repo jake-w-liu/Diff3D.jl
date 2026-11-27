@@ -947,11 +947,17 @@ use a rescaled evaluation that stays finite for coordinates near `floatmax`.
     return numerator * scale / max(scaled_len, 1.0e-20 / scale)
 end
 
+# Numerical floors in the scalar type of a hardware or BigFloat computation, so
+# Float32 inputs stay Float32. AD scalars keep the Float64 literal (unchanged
+# promotion, no tape node for a constant).
+@inline _soft_constant(::Type{T}, value::Float64) where {T<:AbstractFloat} = T(value)
+@inline _soft_constant(::Type, value::Float64) = value
+
 @inline function point_line_distance(px, py, ax, ay, bx, by)
     dx = bx - ax
     dy = by - ay
     len = hypot(dx, dy)
-    abs((px - ax) * dy - (py - ay) * dx) / max(len, 1e-20)
+    abs((px - ax) * dy - (py - ay) * dx) / max(len, _soft_constant(typeof(len), 1e-20))
 end
 
 # Clamped projection parameter of (px, py) onto segment (ax, ay)-(bx, by) of
@@ -1021,13 +1027,14 @@ function point_segment_distance(px, py, ax, ay, bx, by)
     # make ForwardDiff return Inf*0 = NaN and poison the whole gradient. The added
     # 1e-12 (≈1e-6 px) makes the distance smooth everywhere with a finite (zero)
     # derivative at 0; the bias is negligible relative to the sigmoid softness sigma.
+    smoothing = _soft_constant(typeof(len_sq), 1e-12)
     if len_sq < 1e-20
-        return sqrt((px - ax)^2 + (py - ay)^2 + 1e-12)
+        return sqrt((px - ax)^2 + (py - ay)^2 + smoothing)
     end
     t = clamp(((px - ax)*dx + (py - ay)*dy) / len_sq, zero(px), one(px))
     proj_x = ax + t * dx
     proj_y = ay + t * dy
-    sqrt((px - proj_x)^2 + (py - proj_y)^2 + 1e-12)
+    sqrt((px - proj_x)^2 + (py - proj_y)^2 + smoothing)
 end
 
 # ========================== High-level differentiable render ==========================
