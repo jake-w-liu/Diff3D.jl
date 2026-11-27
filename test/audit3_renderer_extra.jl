@@ -212,6 +212,51 @@ const _SPRITE_ORACLE = Dict(
     end
 end
 
+# Hits of three.js r186 `Sprite.raycast` (src/objects/Sprite.js, run in Node on
+# build/three.module.js) for the perspective, size-attenuated scene above, with
+# rays from `Raycaster.setFromCamera` on a 31×31 NDC grid x, y = -1 + 2k/30.
+# Keys are (column k_x, row k_y); values are the hit distances that were
+# checked to full precision (other hits are listed with `nothing`).
+const _SPRITE_RAYCAST_ORACLE = let hits = Dict{Tuple{Int,Int},Union{Nothing,Float64}}()
+    for (row, columns) in ((10, 19:20), (11, 19:21), (12, 18:22), (13, 19:23),
+                           (14, 20:24), (15, 21:24), (16, 22:24))
+        for column in columns
+            hits[(column, row)] = nothing
+        end
+    end
+    hits[(19, 10)] = 6.1817564382258654
+    hits[(18, 12)] = 6.1004289813479344
+    hits[(21, 13)] = 6.2229621344062789
+    hits[(24, 16)] = 6.4365560773805051
+    hits
+end
+
+@testset "Sprite picking matches three.js Sprite.raycast" begin
+    camera = PerspectiveCamera(fov=deg2rad(50.0), aspect=4 / 3, near=0.1, far=100.0)
+    camera.position = Vec3(1.0, 2.0, 6.0); camera.target = Vec3(0.0, 0.0, 0.0)
+    parent = Group(); parent.position = Vec3(0.3, -0.2, 0.5)
+    parent.rotation = Euler(0.2, -0.4, 0.3); parent.scale = Vec3(1.5, -0.7, 2.0)
+    sprite = Sprite(SpriteMaterial(rotation=0.6); center=Vec2(0.3, 0.8))
+    sprite.position = Vec3(0.5, 0.4, -0.3); sprite.scale = Vec3(1.2, 0.8, 1.0)
+    sprite.rotation = Euler(0.1, 0.2, 0.3)
+    add!(parent, sprite)
+    picker = Raycaster(Vec3(), Vec3(0.0, 0.0, -1.0); near=0.0, far=Inf)
+    mismatches = 0
+    for row in 0:30, column in 0:30
+        set_from_camera!(picker, camera, -1 + 2column / 30, -1 + 2row / 30)
+        hits = raycast(picker, sprite; recursive=false)
+        expected = get(_SPRITE_RAYCAST_ORACLE, (column, row), missing)
+        if expected === missing
+            isempty(hits) || (mismatches += 1)
+        elseif isempty(hits)
+            mismatches += 1
+        elseif expected !== nothing
+            @test hits[1].distance ≈ expected rtol=1e-12
+        end
+    end
+    @test mismatches == 0
+end
+
 function _audit3_tiled_wire_allocations(target, scene, camera, tiles, caches)
     render_tiled!(target, scene, camera; tiles=tiles, cache=caches)
     return @allocated render_tiled!(target, scene, camera; tiles=tiles, cache=caches)
