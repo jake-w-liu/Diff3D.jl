@@ -690,6 +690,18 @@ function _js_mat_array(ms::AbstractVector{<:Mat4})
     return String(take!(io))
 end
 _html_escape(s::AbstractString) = replace(s, "&"=>"&amp;", "<"=>"&lt;", ">"=>"&gt;", "\""=>"&quot;")
+
+# The page title is RCDATA. The HTML tokenizer replaces U+0000 there with U+FFFD
+# (unexpected-null-character), and a character reference `&#0;` is replaced the same way
+# (null-character-reference), so no markup can carry it; invalid UTF-8 is decoded to
+# U+FFFD as well. Either would silently publish a different title, so both are rejected.
+function _web_validate_title(title::AbstractString)
+    isvalid(title) ||
+        throw(ArgumentError("save_webgl_html title must be valid Unicode; got $(repr(title))"))
+    occursin('\0', title) &&
+        throw(ArgumentError("save_webgl_html title cannot contain U+0000, which HTML replaces with U+FFFD"))
+    return nothing
+end
 # Component-wise color product (three.js InstancedMesh per-instance color
 # multiplies the material color).
 _web_color_mul(a::Color3, b::Color3) = Color3(a.r * b.r, a.g * b.g, a.b * b.b)
@@ -4261,6 +4273,7 @@ end
 function _web_write_webgl_html(io::IO, data_json::String, title::String;
                                light_caps=(dir=4, point=4, spot=4, hemi=4, rect=4),
                                extra_rewrites=(), chrome::Bool=true)
+    _web_validate_title(title)
     max_dir = max(1, Int(light_caps.dir))
     max_point = max(1, Int(light_caps.point))
     max_spot = max(1, Int(light_caps.spot))
@@ -5874,7 +5887,8 @@ The browser runtime is intentionally small; the scene data is produced from
 Diff3D.jl objects, materials, instancing, and optional `AnimationClip`s.
 With `chrome=false`, the header, playback controls, stats, case list, and
 title bar are hidden via CSS (DOM ids retained for the JS runtime), leaving
-a canvas-only page.
+a canvas-only page. A `title` that HTML cannot carry unchanged (one containing
+U+0000, or invalid Unicode) throws an `ArgumentError`.
 
 The complete export replaces `path` only after serialization succeeds. A failed
 export leaves an existing destination intact. A destination symlink is replaced
@@ -5884,6 +5898,7 @@ bits are preserved and new output files use owner-only read/write permissions.
 function save_webgl_html(path::String, cases::AbstractVector{WebGLExportCase};
                          title::String="Diff3D.jl Live WebGL Showcase", chrome::Bool=true)
     isempty(cases) && throw(ArgumentError("save_webgl_html requires at least one WebGLExportCase"))
+    _web_validate_title(title)
     for case in cases
         _validate_webgl_export_case(case)
     end
