@@ -118,6 +118,8 @@ _web_validate_camera(::Nothing) = nothing
 function _web_validate_camera(camera::PerspectiveCamera)
     _validated_perspective_params(camera.fov, camera.aspect, camera.near, camera.far)
     _validated_camera_zoom(camera.zoom)
+    (_camera_view_active(camera.view) || !iszero(camera.film_offset)) &&
+        throw(ArgumentError("WebGL export does not support PerspectiveCamera view offsets or film offsets"))
     _web_validate_camera_vectors(camera, "PerspectiveCamera")
     return nothing
 end
@@ -126,6 +128,8 @@ function _web_validate_camera(camera::OrthographicCamera)
     _validated_orthographic_params(camera.left, camera.right, camera.bottom,
                                    camera.top, camera.near, camera.far)
     _validated_camera_zoom(camera.zoom)
+    _camera_view_active(camera.view) &&
+        throw(ArgumentError("WebGL export does not support OrthographicCamera view offsets"))
     _web_validate_camera_vectors(camera, "OrthographicCamera")
     return nothing
 end
