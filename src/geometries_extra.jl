@@ -2843,13 +2843,15 @@ function NURBSCurveGeometry(curve::NURBSCurve; segments::Integer=200)
     return BufferGeometry(positions, Float64[], Float64[], Int[], n_vertices, 0)
 end
 
-function _parametric_point(fn::F, u::Float64, v::Float64, label::String) where {F}
+# `nonfinite` is the error label, built once per geometry so that sampling
+# does not allocate; Bool, non-real and unrepresentable coordinates are
+# rejected like non-finite ones.
+function _parametric_point(fn::F, u::Float64, v::Float64, label::String,
+                           nonfinite::String) where {F}
     p = fn(u, v)
     p isa Vec3 || throw(ArgumentError(string(label, " callback must return Vec3")))
-    x, y, z = Float64(p.x), Float64(p.y), Float64(p.z)
-    isfinite(x) && isfinite(y) && isfinite(z) ||
-        throw(ArgumentError(string(label, " callback returned a non-finite point")))
-    return Vec3(x, y, z)
+    return Vec3(_geometry_finite_float(p.x, nonfinite), _geometry_finite_float(p.y, nonfinite),
+                _geometry_finite_float(p.z, nonfinite))
 end
 
 # ParametricGeometry.js:64-118: positions, finite-difference normals and UVs
@@ -2865,17 +2867,18 @@ function _parametric_geometry(fn::F, slices, stacks, label::String) where {F}
     normals = Vector{Float64}(undef, position_len)
     uvs = Vector{Float64}(undef, uv_len)
     eps = 0.00001
+    nonfinite = string(label, " callback returned a non-finite point")
     for i in 0:vs, j in 0:us
         v = i / vs
         u = j / us
-        p0 = _parametric_point(fn, u, v, label)
+        p0 = _parametric_point(fn, u, v, label, nonfinite)
         # ParametricGeometry.js:85-111: one-sided differences, backward where
         # u - EPS >= 0 and forward otherwise (likewise for v), then
         # cross(pu, pv).normalize().
         backward_u = u - eps >= 0
         backward_v = v - eps >= 0
-        p1u = _parametric_point(fn, backward_u ? u - eps : u + eps, v, label)
-        p1v = _parametric_point(fn, u, backward_v ? v - eps : v + eps, label)
+        p1u = _parametric_point(fn, backward_u ? u - eps : u + eps, v, label, nonfinite)
+        p1v = _parametric_point(fn, u, backward_v ? v - eps : v + eps, label, nonfinite)
         pu = backward_u ? p0 - p1u : p1u - p0
         pv = backward_v ? p0 - p1v : p1v - p0
         cx = pu.y * pv.z - pu.z * pv.y
