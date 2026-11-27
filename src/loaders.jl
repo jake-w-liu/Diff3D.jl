@@ -408,8 +408,9 @@ function save_ply(path::String, geo::BufferGeometry; binary::Bool=false,
     normals = _export_vertex_data(geo.normals, 3, nv, "save_ply", "normals")
     colors = _export_vertex_colors(geo, "save_ply")
     for fi in 1:geo.n_faces, j in get_face(geo, fi)
-        j - 1 <= typemax(UInt32) ||
-            throw(ArgumentError("save_ply vertex index $j does not fit uint32"))
+        # The header declares the indices as `int` (signed 32-bit).
+        j - 1 <= typemax(Int32) ||
+            throw(ArgumentError("save_ply vertex index $j does not fit int32"))
     end
     format = !binary ? "ascii" :
              little_endian ? "binary_little_endian" : "binary_big_endian"
@@ -452,7 +453,7 @@ function save_ply(path::String, geo::BufferGeometry; binary::Bool=false,
             if binary
                 write(io, UInt8(3))
                 for j in (a, b, c)
-                    u = UInt32(j - 1)
+                    u = Int32(j - 1)
                     write(io, little_endian ? htol(u) : hton(u))
                 end
             else
