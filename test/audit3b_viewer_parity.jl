@@ -121,3 +121,59 @@ end
     end
     @test occursin("o.mirrored=M4.orientation3(m)<0", html)
 end
+
+const _AUDIT3B_VEC_PRELUDE = """
+const add=(a,b)=>[a[0]+b[0],a[1]+b[1],a[2]+b[2]], sub=(a,b)=>[a[0]-b[0],a[1]-b[1],a[2]-b[2]];
+const scale=(a,s)=>[a[0]*s,a[1]*s,a[2]*s], dot=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+const cross=(a,b)=>[a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+const norm=a=>{ const l=Math.hypot(a[0],a[1],a[2])||1; return [a[0]/l,a[1]/l,a[2]/l]; };
+"""
+
+@testset "hemisphere light sky axis follows the light's world position" begin
+    html = _audit3b_viewer_html()
+    # three.js getHemisphereLightIrradiance (lights_pars_begin.glsl.js:222-230) weights the sky
+    # by 0.5*dot(normal, direction)+0.5; the viewer used the world y axis.
+    @test occursin("float h=clamp(dot(n,uHemiDir[i])*.5+.5,0.0,1.0);", html)
+    @test !occursin("clamp(n.y*.5+.5", html)
+    @test occursin("uHemiDir[MAX_HEMI]", html)
+    @test occursin("uniform3v(p,\"uHemiDir[0]\",light.hemiDir);", html)
+    prelude = _AUDIT3B_VEC_PRELUDE * """
+    const MAX_DIR=4, MAX_POINT=4, MAX_SPOT=4, MAX_HEMI=4, MAX_RECT=4; const shadowTextureSlots=[];
+    """ * _audit3b_viewer_block(html, "M4")
+    names = ["padded3", "padded2", "padded1", "layerMatches", "lighting", "eachCamera",
+             "transformPoint", "transformDir", "refreshLightDerived", "updateViewAndLightPoses"]
+    # A hemisphere light at local (0,1,0) under a parent turned +90 deg about x and moved: the
+    # world position is (2, 0, 1) + R*(0,1,0) = (2, 0, 2), so the sky axis is (1,0,1)/sqrt(2)
+    # (WebGLLights.js:634-635, setFromMatrixPosition then normalize). A light at the origin
+    # keeps the zero axis (Vector3.normalize divides by length || 1).
+    body = """
+    const world=[1,0,0,0, 0,0,1,0, 0,-1,0,0, 2,0,1,1];
+    const local=[1,0,0,0, 0,1,0,0, 0,0,1,0, 0,1,0,1];
+    const hemi={type:"hemisphere",id:7,color:[1,1,1],groundColor:[0,0,0],intensity:2,direction:[0,1,0]};
+    const origin={type:"hemisphere",id:8,color:[1,1,1],groundColor:[0,0,0],intensity:1,direction:[0,1,0]};
+    const c={camera:null,lights:[hemi,origin],nodeMap:new Map([[7,{transformMatrix:M4.mul(world,local)}],[8,{transformMatrix:M4.ident()}]])};
+    updateViewAndLightPoses(c);
+    const L=lighting(c);
+    console.log(JSON.stringify({dir:hemi.direction,zero:origin.direction,count:L.hemiCount,hemiDir:L.hemiDir,sky:L.hemiSky}));
+    """
+    r = _audit3b_node_json(html, names, body; prelude)
+    if r !== nothing
+        s = 1 / sqrt(2)
+        @test r["dir"] ≈ [s, 0.0, s] atol=1e-15
+        @test r["zero"] == [0.0, 0.0, 0.0]
+        @test r["count"] == 2
+        @test r["hemiDir"][1:6] ≈ [s, 0.0, s, 0.0, 0.0, 0.0] atol=1e-15
+        @test r["sky"][1:3] == [2.0, 2.0, 2.0]
+    end
+    # The exported axis is Julia's _hemisphere_direction, the world position normalized.
+    scene = Scene()
+    rig = Group(); rig.position = Vec3(2.0, 0.0, 1.0); rig.rotation = Euler(pi / 2, 0.0, 0.0)
+    add!(scene, rig)
+    h = HemisphereLight(color=Color3(1.0, 1.0, 1.0), ground_color=Color3(0.0, 0.0, 0.0))
+    add!(rig, h)
+    json = Diff3D._web_lights_json(scene)
+    @test occursin("\"type\":\"hemisphere\"", json)
+    d = Diff3D._hemisphere_direction(h)
+    @test [d.x, d.y, d.z] ≈ [1 / sqrt(2), 0.0, 1 / sqrt(2)] atol=1e-15
+    @test occursin("\"direction\":[", json)
+end
