@@ -79,13 +79,17 @@ end
     tested = PointsObject(point_geo, PointsMaterial(
         size=5.0, map=half_alpha, alpha_test=0.75))
     @test renderer_audit_center(tested) == [0.0, 0.0, 1.0]
-    tested_sprite = Sprite(SpriteMaterial(color=red, opacity=0.4, alpha_test=0.5))
+    # SpriteMaterial.js:107 makes sprites transparent by default, so the
+    # opaque alphaTest cases opt out explicitly.
+    tested_sprite = Sprite(SpriteMaterial(color=red, opacity=0.4, alpha_test=0.5,
+                                          transparent=false))
     @test renderer_audit_center(tested_sprite) == [0.0, 0.0, 1.0]
-    kept_sprite = Sprite(SpriteMaterial(color=red, opacity=0.6, alpha_test=0.5))
+    kept_sprite = Sprite(SpriteMaterial(color=red, opacity=0.6, alpha_test=0.5,
+                                        transparent=false))
     @test renderer_audit_center(kept_sprite) == [1.0, 0.0, 0.0]
-    @test !Diff3D._render_primitive_blends(Sprite(SpriteMaterial(map=half_alpha)))
-    @test Diff3D._render_primitive_blends(Sprite(SpriteMaterial(map=half_alpha,
-                                                                transparent=true)))
+    @test !Diff3D._render_primitive_blends(Sprite(SpriteMaterial(map=half_alpha,
+                                                                 transparent=false)))
+    @test Diff3D._render_primitive_blends(Sprite(SpriteMaterial(map=half_alpha)))
     # Line materials expose no `transparent` flag; opacity keeps selecting blending.
     line = LineObject(renderer_audit_points((-0.75, 0.0, 0.0), (0.75, 0.0, 0.0)),
                       LineBasicMaterial(color=red, linewidth=3.0, opacity=0.5))

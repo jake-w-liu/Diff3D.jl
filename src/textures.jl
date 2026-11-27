@@ -278,20 +278,40 @@ function Texture(data::Array{Float64,3}, wrap_s::Symbol, wrap_t::Symbol, filter:
             _TEXTURE_MATRIX_INVALID_KEY, _texture_tex_coord(tex_coord),
             _texture_max_anisotropy(max_anisotropy), false)
 end
-DataTexture(data::Array{Float64,3}; kwargs...) = Texture(data; kwargs...)
+# three.js DataTexture and DepthTexture default magFilter and minFilter to
+# NearestFilter independently (DataTexture.js:32, DepthTexture.js:28), so an
+# explicit `mag_filter` keeps a nearest `min_filter`. `filter` is the base
+# (magnification) filter, as in the glTF loader, so it follows `mag_filter`.
+function _nearest_default_texture(data::Array{Float64,3}, filter, min_filter,
+                                   mag_filter, kwargs)
+    filter === nothing || return Texture(data; filter=filter, min_filter=min_filter,
+                                         mag_filter=mag_filter, kwargs...)
+    mag = mag_filter === nothing ? :nearest : mag_filter
+    return Texture(data; filter=mag, mag_filter=mag,
+                   min_filter=min_filter === nothing ? :nearest : min_filter,
+                   kwargs...)
+end
+DataTexture(data::Array{Float64,3}; filter=nothing, min_filter=nothing,
+            mag_filter=nothing, kwargs...) =
+    _nearest_default_texture(data, filter, min_filter, mag_filter, kwargs)
 CanvasTexture(data::Array{Float64,3}; kwargs...) = Texture(data; kwargs...)
 
 # Single-channel depth texture.
-DepthTexture(depth::Matrix{Float64}; kwargs...) =
-    Texture(reshape(depth, size(depth,1), size(depth,2), 1); kwargs...)
+DepthTexture(depth::Matrix{Float64}; filter=nothing, min_filter=nothing,
+             mag_filter=nothing, kwargs...) =
+    _nearest_default_texture(reshape(depth, size(depth, 1), size(depth, 2), 1),
+                             filter, min_filter, mag_filter, kwargs)
 
-# Wrap a 0-based integer pixel coordinate into [0, n-1] per the mode.
+# Wrap a 0-based integer pixel coordinate into [0, n-1] per the mode (n >= 1).
+# Samplers reduce UVs to [0, 1] first, so almost every index is already in
+# range; returning it directly skips the integer divisions of `mod`.
 @inline function _wrap_coord(i::Int, n::Int, mode::Symbol)
     if mode === :repeat
-        return mod(i, n)
+        return 0 <= i < n ? i : mod(i, n)
     elseif mode === :clamp
         return clamp(i, 0, n - 1)
     elseif mode === :mirror
+        0 <= i < n && return i
         p = mod(i, 2n)
         return p < n ? p : (2n - 1 - p)
     else
@@ -299,30 +319,18 @@ DepthTexture(depth::Matrix{Float64}; kwargs...) =
     end
 end
 
-@inline function _texel(tex::Texture, ix::Int, iy::Int)
-    H, W, C = size(tex.data)
-    x = _wrap_coord(ix, W, tex.wrap_s) + 1
-    y = _wrap_coord(iy, H, tex.wrap_t) + 1
-    if C == 1
-        g = tex.data[y, x, 1]; return Color3(g, g, g)
-    elseif C == 2
-        g = tex.data[y, x, 1]; return Color3(g, g, g)   # treat channel 1 as luminance
-    end
-    # C >= 3: RGB
-    Color3(tex.data[y, x, 1], tex.data[y, x, 2], tex.data[y, x, 3])
-end
-
+# Callers validate that every dimension of `data` is positive, and
+# `_wrap_coord` returns an index in 0:n-1, so the reads below are in bounds.
 @inline function _texel_data(data::Array{Float64,3}, wrap_s::Symbol, wrap_t::Symbol,
                             ix::Int, iy::Int)
     H, W, C = size(data)
     x = _wrap_coord(ix, W, wrap_s) + 1
     y = _wrap_coord(iy, H, wrap_t) + 1
-    if C == 1
-        g = data[y, x, 1]; return Color3(g, g, g)
-    elseif C == 2
-        g = data[y, x, 1]; return Color3(g, g, g)
+    @inbounds if C <= 2
+        g = data[y, x, 1]; return Color3(g, g, g)   # gray / gray-alpha
+    else
+        return Color3(data[y, x, 1], data[y, x, 2], data[y, x, 3])
     end
-    return Color3(data[y, x, 1], data[y, x, 2], data[y, x, 3])
 end
 
 @inline function texture_transform_uv(tex::Texture, u, v)
@@ -424,12 +432,6 @@ end
     return tex
 end
 
-"""
-    sample_texture(tex, u, v) -> Color3
-
-Sample the texture at UV `(u,v)` ∈ [0,1]² (outside handled by the wrap modes),
-using nearest or bilinear filtering. `v=0` is the bottom row.
-"""
 # Sanitize a non-finite UV from procedural or loaded geometry before sampling.
 # Finite coordinates are reduced exactly according to their wrap mode below,
 # before any conversion to an integer texel coordinate.
@@ -438,10 +440,16 @@ using nearest or bilinear filtering. `v=0` is the bottom row.
     return x
 end
 
+# For finite Float64 x, `x - floor(x)` equals `mod(x, 1.0)` bit for bit: the
+# fractional part of x >= 0 is exactly representable, and for x < 0 both
+# round the same exact value `rem(x, 1.0) + 1` once. It avoids `rem`'s slow path.
+@inline _texture_unit_fract(x::Float64) = x - floor(x)
+@inline _texture_unit_fract(x) = mod(x, one(x))
+
 @inline function _sampling_uv(x, mode::Symbol)
     x = _sanitize_uv(x)
     if mode === :repeat
-        return mod(x, one(x))
+        return _texture_unit_fract(x)
     elseif mode === :clamp
         return clamp(x, zero(x), one(x))
     elseif mode === :mirror
@@ -451,6 +459,49 @@ end
     end
     throw(ArgumentError("unsupported texture wrap mode: $mode"))
 end
+
+# NEAREST texel selection (GLES 3.0 §3.8.10, used by WebGL 2/three.js):
+# i = wrap(floor(s * n)); the wrap applies to the integer texel index. Mirrored
+# repeat therefore reduces the coordinate only to one full mirror period
+# [0, 2) and reflects the index: folding the coordinate into [0, 1] first would
+# move every texel boundary of a reflected period to the neighbouring texel.
+@inline function _nearest_texel_index(x, n::Int, mode::Symbol)
+    mode === :mirror || return floor(Int, _sampling_uv(x, mode) * n)
+    x = _sanitize_uv(x)
+    i = floor(Int, mod(x, one(x) + one(x)) * n)   # 0:2n (2n only by rounding)
+    i = i >= 2n ? i - 2n : i
+    return i < n ? i : 2n - 1 - i
+end
+
+# 0-based (column, storage row) of the NEAREST texel. A 2D texture is uploaded
+# bottom row first (three.js `flipY = true`; web export writes `flip_y=true`),
+# so t = v counts rows from the bottom and the storage row is H - 1 - j. Cube
+# faces are uploaded top row first (CubeTexture.js `flipY = false`; web export
+# writes faces with `flip_y=false`) and GL's face coordinate is t = 1 - v, so
+# j counts storage rows from the top. `_wrap_coord` reduces the remaining
+# out-of-range repeat/clamp indices (i == n from a coordinate of exactly 1).
+@inline function _nearest_texel_indices(u, v, W::Int, H::Int, wrap_s::Symbol,
+                                        wrap_t::Symbol, rows_from_top::Bool)
+    ix = _nearest_texel_index(u, W, wrap_s)
+    iy = rows_from_top ? _nearest_texel_index(1 - _sanitize_uv(v), H, wrap_t) :
+         H - 1 - _nearest_texel_index(v, H, wrap_t)
+    # Scalar type that linear filtering returns for the same coordinates.
+    return ix, iy, promote_type(typeof(u), typeof(v), Float64)
+end
+
+# Nearest filtering returns stored constants. Give them the scalar type that
+# linear filtering returns for the same coordinate so a sampler call has one
+# concrete return type for isbits AD numbers such as ForwardDiff.Dual (the
+# constants carry zero partials). Mutable reverse-mode scalars are left as
+# Float64: converting them would record a tape node for every texel read.
+@inline function _texture_filtered_scalar(value, ::Type{T}) where {T}
+    (T === Float64 || !isbitstype(T)) && return value
+    return convert(promote_type(typeof(value), T), value)
+end
+@inline _texture_filtered_color(color::Color3, ::Type{T}) where {T} =
+    Color3(_texture_filtered_scalar(color.r, T),
+           _texture_filtered_scalar(color.g, T),
+           _texture_filtered_scalar(color.b, T))
 
 @inline function _texture_sample_uv(tex::Texture, u, v)
     u, v = texture_transform_uv(tex, u, v)
@@ -466,18 +517,20 @@ end
 end
 
 function _sample_texture_data(data::Array{Float64,3}, wrap_s::Symbol, wrap_t::Symbol,
-                              filter::Symbol, u, v, label::String)
+                              filter::Symbol, u, v, label::String,
+                              rows_from_top::Bool=false)
     H, W, _ = _checked_texture_data_size(data, label)
     wrap_s = _texture_wrap_symbol(wrap_s)
     wrap_t = _texture_wrap_symbol(wrap_t)
     filter = _texture_filter_symbol(filter)
+    if filter === :nearest
+        ix, iy, T = _nearest_texel_indices(u, v, W, H, wrap_s, wrap_t, rows_from_top)
+        return _texture_filtered_color(_texel_data(data, wrap_s, wrap_t, ix, iy), T)
+    end
     u = _sampling_uv(u, wrap_s)
     v = _sampling_uv(v, wrap_t)
     fx = u * W - 0.5
     fy = (1 - v) * H - 0.5                       # flip v so v=0 maps to the bottom row
-    if filter === :nearest
-        return _texel_data(data, wrap_s, wrap_t, round(Int, fx), round(Int, fy))
-    end
     x0 = floor(Int, fx); y0 = floor(Int, fy)
     tx = fx - x0; ty = fy - y0
     c00 = _texel_data(data, wrap_s, wrap_t, x0,   y0)
@@ -489,6 +542,16 @@ function _sample_texture_data(data::Array{Float64,3}, wrap_s::Symbol, wrap_t::Sy
     return _stable_color_lerp(top, bottom, ty)
 end
 
+"""
+    sample_texture(tex, u, v) -> Color3
+
+Sample the texture at UV `(u,v)` after its UV transform (`tex.matrix`), with
+coordinates outside `[0,1]²` handled by the wrap modes. `v=0` is the bottom
+row. Filtering follows the WebGL rules: `:nearest` reads texel
+`(floor(u·W), floor(v·H))` with the wrap mode applied to that texel index, and
+`:bilinear` blends the four texels around `(u·W − ½, v·H − ½)`. Returns the raw stored values; see
+[`sample_texture_linear`](@ref) for color-space decoding.
+"""
 function sample_texture(tex::Texture, u, v)
     tu, tv = _texture_sample_uv(tex, u, v)
     return _sample_texture_data(tex.data, tex.wrap_s, tex.wrap_t, tex.filter, tu, tv,
@@ -496,19 +559,20 @@ function sample_texture(tex::Texture, u, v)
 end
 
 @inline function _texel_channel(tex::Texture, ix::Int, iy::Int, channel::Int, default=1.0)
-    H, W, C = size(tex.data)
+    data = tex.data
+    H, W, C = size(data)
     channel < 1 && return default
     x = _wrap_coord(ix, W, tex.wrap_s) + 1
     y = _wrap_coord(iy, H, tex.wrap_t) + 1
     if channel <= C
-        return tex.data[y, x, channel]
+        return @inbounds data[y, x, channel]
     elseif C == 1
         # Single-channel (grayscale / RedFormat) texture: broadcast its lone
-        # channel to any requested channel, matching _texel's luminance
+        # channel to any requested channel, matching _texel_data's luminance
         # broadcast and three.js's single-channel sampling. Otherwise a natural
         # grayscale alpha/roughness/etc. map sampled at channel 2/3/4 would be
         # silently ignored in favor of `default`.
-        return tex.data[y, x, 1]
+        return @inbounds data[y, x, 1]
     end
     return default
 end
@@ -530,14 +594,15 @@ function _sample_texture_channel(tex::Texture, u, v, channel::Int, default,
     _texture_wrap_symbol(tex.wrap_t)
     filter = _texture_filter_symbol(tex.filter)
     u, v = texture_transform_uv(tex, u, v)
+    if filter === :nearest
+        ix, iy, T = _nearest_texel_indices(u, v, W, H, tex.wrap_s, tex.wrap_t, false)
+        return _texture_filtered_scalar(
+            transform(_texel_channel(tex, ix, iy, channel, default)), T)
+    end
     u = _sampling_uv(u, tex.wrap_s)
     v = _sampling_uv(v, tex.wrap_t)
     fx = u * W - 0.5
     fy = (1 - v) * H - 0.5
-    if filter === :nearest
-        return transform(
-            _texel_channel(tex, round(Int, fx), round(Int, fy), channel, default))
-    end
     x0 = floor(Int, fx); y0 = floor(Int, fy)
     tx = fx - x0; ty = fy - y0
     c00 = transform(_texel_channel(tex, x0,   y0,   channel, default))
@@ -689,20 +754,23 @@ end
 @inline _texture_mag_filter_texel_filter(filter::Symbol) =
     filter === :nearest ? :nearest : :bilinear
 
-function _sample_texture_lod_filtered(tex::Texture, u, v, lod::Int, filter::Symbol)
-    lod <= 0 && return _sample_texture_filtered(tex, u, v, filter)
-    isempty(tex.mipmaps) && return _sample_texture_filtered(tex, u, v, filter)
+function _sample_texture_lod_filtered(tex::Texture, u, v, lod::Int, filter::Symbol,
+                                      rows_from_top::Bool=false)
+    lod <= 0 && return _sample_texture_filtered(tex, u, v, filter, rows_from_top)
+    isempty(tex.mipmaps) &&
+        return _sample_texture_filtered(tex, u, v, filter, rows_from_top)
     lvl = tex.mipmaps[min(lod, length(tex.mipmaps))]
     tu, tv = _texture_sample_uv(tex, u, v)
     return _sample_texture_data(lvl, tex.wrap_s, tex.wrap_t, filter, tu, tv,
-                                "sample_texture_lod")
+                                "sample_texture_lod", rows_from_top)
 end
 
-function _sample_texture_filtered(tex::Texture, u, v, filter::Symbol)
+function _sample_texture_filtered(tex::Texture, u, v, filter::Symbol,
+                                  rows_from_top::Bool=false)
     _checked_texture_data_size(tex, "sample_texture")
     tu, tv = _texture_sample_uv(tex, u, v)
     return _sample_texture_data(tex.data, tex.wrap_s, tex.wrap_t, filter, tu, tv,
-                                "sample_texture")
+                                "sample_texture", rows_from_top)
 end
 
 """
@@ -734,15 +802,22 @@ function sample_texture_auto(tex::Texture, u, v, duv)
     H, W, _ = _checked_texture_data_size(tex, "sample_texture_auto")
     min_filter = _texture_min_filter_symbol(tex.min_filter)
     mag_filter = _texture_mag_filter_symbol(tex.mag_filter)
+    # Only the trilinear blend weight depends on `duv`; every branch returns
+    # the blended element type so the call has one concrete return type.
+    weight_type = typeof(float(duv))
     sz = max(W, H)
     span_raw = abs(duv) * sz
-    if span_raw <= 1.0
-        return _sample_texture_filtered(tex, u, v,
-                                        _texture_mag_filter_texel_filter(mag_filter))
+    # Filter and level choices compare primal values (see sample_texture_aniso).
+    if _primal_value(span_raw) <= 1.0
+        return _texture_filtered_color(
+            _sample_texture_filtered(tex, u, v,
+                                     _texture_mag_filter_texel_filter(mag_filter)),
+            weight_type)
     end
     filter = _texture_min_filter_texel_filter(min_filter)
     (isempty(tex.mipmaps) || !_texture_min_filter_uses_mipmaps(min_filter)) &&
-        return _sample_texture_filtered(tex, u, v, filter)
+        return _texture_filtered_color(_sample_texture_filtered(tex, u, v, filter),
+                                       weight_type)
     nlevels = length(tex.mipmaps)
     # Continuous LOD; clamp to [0, nlevels]. Keep AD type for the blend weight.
     # Use log(x)/log(2) rather than log2 so the reverse-mode `ADVar` path (which
@@ -755,13 +830,16 @@ function sample_texture_auto(tex::Texture, u, v, duv)
     # the differentiable path); the AD type stays in `lod`/`frac` for the blend.
     if !_texture_min_filter_blends_mipmaps(min_filter)
         nearest_level = clamp(floor(Int, lod + 0.5), 0, nlevels)
-        return _sample_texture_lod_filtered(tex, u, v, nearest_level, filter)
+        return _texture_filtered_color(
+            _sample_texture_lod_filtered(tex, u, v, nearest_level, filter),
+            weight_type)
     end
     l0 = floor(Int, lod)
     frac = lod - l0                            # fractional blend weight (AD-stable)
     l1 = min(l0 + 1, nlevels)
     c0 = _sample_texture_lod_filtered(tex, u, v, l0, filter)
-    frac <= 0 && return c0                      # exactly on a level
+    _primal_value(frac) <= 0 &&
+        return _texture_filtered_color(c0, weight_type)  # exactly on a level
     c1 = _sample_texture_lod_filtered(tex, u, v, l1, filter)
     return _stable_color_lerp(c0, c1, frac)
 end
@@ -798,26 +876,32 @@ function sample_texture_aniso(tex::Texture, u, v, du, dv; max_aniso::Int=8)
     (isfinite(du) && isfinite(dv)) ||
         throw(ArgumentError("texture anisotropic footprint (du, dv) must be finite"))
     # Footprint extents along each UV axis (keep AD type for the live path).
-    adu = abs(du)
-    adv = abs(dv)
+    adu, adv = promote(abs(du), abs(dv))
+    # Discrete decisions use primal magnitudes: ForwardDiff orders tied values
+    # by their partials (`Dual(0, 1) <= 0` is false), which would otherwise make
+    # the selected probes, and so the primal result, depend on the AD type.
+    primal_u = _primal_value(adu)
+    primal_v = _primal_value(adv)
     # Major/minor extents and the axis the major one lies on.
-    major = max(adu, adv)
-    minor = min(adu, adv)
-    major_is_u = adu >= adv
+    major_is_u = primal_u >= primal_v
+    major = major_is_u ? adu : adv
+    minor = major_is_u ? adv : adu
+    primal_major = major_is_u ? primal_u : primal_v
+    primal_minor = major_is_u ? primal_v : primal_u
 
-    # Discrete decisions below use comparisons / ceil(Int,·), which work directly
-    # on Float64, ForwardDiff.Dual, and ADVar — do NOT do Float64(major) (undefined
-    # for Dual, crashes the differentiable footprint path).
-
-    # No mipmaps: anisotropic LOD selection is meaningless, fall back to bilinear.
-    isempty(tex.mipmaps) && return sample_texture(tex, u, v)
+    # No mipmaps: anisotropic LOD selection is meaningless, fall back to bilinear
+    # (in the footprint's element type, which the mipmapped branches return).
+    isempty(tex.mipmaps) &&
+        return _texture_filtered_color(
+            sample_texture(tex, u, v),
+            promote_type(typeof(float(du)), typeof(float(dv))))
 
     # Near-isotropic footprint, degenerate footprint, or anisotropy disabled:
     # a single isotropic auto-LOD sample is correct and cheapest.
-    if max_aniso <= 1 || minor <= 0 || major <= 0
+    if max_aniso <= 1 || primal_minor <= 0 || primal_major <= 0
         return sample_texture_auto(tex, u, v, major)
     end
-    ratio = major / minor
+    ratio = primal_major / primal_minor
     if ratio < 1.5
         return sample_texture_auto(tex, u, v, major)
     end
@@ -864,7 +948,15 @@ end
 
 function _cube_face_uv(dir::Vec3)
     ax, ay, az = abs(dir.x), abs(dir.y), abs(dir.z)
-    ax == 0 && ay == 0 && az == 0 && return 1, 0.5, 0.5
+    # Test the primal values: ForwardDiff comparisons also order the partials,
+    # so `Dual(0, 1) == 0` is false and a zero direction would reach the 0/0
+    # face division below.
+    if iszero(_primal_value(ax)) && iszero(_primal_value(ay)) &&
+       iszero(_primal_value(az))
+        # Face center as a constant of the direction's scalar type.
+        center = zero(ax / one(ax)) + 0.5
+        return 1, center, center
+    end
     if ax >= ay && ax >= az
         if dir.x > 0; return 1, 0.5 - (dir.z/dir.x)/2, 0.5 + (dir.y/ax)/2
         else;         return 2, 0.5 - (dir.z/dir.x)/2, 0.5 + (dir.y/ax)/2; end
@@ -877,10 +969,20 @@ function _cube_face_uv(dir::Vec3)
     end
 end
 
+# Face samples address storage rows from the top for NEAREST texel selection
+# (see `_nearest_texel_indices`); bilinear weights are unaffected.
+@inline _sample_cube_face(tex::Texture, u, v) =
+    _sample_texture_filtered(tex, u, v, tex.filter, true)
+
+function _sample_cube_face_lod(tex::Texture, u, v, lod::Int)
+    _checked_texture_data_size(tex, "sample_texture_lod")
+    return _sample_texture_lod_filtered(tex, u, v, lod, tex.filter, true)
+end
+
 """Sample a cube map along direction `dir` (three.js cube-map convention)."""
 function sample_cube(ct::CubeTexture, dir::Vec3)
     face, u, v = _cube_face_uv(dir)
-    return sample_texture(ct.faces[face], u, v)
+    return _sample_cube_face(ct.faces[face], u, v)
 end
 
 """
@@ -903,15 +1005,15 @@ function sample_cube_lod(ct::CubeTexture, dir::Vec3, lod)
     isfinite(lod_f) || throw(ArgumentError("cubemap lod must be finite"))
     face, u, v = _cube_face_uv(dir)
     tex = ct.faces[face]
-    isempty(tex.mipmaps) && return sample_texture(tex, u, v)
-    lod_f <= 0 && return sample_texture(tex, u, v)
+    isempty(tex.mipmaps) && return _sample_cube_face(tex, u, v)
+    lod_f <= 0 && return _sample_cube_face(tex, u, v)
     nlevels = length(tex.mipmaps)
     lod_clamped = clamp(lod_f, 0.0, Float64(nlevels))
     l0 = floor(Int, lod_clamped)
     frac = lod_clamped - l0
-    c0 = sample_texture_lod(tex, u, v, l0)
+    c0 = _sample_cube_face_lod(tex, u, v, l0)
     frac <= 0 && return c0
-    c1 = sample_texture_lod(tex, u, v, min(l0 + 1, nlevels))
+    c1 = _sample_cube_face_lod(tex, u, v, min(l0 + 1, nlevels))
     return _stable_color_lerp(c0, c1, frac)
 end
 
