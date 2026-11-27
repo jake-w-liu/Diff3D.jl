@@ -2954,12 +2954,16 @@ after the object. Faces become [`Mesh`](@ref) children with the geometry
 [`load_obj`](@ref) builds for them (one mesh per `usemtl` material of the
 object), `l` polylines become [`LineSegments`](@ref) and `p` points become
 [`PointsObject`](@ref)s. Materials come from the `mtllib` libraries as in
-[`load_obj_groups`](@ref); a material name with no definition, or no `usemtl`,
-gets a default `MeshPhongMaterial`. As in `OBJLoader`, lines use a
-`LineBasicMaterial` and points a `PointsMaterial` with `size_attenuation=false`
-(size 10 with a library material, else 1), both taking the library material's
-colour; vertex colours set `vertex_colors` on meshes and colour points. A file
-with vertices but no faces, lines or points loads as one point cloud.
+[`load_obj_groups`](@ref). As with `OBJLoader` given those libraries through
+`setMaterials`, a file with a library gives every mesh its library material (a
+default `MeshPhongMaterial` for a name the library lacks or for faces before
+any `usemtl`), lines a `LineBasicMaterial` and points a `PointsMaterial` (size
+10, `size_attenuation=false`) that copy its colour and opacity, and vertex
+colours are not used. Without a library, as with `OBJLoader` alone, meshes get a
+`MeshPhongMaterial` with `vertex_colors` set when the file has vertex colours,
+lines a default `LineBasicMaterial`, and points a `PointsMaterial` of size 1
+(`size_attenuation=false`) coloured by their vertex colours. A file with
+vertices but no faces, lines or points loads as one unnamed point cloud.
 
 Unlike `OBJLoader`, which draws the vertices of a polyline `l a b c` pairwise,
 a polyline becomes the segments `a-b` and `b-c`, and the faces, lines and points
@@ -2972,13 +2976,20 @@ function load_obj_scene(path::String)
     root = Group(name="")
     nobj = length(rec.object_names)
     has_colors = has_attribute(geo, :color)
+    # OBJLoader.js parse with setMaterials(library): MaterialCreator.create
+    # returns a material for every name (a default MeshPhongMaterial for one
+    # the library lacks), so OBJLoader's own defaults and its vertexColors
+    # flag apply only when there is no library.
+    has_lib = !isempty(materials)
+    library_material(mtl) = get(() -> MeshPhongMaterial(), materials, mtl)
     nothing_emitted = geo.n_faces == 0 && isempty(rec.line_vertices) &&
                       isempty(rec.point_vertices)
     if nothing_emitted
-        # OBJLoader.js parse: a single object without geometry is a point cloud.
+        # OBJLoader.js parse: a single object without geometry is an unnamed
+        # point cloud with a default material.
         nobj == 1 && length(rec.verts) >= 3 &&
-            add!(root, _obj_points_object(rec, collect(1:(length(rec.verts) ÷ 3)), "",
-                                          nothing, rec.object_names[1]))
+            add!(root, _obj_points_object(rec, collect(1:(length(rec.verts) ÷ 3)),
+                                          nothing, ""))
         return root
     end
     tri_buckets = _obj_buckets(rec.face_object, face_mtl, nobj)
@@ -2988,9 +2999,8 @@ function load_obj_scene(path::String)
         name = rec.object_names[k]
         # One child per material of the object, in first-use order.
         for (mtl, tris) in tri_buckets[k]
-            material = get(materials, mtl, nothing)
-            material === nothing && (material = MeshPhongMaterial())
-            has_colors && (material = _gltf_enable_vertex_colors(material))
+            material = has_lib ? library_material(mtl) :
+                       MeshPhongMaterial(vertex_colors=has_colors)
             add!(root, Mesh(_obj_triangle_subset(geo, tris), material; name=name))
         end
         for (mtl, segs) in seg_buckets[k]
@@ -2999,13 +3009,21 @@ function load_obj_scene(path::String)
                 sel[2j - 1] = rec.line_vertices[2s - 1]
                 sel[2j] = rec.line_vertices[2s]
             end
-            lib = get(materials, mtl, nothing)
-            line_mat = LineBasicMaterial(color=lib === nothing ? Color3(1.0, 1.0, 1.0) : lib.color)
+            # OBJLoader.js: a LineBasicMaterial given the library material's
+            # Material properties (Material.prototype.copy) and colour.
+            line_mat = if has_lib
+                lib = library_material(mtl)
+                LineBasicMaterial(color=lib.color, opacity=lib.opacity,
+                                  depth_test=lib.depth_test, depth_write=lib.depth_write)
+            else
+                LineBasicMaterial()
+            end
             add!(root, LineSegments(_obj_vertex_subset(rec.verts, sel), line_mat; name=name))
         end
         for (mtl, pts) in pt_buckets[k]
             sel = rec.point_vertices[pts]
-            add!(root, _obj_points_object(rec, sel, mtl, get(materials, mtl, nothing), name))
+            add!(root, _obj_points_object(rec, sel, has_lib ? library_material(mtl) : nothing,
+                                          name))
         end
     end
     return root
@@ -3037,17 +3055,24 @@ function _obj_vertex_subset(verts::Vector{Float64}, sel::Vector{Int})
     return BufferGeometry(pos, Float64[], Float64[], Int[], length(sel), 0)
 end
 
-function _obj_points_object(rec, sel::Vector{Int}, mtl::String, lib, name::String)
+# `lib` is the library material, or nothing for OBJLoader's default material.
+function _obj_points_object(rec, sel::Vector{Int}, lib, name::String)
     g = _obj_vertex_subset(rec.verts, sel)
-    colored = !isempty(rec.colors) && all(v -> !isnan(rec.colors[3v - 2]), sel)
-    if colored
-        set_attribute!(g, :color, _obj_vertex_subset(rec.colors, sel).positions, 3)
+    if lib === nothing
+        # OBJLoader.js: PointsMaterial({size: 1, sizeAttenuation: false}) with
+        # vertexColors when the points have colours.
+        colored = !isempty(rec.colors) && all(v -> !isnan(rec.colors[3v - 2]), sel)
+        colored && set_attribute!(g, :color, _obj_vertex_subset(rec.colors, sel).positions, 3)
+        mat = PointsMaterial(size=1.0, size_attenuation=false)
+    else
+        # OBJLoader.js: PointsMaterial({size: 10, sizeAttenuation: false}) given
+        # the library material's Material properties, colour and map; its
+        # vertexColors stays off, so vertex colours are not attached.
+        mat = PointsMaterial(color=lib.color, size=10.0, size_attenuation=false,
+                             opacity=lib.opacity, transparent=lib.transparent,
+                             map=lib.map, alpha_test=lib.alpha_test,
+                             depth_test=lib.depth_test, depth_write=lib.depth_write)
     end
-    # OBJLoader.js: PointsMaterial({size: 10, sizeAttenuation: false}) copied
-    # from a library material, else size 1.
-    mat = PointsMaterial(color=lib === nothing ? Color3(1.0, 1.0, 1.0) : lib.color,
-                         size=lib === nothing ? 1.0 : 10.0, size_attenuation=false,
-                         map=lib === nothing ? nothing : lib.map)
     return PointsObject(g, mat; name=name)
 end
 
@@ -11765,6 +11790,9 @@ lights, mesh primitives, basic PBR metallic-roughness materials, skin binding,
 morph targets, and texture references supported by Diff3D's built-in loaders.
 Authored translation, rotation, and scale components are preserved for animation,
 including zero and negative scales. Animated nodes must not define `matrix`.
+A triangle primitive without `NORMAL` is shaded flat, as glTF requires: its
+geometry is de-indexed so that every triangle has its own corners carrying the
+triangle's face normal.
 Use [`load_glb`](@ref) for binary `.glb` containers whose first buffer is stored
 in the GLB BIN chunk.
 """

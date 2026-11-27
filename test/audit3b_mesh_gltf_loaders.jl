@@ -492,10 +492,31 @@ end
     pts = only(filter(c -> c isa PointsObject, scene.children))
     @test pts.material.color == Color3(1.0, 0, 0) && pts.material.size == 10.0
 
+    # With a library, three.js r186 OBJLoader.setMaterials(MTLLoader.parse(...))
+    # (oracle): line and point materials copy the library opacity and
+    # transparency, vertex colours stay off for meshes and points, and an
+    # unknown name gets a default Phong material (points of size 10).
+    write(joinpath(dir, "g.mtl"), "newmtl glass\nKd 0.5 0.25 1\nd 0.5\n")
+    write(joinpath(dir, "g.obj"),
+          "mtllib g.mtl\nv 0 0 0 1 0 0\nv 1 0 0 0 1 0\nv 0 1 0 0 0 1\nv 1 1 0 0.5 0.5 0.5\n" *
+          "o tri\nusemtl glass\nf 1 2 3\no wire\nl 1 2 4\no cloud\np 1 3 4\n" *
+          "o other\nusemtl nomat\np 2\n")
+    tri, wire, cloud, other = Diff3D.load_obj_scene(joinpath(dir, "g.obj")).children
+    glass = Color3(0.2140411404715882, 0.050876088164650994, 1.0)
+    @test tri.material.opacity == 0.5 && tri.material.transparent && !tri.material.vertex_colors
+    @test isapprox(wire.material.color.r, glass.r; atol=1e-9) && wire.material.opacity == 0.5
+    @test cloud.material.opacity == 0.5 && cloud.material.transparent &&
+          cloud.material.size == 10.0 && !has_attribute(cloud.geometry, :color)
+    @test isapprox(cloud.material.color.b, glass.b; atol=1e-9)
+    @test other.material.color == Color3(1.0, 1.0, 1.0) && other.material.size == 10.0 &&
+          other.material.opacity == 1.0 && !has_attribute(other.geometry, :color)
+
     # Only vertices: one point cloud (OBJLoader.js:870-890).
     cloud_only = Diff3D.load_obj_scene(_a3b_file("v 0 0 0\nv 1 2 3\n", ".obj"))
     @test only(cloud_only.children) isa PointsObject
     @test only(cloud_only.children).geometry.positions == [0.0, 0, 0, 1, 2, 3]
+    # The fallback Points is unnamed even after an `o` declaration (oracle).
+    @test only(Diff3D.load_obj_scene(_a3b_file("o named\nv 0 0 0\n", ".obj")).children).name == ""
     @test isempty(Diff3D.load_obj_scene(_a3b_file("# nothing\n", ".obj")).children)
 
     # Malformed primitive records.
