@@ -1118,6 +1118,14 @@ end
     return token_state
 end
 
+# Next token of `parts`, or `nothing` at the end of the line or at a token
+# that starts an inline `#` comment.
+@inline function _obj_noncomment_token(parts, state)
+    next = iterate(parts, state)
+    (next === nothing || startswith(next[1], '#')) && return nothing
+    return next
+end
+
 """
     load_obj(path) -> BufferGeometry
 
@@ -1209,10 +1217,13 @@ function load_obj(path::String)
             push!(verts, x, y, z)
             if colors_ok
                 # OBJLoader.js: `v x y z r g b` (data.length >= 7) carries an
-                # sRGB colour; `v x y z [w]` does not.
-                r_state = iterate(parts, state)
-                g_state = r_state === nothing ? nothing : iterate(parts, r_state[2])
-                b_state = g_state === nothing ? nothing : iterate(parts, g_state[2])
+                # sRGB colour; `v x y z [w]` does not. A `#` token starts an
+                # inline comment, which load_obj has always ignored after z.
+                r_state = _obj_noncomment_token(parts, state)
+                g_state = r_state === nothing ? nothing :
+                          _obj_noncomment_token(parts, r_state[2])
+                b_state = g_state === nothing ? nothing :
+                          _obj_noncomment_token(parts, g_state[2])
                 if b_state === nothing
                     isempty(file_colors) || push!(file_colors, NaN, NaN, NaN)
                 else

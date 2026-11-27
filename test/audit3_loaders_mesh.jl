@@ -231,6 +231,12 @@ end
     # every vertex has one.
     @test !has_attribute(load_obj(_audit3_file(
         "v 0 0 0 1\nv 1 0 0 1\nv 0 1 0 1\nf 1 2 3\n", ".obj")), :color)
+    # Text after z that starts an inline comment is ignored, as in 1.1.
+    for v1 in ("v 0 0 0 # first corner", "v 0 0 0 1 # a b", "v 0 0 0 1 0.5 #c")
+        geo = load_obj(_audit3_file(replace(text, "v 0 0 0 1 0.5 0" => v1), ".obj"))
+        @test geo.n_faces == 1
+        @test !has_attribute(geo, :color)
+    end
     @test !has_attribute(load_obj(_audit3_file(
         replace(text, "v 0 1 0 0 0 1" => "v 0 1 0"), ".obj")), :color)
     # A v without a colour that no face references does not matter: three.js
