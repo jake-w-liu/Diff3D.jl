@@ -208,6 +208,8 @@ with an isbits scalar type (`Float32`, `Float64`, ForwardDiff duals) are
 rendered in parallel column blocks; the reverse-mode (`ADVar`) pixel stage does
 the same before recording. Each pixel performs the same operations as in a
 serial render, so images and derivatives are bit-identical for any thread count.
+The parallel path allocates its task objects (a few kilobytes per call, also
+with a workspace); a single-threaded session keeps the allocation-free reuse.
 A workspace must not be shared by concurrent calls.
 """
 function soft_render(vertices::AbstractVector{Vec3{Tv}},

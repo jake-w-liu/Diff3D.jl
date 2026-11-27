@@ -328,7 +328,8 @@ end
 
 # 300 small random triangles on a 96 x 80 image (above the parallel threshold
 # of 4096 pixels), returned as a digest of the image, of a ForwardDiff
-# directional derivative and of the reverse gradient.
+# directional derivative, of the reverse gradient and of loss_ssim with its
+# ForwardDiff directional derivative.
 const AUDIT3B_PARALLEL_SCRIPT = raw"""
 using Diff3D, ForwardDiff
 function scene()
@@ -354,7 +355,15 @@ render(p) = soft_render(Diff3D._FlatVec3Params{eltype(p),typeof(p)}(p, length(ve
 image = render(flat)
 directional = ForwardDiff.derivative(t -> sum(render(flat .+ t .* sin.(1:length(flat)))), 0.0)
 gradient = reverse_gradient(p -> loss_mse(render(p), zeros(80, 96, 3)), flat)
-println(repr(hash((image, directional, gradient))))
+target = image[end:-1:1, :, :]
+ssim = loss_ssim(image, target)
+ssim_directional = ForwardDiff.derivative(t -> loss_ssim(image .+ t .* target, target), 0.0)
+digest = hash((image, directional, gradient, ssim, ssim_directional))
+# Number of parallel blocks the soft pixel loop uses, and whether loss_ssim
+# threads its windows, for this image size and thread count.
+chunks = Diff3D._soft_column_chunks(Float64, 96, 80)
+ssim_threaded = Diff3D._ssim_parallel(Float64, 90 * 74 * 3)
+println(repr(digest), " ", chunks, " ", ssim_threaded)
 """
 
 @testset "Soft render output is bit-identical for any thread count" begin
@@ -362,11 +371,18 @@ println(repr(hash((image, directional, gradient))))
     # columns are split into parallel blocks only when several threads run;
     # each pixel performs the serial operations, so the image, ForwardDiff
     # partials and the reverse gradient hash identically with 1 and 3 threads.
+    # loss_ssim (src/losses.jl `_ssim_parallel_sum`) evaluates windows in
+    # parallel and sums them in serial order, so it hashes identically too.
     project = Base.active_project()
-    digests = map((1, 3)) do threads
+    runs = map((1, 3)) do threads
         command = `$(Base.julia_cmd()) --startup-file=no -t $threads --project=$project -e $AUDIT3B_PARALLEL_SCRIPT`
-        strip(read(command, String))
+        split(strip(read(command, String)))
     end
-    @test digests[1] == digests[2]
-    @test !isempty(digests[1])
+    @test length(runs[1]) == 3 && length(runs[2]) == 3
+    @test runs[1][1] == runs[2][1]
+    # One thread: serial loops. Three threads: min(4 * 3, 96 ÷ 8) = 12 column
+    # blocks, and 90 * 74 * 3 SSIM windows exceed the 1024-window threshold,
+    # so the comparison above exercises the parallel paths.
+    @test runs[1][2:3] == ["1", "false"]
+    @test runs[2][2:3] == ["12", "true"]
 end
