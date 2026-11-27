@@ -10776,7 +10776,8 @@ end
               "newmtl red\nKd 0.8 0.2 0.1\nKs 0.5 0.5 0.5\nNs 64\nmap_Kd -s 1 1 diffuse.png\n")
         mats = load_mtl(joinpath(dir, "m.mtl"))
         @test haskey(mats, "red")
-        @test mats["red"].color.r ≈ 0.8 && mats["red"].color.g ≈ 0.2
+        # Kd is sRGB and stored linear (MTLLoader.js:395-399 colorSpaceToWorking).
+        @test mats["red"].color.r ≈ 0.6038273388553378 && mats["red"].color.g ≈ 0.033104766570885055
         @test mats["red"].shininess ≈ 64.0
         @test mats["red"].map isa Texture
         @test sample_texture(mats["red"].map, 0.5, 0.5).r ≈ 0.25 atol=1/255
@@ -10787,7 +10788,7 @@ end
         @test geo.n_faces == 1
         @test geo.uvs == [0.0,0.0, 1.0,0.0, 0.0,1.0]
         @test face_mtl == ["red"]
-        @test haskey(m2, "red") && m2["red"].color.r ≈ 0.8
+        @test haskey(m2, "red") && m2["red"].color.r ≈ 0.6038273388553378
         @test m2["red"].map isa Texture
         stress_mtl = joinpath(dir, "stress.mtl")
         stress_io = IOBuffer()
@@ -21165,8 +21166,9 @@ end
                       "property ushort red\nproperty ushort green\n" *
                       "property ushort blue\nend_header\n" *
                       "0 0 0 65535 32768 0\n")
+                # Channels are sRGB and stored linear (PLYLoader.js:629-643).
                 @test get_attribute(load_ply(path), :color).data ≈
-                      [1.0, 32768 / 65535, 0.0]
+                      srgb_to_linear.([1.0, 32768 / 65535, 0.0])
             finally
                 rm(path; force=true)
             end
@@ -21182,8 +21184,9 @@ end
                       "property uchar red\nproperty float green\n" *
                       "property uint blue\nend_header\n" *
                       "0 0 0 255 0.25 4294967295\n")
+                # Channels are sRGB and stored linear (PLYLoader.js:629-643).
                 @test get_attribute(load_ply(path), :color).data ==
-                      [1.0, 0.25, 1.0]
+                      srgb_to_linear.([1.0, 0.25, 1.0])
             finally
                 rm(path; force=true)
             end
@@ -21201,8 +21204,9 @@ end
                     write(io, Float32(0), Float32(0), Float32(0),
                           UInt16(65535), UInt16(32768), UInt16(0))
                 end
+                # Channels are sRGB and stored linear (PLYLoader.js:629-643).
                 @test get_attribute(load_ply(path), :color).data ≈
-                      [1.0, 32768 / 65535, 0.0]
+                      srgb_to_linear.([1.0, 32768 / 65535, 0.0])
             finally
                 rm(path; force=true)
             end

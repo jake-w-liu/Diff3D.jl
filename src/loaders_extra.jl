@@ -2766,20 +2766,78 @@ end
 # 478-500): `d n` sets the opacity only when n < 1, `Tr n` only when n > 0 (to
 # 1 - n), and either one makes the material transparent. So `Tr 0` beside
 # `d 0.5` keeps 0.5, and `d 0.5` followed by `d 1` leaves the material opaque.
-function _mtl_opacity(has_dissolve::Bool, dissolve::Float64, has_transmission::Bool,
-                      transmission::Float64, transmission_first::Bool)
+# A `d` below 0 or a `Tr` above 1 would give MTLLoader a negative opacity;
+# that is an error here.
+function _mtl_opacity(name::String, has_dissolve::Bool, dissolve::Float64,
+                      has_transmission::Bool, transmission::Float64,
+                      transmission_first::Bool)
     opacity = 1.0
     translucent = false
     for step in (transmission_first ? (:tr, :d) : (:d, :tr))
         if step === :d && has_dissolve && dissolve < 1.0
+            dissolve >= 0.0 ||
+                error("MTL material $name: d $dissolve gives a negative opacity")
             opacity = dissolve
             translucent = true
         elseif step === :tr && has_transmission && transmission > 0.0
+            transmission <= 1.0 ||
+                error("MTL material $name: Tr $transmission gives a negative opacity")
             opacity = 1.0 - transmission
             translucent = true
         end
     end
     return opacity, translucent
+end
+
+# MTL colours are sRGB; MTLLoader.js:395-409 converts Kd, Ks and Ke with
+# ColorManagement.colorSpaceToWorking(color, SRGBColorSpace).
+_mtl_linear_color(c::Color3) =
+    Color3(srgb_to_linear(c.r), srgb_to_linear(c.g), srgb_to_linear(c.b))
+
+const _MTL_DEFAULT_SPECULAR = MeshPhongMaterial().specular
+
+# Accumulated statements of one `newmtl` block.
+mutable struct _MTLState
+    name::String
+    kd::Color3{Float64}
+    ks::Union{Nothing,Color3{Float64}}  # nothing: MeshPhongMaterial's default
+    ke::Color3{Float64}
+    ns::Float64
+    dissolve::Float64
+    has_dissolve::Bool
+    transmission::Float64
+    has_transmission::Bool
+    transmission_first::Bool
+    # Texture statements (whole line), keyed like MTLLoader's lower-cased keys.
+    map_kd::String
+    map_ks::String
+    map_ke::String
+    norm::String
+    map_d::String
+end
+
+_MTLState(name::String) =
+    _MTLState(name, Color3(1.0, 1.0, 1.0), nothing, Color3(0.0, 0.0, 0.0),
+              30.0, 1.0, false, 0.0, false, false, "", "", "", "", "")
+
+function _mtl_flush!(mats::Dict{String,MeshPhongMaterial}, st::_MTLState, dir::String)
+    isempty(st.name) && return mats
+    opacity, translucent = _mtl_opacity(st.name, st.has_dissolve, st.dissolve,
+                                        st.has_transmission, st.transmission,
+                                        st.transmission_first)
+    texture(line, label, colorspace) =
+        isempty(line) ? nothing : _mtl_texture(dir, line, label, colorspace)
+    alpha_map = texture(st.map_d, "map_d", :linear)
+    mats[st.name] = MeshPhongMaterial(
+        color=_mtl_linear_color(st.kd),
+        specular=st.ks === nothing ? _MTL_DEFAULT_SPECULAR : _mtl_linear_color(st.ks),
+        emissive=_mtl_linear_color(st.ke), shininess=st.ns, opacity=opacity,
+        transparent=(translucent || alpha_map !== nothing),
+        map=texture(st.map_kd, "map_Kd", :srgb),
+        specular_map=texture(st.map_ks, "map_Ks", :linear),
+        emissive_map=texture(st.map_ke, "map_Ke", :srgb),
+        normal_map=texture(st.norm, "norm", :linear), alpha_map=alpha_map)
+    return mats
 end
 
 """
@@ -2790,89 +2848,77 @@ case-insensitive and `newmtl` names are the rest of the line. Reads `Kd`
 (diffuse), `Ks` (specular), `Ns` (shininess), `Ke` (emissive), `d`/`Tr`
 (opacity: as in MTLLoader, the last `d` and the last `Tr` of a material are
 applied in the order their keywords first appear, and only `d` below 1 or `Tr`
-above 0 sets the opacity, to `d` or `1 - Tr`), and the texture maps `map_Kd` (`map`), `map_Ks` (`specular_map`),
-`map_Ke` (`emissive_map`), `norm` (`normal_map`), and `map_d` (`alpha_map`,
-which also makes the material transparent). The first map of each kind wins;
-texture `-s` and `-o` options set the texture `repeat` and `offset`. Other
-statements, such as `Ka`, `illum`, `bump`, and `disp`, are ignored.
+above 0 sets the opacity, to `d` or `1 - Tr`; a `d` below 0 or a `Tr` above 1,
+which would give a negative opacity, is an error), and the texture maps
+`map_Kd` (`map`), `map_Ks` (`specular_map`), `map_Ke` (`emissive_map`), `norm`
+(`normal_map`), and `map_d` (`alpha_map`, which also makes the material
+transparent). `Kd`, `Ks` and `Ke` are sRGB and stored linear, as `MTLLoader`
+converts them. As in `MTLLoader`, the last statement of each kind wins, and
+only that map's texture is loaded; texture `-s` and `-o` options set the
+texture `repeat` and `offset`. Other statements, such as `Ka`, `illum`,
+`bump`, and `disp`, are ignored.
 """
 function load_mtl(path::String)
     mats = Dict{String, MeshPhongMaterial}()
     sizehint!(mats, max(0, filesize(path) ÷ 80))
-    default_specular = MeshPhongMaterial().specular
-    name = ""
-    kd = Color3(1.0,1.0,1.0); ks = default_specular; ke = Color3(0.0,0.0,0.0)
-    ns = 30.0
-    dissolve = 1.0; has_dissolve = false
-    transmission = 0.0; has_transmission = false; transmission_first = false
-    diffuse_map = specular_map = emissive_map = normal_map = alpha_map = nothing
     dir = dirname(path)
-    function flush!()
-        isempty(name) && return
-        opacity, translucent = _mtl_opacity(has_dissolve, dissolve, has_transmission,
-                                            transmission, transmission_first)
-        mats[name] = MeshPhongMaterial(color=kd, specular=ks, emissive=ke, shininess=ns,
-                                       opacity=opacity,
-                                       transparent=(translucent || alpha_map !== nothing),
-                                       map=diffuse_map, specular_map=specular_map,
-                                       emissive_map=emissive_map, normal_map=normal_map,
-                                       alpha_map=alpha_map)
-    end
-    open(path, "r") do io
-    for raw in eachline(io)
-        line = strip(raw)
-        (isempty(line) || startswith(line, "#")) && continue
-        parts = eachsplit(line)
-        tag_state = iterate(parts)
-        tag_state === nothing && continue
-        tag = tag_state[1]
-        if _mtl_key_is(tag, "newmtl")
-            flush!()
-            name = String(_mtl_rest_of_line(line, tag))
-            isempty(name) && error("MTL newmtl requires a material name")
-            kd = Color3(1.0,1.0,1.0); ks = default_specular
-            ke = Color3(0.0,0.0,0.0); ns = 30.0
-            dissolve = 1.0; has_dissolve = false
-            transmission = 0.0; has_transmission = false; transmission_first = false
-            diffuse_map = specular_map = emissive_map = normal_map = alpha_map = nothing
-        elseif _mtl_key_is(tag, "kd")
-            kd = _mtl_parse_color_tokens(parts, tag_state[2],
-                                         "Kd", "Kd red", "Kd green", "Kd blue")
-        elseif _mtl_key_is(tag, "ks")
-            ks = _mtl_parse_color_tokens(parts, tag_state[2],
-                                         "Ks", "Ks red", "Ks green", "Ks blue")
-        elseif _mtl_key_is(tag, "ke")
-            ke = _mtl_parse_color_tokens(parts, tag_state[2],
-                                         "Ke", "Ke red", "Ke green", "Ke blue")
-        elseif _mtl_key_is(tag, "ns")
-            ns = _mtl_parse_scalar_token(parts, tag_state[2], "Ns")
-        elseif _mtl_key_is(tag, "d")
-            dissolve = _mtl_parse_scalar_token(parts, tag_state[2], "d")
-            has_dissolve = true
-        elseif _mtl_key_is(tag, "tr")
-            transmission = _mtl_parse_scalar_token(parts, tag_state[2], "Tr")
-            has_dissolve || (transmission_first = true)
-            has_transmission = true
-        elseif _mtl_key_is(tag, "map_kd")
-            diffuse_map === nothing &&
-                (diffuse_map = _mtl_texture(dir, line, "map_Kd", :srgb))
-        elseif _mtl_key_is(tag, "map_ks")
-            specular_map === nothing &&
-                (specular_map = _mtl_texture(dir, line, "map_Ks", :linear))
-        elseif _mtl_key_is(tag, "map_ke")
-            emissive_map === nothing &&
-                (emissive_map = _mtl_texture(dir, line, "map_Ke", :srgb))
-        elseif _mtl_key_is(tag, "norm")
-            normal_map === nothing &&
-                (normal_map = _mtl_texture(dir, line, "norm", :linear))
-        elseif _mtl_key_is(tag, "map_d")
-            alpha_map === nothing &&
-                (alpha_map = _mtl_texture(dir, line, "map_d", :linear))
+    st = _MTLState("")
+    io = open(path, "r")
+    try
+        for raw in eachline(io)
+            line = strip(raw)
+            (isempty(line) || startswith(line, "#")) && continue
+            parts = eachsplit(line)
+            tag_state = iterate(parts)
+            tag_state === nothing && continue
+            tag = tag_state[1]
+            if _mtl_key_is(tag, "newmtl")
+                _mtl_flush!(mats, st, dir)
+                name = String(_mtl_rest_of_line(line, tag))
+                isempty(name) && error("MTL newmtl requires a material name")
+                st = _MTLState(name)
+            elseif _mtl_key_is(tag, "kd")
+                st.kd = _mtl_parse_color_tokens(parts, tag_state[2],
+                                                "Kd", "Kd red", "Kd green", "Kd blue")
+            elseif _mtl_key_is(tag, "ks")
+                st.ks = _mtl_parse_color_tokens(parts, tag_state[2],
+                                                "Ks", "Ks red", "Ks green", "Ks blue")
+            elseif _mtl_key_is(tag, "ke")
+                st.ke = _mtl_parse_color_tokens(parts, tag_state[2],
+                                                "Ke", "Ke red", "Ke green", "Ke blue")
+            elseif _mtl_key_is(tag, "ns")
+                st.ns = _mtl_parse_scalar_token(parts, tag_state[2], "Ns")
+            elseif _mtl_key_is(tag, "d")
+                st.dissolve = _mtl_parse_scalar_token(parts, tag_state[2], "d")
+                st.has_dissolve = true
+            elseif _mtl_key_is(tag, "tr")
+                st.transmission = _mtl_parse_scalar_token(parts, tag_state[2], "Tr")
+                st.has_dissolve || (st.transmission_first = true)
+                st.has_transmission = true
+            elseif _mtl_key_is(tag, "map_kd")
+                st.map_kd = _mtl_checked_texture_line(line, "map_Kd")
+            elseif _mtl_key_is(tag, "map_ks")
+                st.map_ks = _mtl_checked_texture_line(line, "map_Ks")
+            elseif _mtl_key_is(tag, "map_ke")
+                st.map_ke = _mtl_checked_texture_line(line, "map_Ke")
+            elseif _mtl_key_is(tag, "norm")
+                st.norm = _mtl_checked_texture_line(line, "norm")
+            elseif _mtl_key_is(tag, "map_d")
+                st.map_d = _mtl_checked_texture_line(line, "map_d")
+            end
         end
+    finally
+        close(io)
     end
-    end
-    flush!()
+    _mtl_flush!(mats, st, dir)
     return mats
+end
+
+# A texture statement with its path checked now, so a malformed line is
+# reported even when a later statement of the same kind replaces it.
+function _mtl_checked_texture_line(line::AbstractString, label::String)
+    isempty(_mtl_texture_path(split(line))) && error("MTL $label requires a texture path")
+    return String(line)
 end
 
 # three.js reads the whole statement value as one library name; the OBJ format
@@ -2890,121 +2936,14 @@ end
 """
     load_obj_groups(path) -> (geometry, face_material_names, materials)
 
-Like [`load_obj`](@ref) but also returns, per triangle, the active `usemtl`
-name and the material dictionary parsed from any referenced `mtllib`. As in
+Like [`load_obj`](@ref), and producing the same geometry for the same file,
+but also returns, per triangle, the active `usemtl` name (`""` before the first
+one) and the material dictionary parsed from any referenced `mtllib`. As in
 three.js `OBJLoader`, `usemtl` and `mtllib` values are the rest of the line; an
 `mtllib` value naming no file is read as a space-separated library list. A
 referenced library that does not exist is an error.
 """
-function load_obj_groups(path::String)
-    verts = Float64[]; file_uvs = Float64[]; file_normals = Float64[]
-    out_pos = Float64[]; out_uvs = Float64[]; out_nrm = Float64[]; indices = Int[]
-    face_mtl = String[]
-    have_normals = false; have_uvs = false; missing_normals = false
-    out_vi = 0; cur_mtl = ""
-    materials = Dict{String, MeshPhongMaterial}()
-    dir = dirname(path)
-    n_v_hint, n_uv_hint, n_n_hint, n_tri_hint = _obj_scan_counts(path)
-    emitted_hint = 3 * n_tri_hint
-    sizehint!(verts, 3 * n_v_hint)
-    sizehint!(file_uvs, 2 * n_uv_hint)
-    sizehint!(file_normals, 3 * n_n_hint)
-    sizehint!(out_pos, 3 * emitted_hint)
-    sizehint!(out_uvs, n_uv_hint == 0 ? 0 : 2 * emitted_hint)
-    sizehint!(out_nrm, n_n_hint == 0 ? 0 : 3 * emitted_hint)
-    sizehint!(indices, emitted_hint)
-    sizehint!(face_mtl, n_tri_hint)
-    open(path, "r") do io
-    for raw in eachline(io)
-        line = strip(raw)
-        (isempty(line) || startswith(line, "#")) && continue
-        if _obj_is_face_record(line)
-            nv = length(verts) ÷ 3; nuv = length(file_uvs) ÷ 2; nn = length(file_normals) ÷ 3
-            first_face = length(indices) ÷ 3 + 1
-            out_vi, have_uvs, have_normals, missing_normals =
-                _obj_emit_face_record_range!(out_pos, out_uvs, out_nrm, indices,
-                                             verts, file_uvs, file_normals, line,
-                                             nv, nuv, nn, out_vi, have_uvs,
-                                             have_normals, missing_normals)
-            last_face = length(indices) ÷ 3
-            for _ in first_face:last_face
-                push!(face_mtl, cur_mtl)
-            end
-            continue
-        end
-        parts = eachsplit(line)
-        tag_state = iterate(parts)
-        tag_state === nothing && continue
-        tag = tag_state[1]
-        if tag == "v"
-            x, y, z = _obj_parse_vec3_tokens(parts, tag_state[2],
-                                             "v", "v x", "v y", "v z")
-            push!(verts, x, y, z)
-        elseif tag == "vt"
-            # 1-D texture coordinate `vt u` -> (u, 0), matching three.js OBJLoader.
-            u, v = _obj_parse_vt_tokens(parts, tag_state[2])
-            push!(file_uvs, u, v)
-        elseif tag == "vn"
-            x, y, z = _obj_parse_vec3_tokens(parts, tag_state[2],
-                                             "vn", "vn x", "vn y", "vn z")
-            push!(file_normals, x, y, z)
-        elseif tag == "mtllib"
-            _obj_required_arg(parts, tag_state[2],
-                              "OBJ mtllib requires a material library path")
-            _obj_load_mtllib!(materials, dir, _mtl_rest_of_line(line, tag))
-        elseif tag == "usemtl"
-            _obj_required_arg(parts, tag_state[2], "OBJ usemtl requires a material name")
-            cur_mtl = String(_mtl_rest_of_line(line, tag))
-        elseif tag == "f"
-            nv = length(verts) ÷ 3; nuv = length(file_uvs) ÷ 2; nn = length(file_normals) ÷ 3
-            first_state = iterate(parts, tag_state[2])
-            second_state = first_state === nothing ? nothing : iterate(parts, first_state[2])
-            third_state = second_state === nothing ? nothing : iterate(parts, second_state[2])
-            third_state === nothing && error("OBJ face requires at least 3 vertices")
-            first_corner = _obj_parse_corner(first_state[1], nv, nuv, nn)
-            prev_corner = _obj_parse_corner(second_state[1], nv, nuv, nn)
-            corner = _obj_parse_corner(third_state[1], nv, nuv, nn)
-            while true
-                out_vi, have_uvs, have_normals, missing_normals =
-                    _obj_emit_corner!(out_pos, out_uvs, out_nrm, indices, verts,
-                                      file_uvs, file_normals, first_corner, out_vi,
-                                      have_uvs, have_normals, missing_normals)
-                out_vi, have_uvs, have_normals, missing_normals =
-                    _obj_emit_corner!(out_pos, out_uvs, out_nrm, indices, verts,
-                                      file_uvs, file_normals, prev_corner, out_vi,
-                                      have_uvs, have_normals, missing_normals)
-                out_vi, have_uvs, have_normals, missing_normals =
-                    _obj_emit_corner!(out_pos, out_uvs, out_nrm, indices, verts,
-                                      file_uvs, file_normals, corner, out_vi,
-                                      have_uvs, have_normals, missing_normals)
-                prev_corner = corner
-                push!(face_mtl, cur_mtl)
-                next_state = iterate(parts, third_state[2])
-                next_state === nothing && break
-                corner = _obj_parse_corner(next_state[1], nv, nuv, nn)
-                third_state = next_state
-            end
-        end
-    end
-    end
-    nfaces = length(indices) ÷ 3
-    geo = BufferGeometry(out_pos, out_nrm, have_uvs ? out_uvs : Float64[],
-                         indices, out_vi, nfaces)
-    # Recompute smooth normals when the file had none, or when ANY emitted vertex
-    # normal is zero-length (some faces lacked vn) — otherwise those vertices
-    # keep a degenerate (0,0,0) normal and shade black.
-    needs_recompute = !have_normals || missing_normals
-    if !needs_recompute
-        @inbounds for b in 1:3:length(out_nrm)
-            if out_nrm[b] == 0.0 && out_nrm[b+1] == 0.0 && out_nrm[b+2] == 0.0
-                needs_recompute = true
-                break
-            end
-        end
-    end
-    needs_recompute && compute_vertex_normals!(geo)
-    return (geo, face_mtl, materials)
-end
+load_obj_groups(path::String) = _obj_load(path, true)
 
 # ========================== Minimal JSON parser ==========================
 # RFC 8259 JSON with ECMAScript JSON.parse results: numbers are Float64
