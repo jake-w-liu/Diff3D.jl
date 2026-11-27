@@ -16730,7 +16730,7 @@ end
         end
 
         # Perspective set_from_camera! rays originate at the camera position,
-        # while orthographic rays keep the screen-dependent near-plane origin.
+        # while orthographic rays keep a screen-dependent camera-plane origin.
         @test let cam = PerspectiveCamera(fov=π/4, aspect=1.0, near=0.1, far=100.0),
                   rc = Raycaster(Vec3(0.0,0.0,0.0), Vec3(0.0,0.0,-1.0))
             cam.position = Vec3(0.0,0.0,5.0); cam.target = Vec3(0.0,0.0,0.0)
@@ -23934,7 +23934,10 @@ end
     orthographic_direction = Diff3D._raycaster_direction(
         orthographic_far - orthographic_near)
     set_from_camera!(raycaster, orthographic_camera, ndc_x, ndc_y)
-    @test raycaster.ray.origin == orthographic_near
+    # three.js Raycaster.setFromCamera (src/core/Raycaster.js:129) starts
+    # orthographic rays in the camera plane, `near` behind the near plane.
+    @test norm(raycaster.ray.origin -
+               (orthographic_near - orthographic_camera.near * orthographic_direction)) <= 1.0e-12
     @test raycaster.ray.direction == orthographic_direction
 
     finite_allocation_probe = () ->

@@ -1153,9 +1153,43 @@ function _skinned_render_geometry(sm::SkinnedMesh)
                    geo.draw_range)
 end
 
+# The render proxy of a posed skin holds world-space vertices, so its own world
+# matrix is the identity and would hide a mirroring SkinnedMesh world matrix,
+# which three.js draws with clockwise front faces (WebGLRenderer.js `frontFaceCW`
+# from `object.matrixWorld.determinant() < 0`). A mirrored skin's proxy instead
+# stores the vertices reflected through x = 0 under the world matrix
+# diag(-1, 1, 1): the renderers see the mirror flag, and negating a coordinate
+# twice is exact, so every transformed vertex and normal is bit-identical.
+@inline _skinned_proxy_scale(sm::SkinnedMesh) =
+    _world_mirrors_faces(compute_world_matrix(sm)) ? Vec3(-1.0, 1.0, 1.0) :
+                                                     Vec3(1.0, 1.0, 1.0)
+
+function _mirror_skinned_proxy_geometry!(geo::BufferGeometry)
+    positions = geo.positions
+    @inbounds for i in 1:geo.n_vertices
+        positions[3i - 2] = -positions[3i - 2]
+    end
+    normals = geo.normals
+    @inbounds for i in 1:(length(normals) ÷ 3)
+        normals[3i - 2] = -normals[3i - 2]
+    end
+    tangent = get(geo.attributes, :tangent, nothing)
+    if tangent !== nothing
+        data = tangent.data
+        stride = tangent.item_size
+        @inbounds for i in 1:(length(data) ÷ stride)
+            data[stride * (i - 1) + 1] = -data[stride * (i - 1) + 1]
+        end
+    end
+    return geo
+end
+
 function _skinned_render_mesh(sm::SkinnedMesh)
-    Mesh(Vec3(), Euler(), Vec3(1.0,1.0,1.0), nothing, AbstractObject3D[],
-         sm.visible, sm.name, sm.id, _skinned_render_geometry(sm), sm.material,
+    scale = _skinned_proxy_scale(sm)
+    geo = _skinned_render_geometry(sm)
+    scale.x < 0.0 && _mirror_skinned_proxy_geometry!(geo)
+    Mesh(Vec3(), Euler(), scale, nothing, AbstractObject3D[],
+         sm.visible, sm.name, sm.id, geo, sm.material,
          nothing, sm.cast_shadow, sm.receive_shadow, Float64[], String[])
 end
 
@@ -1239,13 +1273,14 @@ function _update_skinned_render_mesh!(proxy::Mesh, sm::SkinnedMesh,
                                       morph_scratch::Union{Nothing,Vector{Vec3{Float64}}}=nothing)
     proxy.position = Vec3()
     proxy.rotation = Euler()
-    proxy.scale = Vec3(1.0,1.0,1.0)
+    proxy.scale = _skinned_proxy_scale(sm)
     proxy.parent = nothing
     proxy.visible = sm.visible
     proxy.name = sm.name
     proxy.id = sm.id
     proxy.geometry = _update_skinned_render_geometry!(proxy.geometry, sm,
                                                       mats_scratch, morph_scratch)
+    proxy.scale.x < 0.0 && _mirror_skinned_proxy_geometry!(proxy.geometry)
     proxy.material = sm.material
     proxy.flat_shading = nothing
     proxy.cast_shadow = sm.cast_shadow

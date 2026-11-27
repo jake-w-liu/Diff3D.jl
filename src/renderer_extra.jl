@@ -1636,7 +1636,7 @@ end
                              alpha::Float64=1.0)
     (1 <= x <= rt.width && 1 <= y <= rt.height && xlo <= x <= xhi && ylo <= y <= yhi) || return false
     (_inside_near_clip(z) && _inside_far_clip(z)) || return false
-    @inbounds if !depth_test || z < rt.depth[y, x]
+    @inbounds if !depth_test || _depth_passes(rt.depth, z, y, x)
         depth_write && (rt.depth[y, x] = z)
         if alpha >= 1.0
             rt.color[y, x, 1] = col.r; rt.color[y, x, 2] = col.g; rt.color[y, x, 3] = col.b
@@ -2397,7 +2397,7 @@ end
             stamp !== nothing && stamp[py, px] == stamp_id && continue
             z = b0 * z1 + b1 * z2 + b2 * z3
             (_inside_near_clip(z) && _inside_far_clip(z)) || continue
-            (!depth_test || z < rt.depth[py, px]) || continue
+            (!depth_test || _depth_passes(rt.depth, z, py, px)) || continue
             a0 = b0; a1 = b1; a2 = b2
             if has_clip || needs_uv || has_fog
                 iw = b0*iw1 + b1*iw2 + b2*iw3

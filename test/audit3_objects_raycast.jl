@@ -106,17 +106,22 @@ end
     @test length(cols) == 6    # 0.3 of a 2.0-unit, 40-pixel frustum
 end
 
-# Brute-force reference: every drawn face against the world-space triangle with
-# the public Möller–Trumbore test (no bounding or lateral rejection).
+# Brute-force reference: every drawn face against the local triangle with the
+# exact test `raycast` applies (three.js Mesh.raycast intersects in object
+# space with Ray.intersectTriangle, src/objects/Mesh.js), with no bounding or
+# lateral rejection. (Before render-parity round 2 the reference was the
+# world-space Möller–Trumbore test, which `raycast` no longer uses.)
 function audit3_bruteforce_hits(mesh::Mesh, rc::Raycaster)
     geometry = mesh.geometry
     world = compute_world_matrix(mesh)
+    origin, direction = Diff3D._raycast_local_ray(rc, world)
+    step = norm(mat4_transform_direction(world, direction))
     hits = Tuple{Float64,Int}[]
     for face in 1:geometry.n_faces
-        a, b, c = (mat4_transform_point(world, get_vertex(geometry, index))
+        a, b, c = (get_vertex(geometry, index)
                    for index in Diff3D.get_face(geometry, face))
-        t = ray_triangle_intersect(rc.ray.origin, rc.ray.direction, a, b, c; side=:double)
-        t === nothing || push!(hits, (t, face))
+        t = Diff3D._ray_triangle_watertight(origin, direction, a, b, c, :double)
+        t === nothing || push!(hits, (t * step, face))
     end
     return sort!(hits; by=first)
 end
