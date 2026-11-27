@@ -1,4 +1,4 @@
-using Test, Diff3D, SHA
+using Test, Diff3D
 
 # ---------------------------------------------------------------------------
 # DEFLATE stream writer for hand-built test streams (RFC 1951). Bits are packed
@@ -218,6 +218,20 @@ end
     @test inflate(raw; max_output=length(expected)) == expected
     @test_throws "DEFLATE output exceeds expected size" inflate(
         raw; max_output=length(expected) - 1)
+    # EXR decodes its zlib blocks with one shared set of dynamic tables: each
+    # stream rebuilds them, also after a corrupt stream left them half built.
+    tables = Diff3D._InflateTables()
+    over = zeros(Int, 257); over[Int('A') + 1] = 1; over[Int('B') + 1] = 1; over[257] = 1
+    streams = (audit3_zlib_wrap(raw, expected), audit3_zlib_wrap(stream, UInt8.(text)),
+               audit3_zlib_wrap(audit3_dynamic_stream(over, [1], UInt8[]), UInt8[]),
+               audit3_zlib_wrap(raw[1:end - 3], expected), audit3_zlib_wrap(raw, expected),
+               audit3_zlib_wrap(stream, UInt8.(text)))
+    for z in streams
+        fresh = try zlib_inflate(z) catch e; e end
+        shared = try Diff3D._zlib_inflate(z, nothing, tables) catch e; e end
+        @test isequal(fresh, shared) || (fresh isa ErrorException && shared isa ErrorException &&
+                                         fresh.msg == shared.msg)
+    end
 end
 
 @testset "zlib_inflate reads the Adler-32 right after the DEFLATE stream" begin
@@ -233,11 +247,12 @@ end
     @test_throws "checksum is truncated" zlib_inflate(good[1:end - 1])
 end
 
-@testset "inflate and zlib_inflate document their contracts" begin
-    # The raw-DEFLATE docstring was attached to an internal helper, leaving
-    # `inflate` with only the generic one-line summary.
+@testset "inflate, zlib_inflate and load_png document their contracts" begin
+    # The raw-DEFLATE and PNG docstrings were attached to internal helpers,
+    # leaving `inflate` and `load_png` with only generic one-line summaries.
     @test occursin("max_output", string(@doc inflate))
     @test occursin("Adler-32", string(@doc zlib_inflate))
+    @test occursin("Adam7", string(@doc load_png))
 end
 
 audit3_hdr(header::String, pixels::Vector{UInt8}) = vcat(Vector{UInt8}(codeunits(header)), pixels)
@@ -281,6 +296,20 @@ audit3_rgbe(c, e) = e == 0 ? 0.0 : c * 2.0^(Int(e) - 136)
         "#? RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 1 +X 1\n", UInt8[1, 1, 1, 129]))
     @test_throws "not a Radiance" Diff3D._decode_rgbe(audit3_hdr(
         "#?\nFORMAT=32-bit_rle_rgbe\n\n-Y 1 +X 1\n", UInt8[1, 1, 1, 129]))
+    # HDRLoader reads the header as Latin-1 and matches /^#\?(\S+)/: in node,
+    # a non-ASCII byte (0x85, 0xe0, 0xff) after "#?" is a valid program-name
+    # character, while vertical tab and no-break space (0xa0) are whitespace.
+    # A malformed UTF-8 byte there used to raise InvalidCharError.
+    body = "\nFORMAT=32-bit_rle_rgbe\n\n-Y 1 +X 2\n"
+    pixels = UInt8[128, 64, 32, 129, 1, 2, 3, 140]
+    for magic in (UInt8[0xe0, 0x88, 0x94], UInt8[0x85], UInt8[0xff])
+        bytes = vcat(UInt8['#', '?'], magic, Vector{UInt8}(codeunits(body)), pixels)
+        @test Diff3D._decode_rgbe(bytes)[1, :, 1] == [1.0, 16.0]
+    end
+    for magic in (UInt8[0x0b, 'X'], UInt8[0xa0, 'X'], UInt8['\t', 'X'])
+        bytes = vcat(UInt8['#', '?'], magic, Vector{UInt8}(codeunits(body)), pixels)
+        @test_throws ErrorException("not a Radiance RGBE/HDR file") Diff3D._decode_rgbe(bytes)
+    end
 end
 
 @testset "RGBE banded store matches per-pixel decoding" begin

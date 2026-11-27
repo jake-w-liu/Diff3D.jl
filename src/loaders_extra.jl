@@ -379,14 +379,6 @@ function _inflate_codes!(out::Vector{UInt8}, olen::Int, br::_BitReader,
     return olen
 end
 
-# Append one Huffman-coded block to `out`.
-function _inflate_block!(out::Vector{UInt8}, br::_BitReader, lit::_Huff, dist::_Huff,
-                         max_output::Int)
-    olen = _inflate_codes!(out, length(out), br, lit, dist, max_output)
-    resize!(out, olen)
-    return out
-end
-
 function _inflate_stored!(out::Vector{UInt8}, olen::Int, br::_BitReader, limit::Int)
     _bitreader_align!(br)
     data = br.data
@@ -413,13 +405,15 @@ end
 end
 
 # Decode the DEFLATE stream at the reader's position through its final block.
-function _inflate_stream!(br::_BitReader, max_output::Union{Nothing,Int})
+# Dynamic blocks rebuild their tables in `tables`; a caller decoding many
+# streams (EXR blocks) passes one to reuse, otherwise it is made on demand.
+function _inflate_stream!(br::_BitReader, max_output::Union{Nothing,Int},
+                          tables::Union{Nothing,_InflateTables}=nothing)
     max_output === nothing || max_output >= 0 ||
         throw(ArgumentError("max_output must be non-negative"))
     limit = max_output === nothing ? -1 : max_output
     out = Vector{UInt8}(undef, _inflate_sizehint(length(br.data), limit))
     olen = 0
-    tables = nothing
     while true
         bfinal = _getbits(br, 1)
         btype = _getbits(br, 2)
@@ -480,7 +474,11 @@ DEFLATE payload, and verify the Adler-32 checksum that immediately follows it.
 Preset dictionaries, a bad header, a checksum mismatch, and bytes after the
 checksum raise an error. `max_output` behaves as for [`inflate`](@ref).
 """
-function zlib_inflate(data::AbstractVector{UInt8}; max_output::Union{Nothing,Int}=nothing)
+zlib_inflate(data::AbstractVector{UInt8}; max_output::Union{Nothing,Int}=nothing) =
+    _zlib_inflate(data, max_output, nothing)
+
+function _zlib_inflate(data::AbstractVector{UInt8}, max_output::Union{Nothing,Int},
+                       tables::Union{Nothing,_InflateTables})
     length(data) >= 6 || error("zlib stream is truncated")
     first = firstindex(data)
     cmf = data[first]
@@ -493,7 +491,7 @@ function zlib_inflate(data::AbstractVector{UInt8}; max_output::Union{Nothing,Int
 
     br = _BitReader(data)
     br.pos = first + 2
-    out = _inflate_stream!(br, max_output)
+    out = _inflate_stream!(br, max_output, tables)
     _bitreader_align!(br)
     p = br.pos
     p + 3 <= lastindex(data) || error("zlib Adler-32 checksum is truncated")
@@ -912,13 +910,6 @@ function _png_transparent_samples(trns::Vector{UInt8}, seen_trns::Bool,
     return nothing
 end
 
-"""
-    load_png(path) -> Array{Float64,3}
-
-Decode PNG grayscale at 1/2/4/8/16 bits, indexed color at 1/2/4/8 bits, and
-RGB or explicit alpha formats at 8/16 bits into an H×W×C array in [0,1].
-Supports full INFLATE, all five filters, Adam7 interlacing, and tRNS transparency.
-"""
 function _decode_png(bytes::AbstractVector{UInt8})
     _is_png_bytes(bytes) || error("not a PNG file")
     pos = 9; W = 0; H = 0; bitdepth = 8; colortype = 2; interlace = 0
@@ -1069,6 +1060,13 @@ function _decode_png(bytes::AbstractVector{UInt8})
                              channels, bps, bpp, norm, transparent_samples))
 end
 
+"""
+    load_png(path) -> Array{Float64,3}
+
+Decode PNG grayscale at 1/2/4/8/16 bits, indexed color at 1/2/4/8 bits, and
+RGB or explicit alpha formats at 8/16 bits into an H×W×C array in [0,1].
+Supports full INFLATE, all five filters, Adam7 interlacing, and tRNS transparency.
+"""
 function load_png(path::String)
     _decode_png(read(path))
 end
@@ -1611,11 +1609,19 @@ function _rgbe_rle_scanline!(buf::Union{Nothing,AbstractMatrix{UInt8}}, bytes::V
     return pos
 end
 
+# rgbe.c / three.js HDRLoader (`/^#\?(\S+)/`): the magic token is "#?" plus a
+# program name. HDRLoader reads header bytes as Latin-1 characters, so the
+# byte after "#?" must not be one that JavaScript's \s matches (tab, line
+# feed, vertical tab, form feed, carriage return, space, no-break space).
+function _rgbe_magic_ok(line::String)
+    ncodeunits(line) >= 3 && startswith(line, "#?") || return false
+    b = codeunit(line, 3)
+    return !(0x09 <= b <= 0x0d || b == 0x20 || b == 0xa0)
+end
+
 function _decode_rgbe(bytes::Vector{UInt8})
     line, pos = _rgbe_read_line(bytes, 1)
-    # rgbe.c / three.js HDRLoader: the magic token is "#?" plus a program name.
-    (ncodeunits(line) >= 3 && startswith(line, "#?") && !isspace(line[3])) ||
-        error("not a Radiance RGBE/HDR file")
+    _rgbe_magic_ok(line) || error("not a Radiance RGBE/HDR file")
     have_format = false
     resolution = nothing
     while pos <= length(bytes)
@@ -2381,7 +2387,8 @@ end
 # Decompress one EXR block (scanline group or tile) of `nlines` x `width` pixels.
 function _exr_decode_block(blockbytes::AbstractVector{UInt8}, nlines::Int, width::Int,
                           compression::Int, channels, plinear,
-                          piz_workspace::Union{Nothing,_ExrPizWorkspace}=nothing)
+                          piz_workspace::Union{Nothing,_ExrPizWorkspace}=nothing,
+                          inflate_tables::Union{Nothing,_InflateTables}=nothing)
     bytes_per_pixel = 0
     for (_, pt) in channels
         bytes_per_pixel = _checked_add_int(
@@ -2407,15 +2414,15 @@ function _exr_decode_block(blockbytes::AbstractVector{UInt8}, nlines::Int, width
         dsize >= 2 || error("EXR PXR24 block is truncated (too short for a zlib stream)")
         expected = _exr_pxr24_inflated_size(
             nlines, width, channels)
-        inflated = zlib_inflate(
-            blockbytes; max_output=_inflate_limit_for_exact(expected))
+        inflated = _zlib_inflate(
+            blockbytes, _inflate_limit_for_exact(expected), inflate_tables)
         length(inflated) == expected ||
             error("EXR PXR24 block inflated to $(length(inflated)) bytes, expected $expected")
         _exr_pxr24_decode(inflated, nlines, channels, width)
     else                                                  # ZIP / ZIPS
         dsize >= 2 || error("EXR ZIP block is truncated (too short for a zlib stream)")
-        inflated = zlib_inflate(
-            blockbytes; max_output=_inflate_limit_for_exact(uncompressed))
+        inflated = _zlib_inflate(
+            blockbytes, _inflate_limit_for_exact(uncompressed), inflate_tables)
         length(inflated) == uncompressed ||
             error("EXR ZIP block inflated to $(length(inflated)) bytes, expected $uncompressed")
         _exr_deinterleave(_exr_unpredict!(inflated))
@@ -2560,6 +2567,8 @@ function _decode_exr(bytes::Vector{UInt8})
 
     img = zeros(Float64, height, width, 3)
     piz_workspace = compression == 4 ? _ExrPizWorkspace() : nothing
+    # ZIP/ZIPS/PXR24 blocks are separate zlib streams that share one set of tables.
+    inflate_tables = compression in (2, 3, 5) ? _InflateTables() : nothing
     if tiled
         # ONE_LEVEL (0) and MIPMAP_LEVELS (1): the offset table is level-0-first,
         # so reading the level-0 tile count decodes the full-resolution image.
@@ -2593,7 +2602,8 @@ function _decode_exr(bytes::Vector{UInt8})
             cols = min(tile_x, width - startX)
             lines = min(tile_y, height - startY)
             raw = _exr_decode_block(@view(bytes[bp:(bp + dsize - 1)]), lines, cols,
-                                    compression, channels, plinear, piz_workspace)
+                                    compression, channels, plinear, piz_workspace,
+                                    inflate_tables)
             _exr_place_block!(img, raw, startX, startY, cols, lines, channels, is_y)
         end
         all(seen_tiles) || error("EXR level-0 tile coverage is incomplete")
@@ -2619,7 +2629,8 @@ function _decode_exr(bytes::Vector{UInt8})
             seen_blocks[block_index] = true
             nlines = min(lines_per_block, height - row_offset)
             raw = _exr_decode_block(@view(bytes[bp:(bp + dsize - 1)]), nlines, width,
-                                    compression, channels, plinear, piz_workspace)
+                                    compression, channels, plinear, piz_workspace,
+                                    inflate_tables)
             _exr_place_block!(img, raw, 0, y0 - ymin, width, nlines, channels, is_y)
         end
         all(seen_blocks) || error("EXR scanline block coverage is incomplete")
