@@ -227,6 +227,12 @@ function _js_write_str(io::IO, s::AbstractString)
             write(io, "\\u2028")
         elseif c == '\u2029'
             write(io, "\\u2029")
+        elseif c < ' '
+            # The HTML script-data tokenizer replaces a raw U+0000 with U+FFFD
+            # before JavaScript sees it; escape every remaining C0 control.
+            write(io, "\\u00")
+            write(io, UInt8('0') + UInt8(c) >> 4)
+            write(io, "0123456789abcdef"[(UInt8(c) & 0x0f) + 1])
         else
             isvalid(c) || throw(ArgumentError(
                 "WebGL export strings must be valid Unicode; got $(repr(s))"))
