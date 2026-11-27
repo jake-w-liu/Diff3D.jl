@@ -5670,7 +5670,7 @@ end
         @test occursin("\"clampWhenFinished\":false", html)
         @test occursin("\"timeScale\":1", html)
         @test occursin("function clipTime", html)
-        @test occursin("sampleTrack(tr,ct)", html)
+        @test occursin("sampleTrack(tr,ct,ends)", html)
         @test occursin("canvas.tabIndex = 0", html)
         @test occursin("canvas.focus()", html)
         @test occursin("keydown", html)

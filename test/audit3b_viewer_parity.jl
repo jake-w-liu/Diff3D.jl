@@ -129,6 +129,105 @@ const cross=(a,b)=>[a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0
 const norm=a=>{ const l=Math.hypot(a[0],a[1],a[2])||1; return [a[0]/l,a[1]/l,a[2]/l]; };
 """
 
+@testset "viewer animation sampling matches Julia's mixer on random tracks" begin
+    html = _audit3b_viewer_html()
+    @test occursin("const ct=clipTime(clip,t), ends=cubicEndings(clip,t);", html)
+    @test occursin("const v=sampleTrack(tr,ct,ends);", html)
+    # A fixed linear congruential stream keeps the cases reproducible without Random.
+    state = Ref(UInt64(0x2545f4914f6cdd1d))
+    rnd() = (state[] = state[] * 6364136223846793005 + 1442695040888963407;
+             Float64(state[] >> 11) / 2.0^53)
+    rv() = Vec3(4rnd() - 2, 4rnd() - 2, 4rnd() - 2)
+    rq() = Quaternion(4rnd() - 2, 4rnd() - 2, 4rnd() - 2, 4rnd() - 2)   # not unit length
+    obj = Group()
+    clips = AnimationClip[]
+    loops = [(:repeat, -1), (:repeat, 0), (:repeat, 1), (:repeat, 3), (:pingpong, -1),
+             (:pingpong, 2), (:once, -1)]
+    for c in 1:42
+        n = 2 + c % 5
+        start = c % 3 == 0 ? 0.0 : 0.5rnd()
+        times = cumsum([start; [0.2 + rnd() for _ in 2:n]])
+        q() = [rq() for _ in 1:n]
+        v() = [rv() for _ in 1:n]
+        tracks = AbstractKeyframeTrack[
+            KeyframeTrack(obj, :position, times, v(); interpolation=:cubic),
+            NumberKeyframeTrack(obj, :position, times, [4rnd() - 2 for _ in 1:n];
+                                interpolation=:cubic, component=2),
+            KeyframeTrack(obj, :scale, times, v()),
+            KeyframeTrack(obj, :scale, times, v(); interpolation=:step),
+            QuaternionKeyframeTrack(obj, :quaternion, times, [quat_normalize(x) for x in q()]),
+            QuaternionKeyframeTrack(obj, :quaternion, times, q(); interpolation=:step),
+            CubicSplineKeyframeTrack(obj, :position, times, v(), v(), v()),
+            # glTF cubic-spline rotations need not be unit length at the keys.
+            CubicSplineQuaternionKeyframeTrack(obj, :quaternion, times, q(), q(), q()),
+        ]
+        loop, reps = loops[1 + c % length(loops)]
+        push!(clips, AnimationClip("c$c", times[end] + (c % 4 == 0 ? 0.3 : 0.0), tracks;
+                                   loop, repetitions=reps, clamp_when_finished=isodd(c),
+                                   time_scale=(1.0, -1.0, 0.7)[1 + c % 3]))
+    end
+    flat(x::Vec3) = [x.x, x.y, x.z]
+    flat(x::Quaternion) = [x.x, x.y, x.z, x.w]
+    flat(x::Real) = [Float64(x)]
+    samples = Float64[]
+    counts = Int[]
+    expected = Vector{Vector{Vector{Float64}}}()
+    for clip in clips
+        d = clip.duration
+        ts = vcat([k * d / 3 for k in -10:10], [tr.times[k] / clip.time_scale for tr in clip.tracks[1:1]
+                                                for k in eachindex(tr.times)],
+                  [(8rnd() - 4) * d for _ in 1:12])
+        append!(samples, ts)
+        push!(counts, length(ts))
+        mixer = AnimationMixer(clip)
+        for T in ts
+            x = T * clip.time_scale
+            mixer.sample_time = Diff3D._animation_loop_time(x, d, clip.loop, clip.repetitions,
+                                                            clip.clamp_when_finished)
+            mixer.ending_start, mixer.ending_end =
+                Diff3D._animation_cubic_endings(x, d, clip.loop, clip.repetitions)
+            push!(expected, [flat(Diff3D._mixer_track_value(tr, mixer)) for tr in clip.tracks])
+        end
+    end
+    clips_json = "[" * join((Diff3D._web_clip_json(c) for c in clips), ",") * "]"
+    prelude = join((_audit3b_viewer_const(html, n) for n in
+                    ("mix", "mix3", "sub3", "scale3", "add3", "scaleN", "addN", "mixN", "norm4")
+                    if occursin("  const $n=", html)), "\n")
+    names = filter(n -> occursin("  function $n(", html),
+                   ["hermite3", "catmull3", "hermiteN", "catmullN", "cubicInterpolant", "slerp",
+                    "sampleTrack", "floorMod", "clipTime", "cubicEndings"])
+    body = """
+    const clips=$clips_json, samples=[$(join(repr.(samples), ","))], counts=[$(join(counts, ","))];
+    const out=[]; let s=0;
+    clips.forEach((clip,ci)=>{ for(let k=0;k<counts[ci];k++){ const t=samples[s++];
+      const ct=clipTime(clip,t), ends=typeof cubicEndings==="function"?cubicEndings(clip,t):undefined;
+      out.push(clip.tracks.map(tr=>sampleTrack(tr,ct,ends))); } });
+    console.log(JSON.stringify(out));
+    """
+    r = _audit3b_node_json(html, names, body; prelude)
+    # Before the fix the viewer evaluated cubic tracks with its own end tangents and no loop
+    # endings, and returned a cubic-spline rotation's raw first key: [374, 374, 0, 0, 0, 0, 0,
+    # 231] mismatched samples per kind, worst error 1.415.
+    if r !== nothing
+        @test length(r) == length(expected)
+        worst = 0.0
+        bad = zeros(Int, 8)   # mismatched samples per track kind, in the order built above
+        for (got, want) in zip(r, expected), (k, (g, w)) in enumerate(zip(got, want))
+            err = maximum(abs.(Float64.(g) .- w))
+            worst = max(worst, err)
+            bad[k] += err > 1e-12 * max(1.0, maximum(abs, w))
+        end
+        @test bad == zeros(Int, 8)
+        @test worst < 1e-11
+    end
+    # quat_normalize maps the zero quaternion to the identity, as three.js Quaternion.normalize.
+    z = _audit3b_node_json(html, String[], "console.log(JSON.stringify(norm4([0,0,0,0])));";
+                           prelude=_audit3b_viewer_const(html, "norm4"))
+    z === nothing || @test z == [0, 0, 0, 1]
+    q = quat_normalize(Quaternion(0.0, 0.0, 0.0, 0.0))
+    @test [q.x, q.y, q.z, q.w] == [0.0, 0.0, 0.0, 1.0]
+end
+
 @testset "hemisphere light sky axis follows the light's world position" begin
     html = _audit3b_viewer_html()
     # three.js getHemisphereLightIrradiance (lights_pars_begin.glsl.js:222-230) weights the sky
