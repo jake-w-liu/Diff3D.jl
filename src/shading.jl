@@ -867,6 +867,32 @@ end
         shadow_fn=shadow_fn)
 end
 
+# Forms taking three.js `clearcoatNormal` `ccn`, which only a
+# MeshPhysicalMaterial reads (its clearcoat lobe and layering).
+@inline _shade_face_with_camera_view(
+        normal::Vec3, view_dir::Vec3, position::Vec3,
+        material, lights, camera_view, shadow_fn, ccn::Vec3) =
+    _shade_face_with_camera_view(normal, view_dir, position, material, lights,
+                                 camera_view, shadow_fn)
+@inline _shade_face_with_camera_view(
+        normal::Vec3, view_dir::Vec3, position::Vec3,
+        material::MeshPhysicalMaterial, lights, camera_view, shadow_fn,
+        ccn::Vec3) =
+    _shade_lit(material, normal, view_dir, position, lights, shadow_fn, ccn)
+@inline _shade_face_vertex_color_with_camera_view(
+        normal::Vec3, view_dir::Vec3, position::Vec3,
+        material, lights, vertex_color::Color3, camera_view, shadow_fn,
+        ccn::Vec3) =
+    _shade_face_vertex_color_with_camera_view(normal, view_dir, position,
+                                              material, lights, vertex_color,
+                                              camera_view, shadow_fn)
+@inline _shade_face_vertex_color_with_camera_view(
+        normal::Vec3, view_dir::Vec3, position::Vec3,
+        material::MeshPhysicalMaterial, lights, vertex_color::Color3,
+        camera_view, shadow_fn, ccn::Vec3) =
+    _shade_lit_vertex_color(material, normal, view_dir, position, lights,
+                            shadow_fn, vertex_color, ccn)
+
 @inline function _shade_face_vertex_color_with_camera_view(
         normal::Vec3, view_dir::Vec3, position::Vec3,
         material::MeshMatcapMaterial, lights, vertex_color::Color3,
@@ -880,7 +906,7 @@ function _shade_mapped_lighting(
         mapped_kind::Int, use_surface_color::Bool, surface_color,
         eff_mat, phong_specular, phong_shininess,
         standard_metalness, standard_roughness, physical_terms,
-        camera_view)
+        camera_view, ccn::Vec3=face_n)
     if mapped_kind == 1
         return use_surface_color ?
             _shade_phong_mapped_vertex_color(
@@ -901,19 +927,32 @@ function _shade_mapped_lighting(
         return use_surface_color ?
             _shade_physical_mapped_vertex_color(
                 face_n, view_dir, center, material, lights, shadow_fn,
-                physical_terms, surface_color) :
+                physical_terms, surface_color, ccn) :
             _shade_physical_mapped(
                 face_n, view_dir, center, material, lights, shadow_fn,
-                physical_terms)
+                physical_terms, ccn)
     elseif use_surface_color
         return _shade_face_vertex_color_with_camera_view(
             face_n, view_dir, center, eff_mat, lights, surface_color,
-            camera_view, shadow_fn)
+            camera_view, shadow_fn, ccn)
     end
     return _shade_face_with_camera_view(
         face_n, view_dir, center, eff_mat, lights,
-        camera_view, shadow_fn)
+        camera_view, shadow_fn, ccn)
 end
+
+# The clearcoat layering factor `_PBRSurface.layer` the emission of `material`
+# receives, for its (possibly mapped) clearcoat weight `clearcoat`.
+@inline _emission_layer(material, clearcoat, ccn::Vec3, view_dir::Vec3) = 1.0
+@inline _emission_layer(material::MeshPhysicalMaterial, clearcoat, ccn::Vec3,
+                        view_dir::Vec3) =
+    _clearcoat_layer(clearcoat, _saturate(dot(ccn, view_dir)))
+
+# A MeshPhysicalMaterial's clearcoat normal map, when one applies.
+@inline _clearcoat_normal_map(material) = nothing
+@inline _clearcoat_normal_map(material::MeshPhysicalMaterial) =
+    material.clearcoat > 0 && material.clearcoat_normal_map isa Texture ?
+        material.clearcoat_normal_map : nothing
 
 function _mapped_environment_contribution(
         env_map, normal, view_dir, material, eff_mat,
@@ -1214,10 +1253,12 @@ function _shade_mesh_faces_impl!(colors::Vector{Color3{Float64}},
     glossiness_map = _material_field(material, :glossiness_map)
     physical_pbr_map = _physical_pbr_map(material)
     light_map = _material_field(material, :light_map)
+    clearcoat_normal_map = _clearcoat_normal_map(material)
     use_maps = has_uvs && (albedo_map !== nothing || ao_map !== nothing || emissive_map !== nothing ||
                            normal_map !== nothing || roughness_map !== nothing || metalness_map !== nothing ||
                            specular_map !== nothing || glossiness_map !== nothing ||
-                           physical_pbr_map !== nothing || light_map !== nothing)
+                           physical_pbr_map !== nothing || light_map !== nothing ||
+                           clearcoat_normal_map !== nothing)
     uv2_attr = _uv2_attribute(geo)
 
     # Per-vertex color modulation: material opt-in AND a geometry :color attribute
@@ -1243,6 +1284,7 @@ function _shade_mesh_faces_impl!(colors::Vector{Color3{Float64}},
        roughness_map === nothing && metalness_map === nothing &&
        specular_map === nothing && glossiness_map === nothing &&
        physical_pbr_map === nothing && light_map === nothing &&
+       clearcoat_normal_map === nothing &&
        !use_vertex_colors && env_map === nothing
         return _shade_mesh_faces_mapped!(colors, geo, world_mat, material, lights, cam_pos,
                                          normal_mat, has_normals, side, flip, true,
@@ -1317,6 +1359,9 @@ function _shade_mesh_faces_mapped!(colors::Vector{Color3{Float64}},
             (vertex_color = _face_vertex_color(color_attr, i1, i2, i3))
         surface_color = vertex_color
         base_albedo_map = false
+        # three.js clearcoatNormal: the normal before normalMap perturbation,
+        # replaced by the clearcoatNormalMap one when that map is set.
+        clearcoat_n = face_n
 
         # normalMap perturbs the shading normal and roughnessMap overrides the
         # material roughness before shading. Phong/PBR albedo also belongs in
@@ -1341,6 +1386,17 @@ function _shade_mesh_faces_mapped!(colors::Vector{Color3{Float64}},
                 face_n = _apply_normal_map(face_n, normal_map, nu, nv, v1, v2, v3,
                                            normal_uvs[1], normal_uvs[2], normal_uvs[3],
                                            normal_scale)
+            end
+            clearcoat_map = _clearcoat_normal_map(material)
+            if clearcoat_map !== nothing
+                cu, cv = _map_uv(clearcoat_map, u, v, u2, v2uv)
+                clearcoat_uvs = _texture_uv_set(clearcoat_map) == 1 && uv2_attr !== nothing ?
+                    (_vertex_uv_attr(uv2_attr, i1), _vertex_uv_attr(uv2_attr, i2), _vertex_uv_attr(uv2_attr, i3)) :
+                    (_vertex_uv(geo, i1), _vertex_uv(geo, i2), _vertex_uv(geo, i3))
+                clearcoat_n = _apply_normal_map(clearcoat_n, clearcoat_map, cu, cv,
+                                                v1, v2, v3, clearcoat_uvs[1],
+                                                clearcoat_uvs[2], clearcoat_uvs[3],
+                                                material.clearcoat_normal_scale)
             end
             if material isa MeshPhongMaterial &&
                (specular_map !== nothing || glossiness_map !== nothing)
@@ -1370,14 +1426,14 @@ function _shade_mesh_faces_mapped!(colors::Vector{Color3{Float64}},
             face_n, view_dir, center, material, lights, shadow_fn,
             mapped_kind, use_surface_color, surface_color, eff_mat,
             phong_specular, phong_shininess, standard_metalness,
-            standard_roughness, physical_terms, camera_view)
+            standard_roughness, physical_terms, camera_view, clearcoat_n)
         direct_color = ao_map !== nothing && material isa LitMaterial ?
             _shade_mapped_lighting(
                 face_n, view_dir, center, material,
                 _DirectLightView(lights), shadow_fn,
                 mapped_kind, use_surface_color, surface_color, eff_mat,
                 phong_specular, phong_shininess, standard_metalness,
-                standard_roughness, physical_terms, camera_view) :
+                standard_roughness, physical_terms, camera_view, clearcoat_n) :
             Color3(0.0, 0.0, 0.0)
         ao_factor = 1.0
 
@@ -1390,13 +1446,19 @@ function _shade_mesh_faces_mapped!(colors::Vector{Color3{Float64}},
             # `emissive · emissiveMap texel · intensity` back afterwards.
             em = _material_field(material, :emissive)
             emi = em === nothing ? 0.0 : _material_scalar(material, :emissive_intensity)
+            # Emission sits under the clearcoat layer (meshphysical.glsl.js), as
+            # `_emitted(::_PBRSurface, m)` added it.
+            layer = _emission_layer(material,
+                                    mapped_kind == 3 ? physical_terms.clearcoat :
+                                    _material_scalar(material, :clearcoat, 0.0),
+                                    clearcoat_n, view_dir)
             if em !== nothing
-                color = Color3(color.r - em.r * emi, color.g - em.g * emi,
-                               color.b - em.b * emi)
+                color = Color3(color.r - em.r * emi * layer, color.g - em.g * emi * layer,
+                               color.b - em.b * emi * layer)
                 direct_color = Color3(
-                    direct_color.r - em.r * emi,
-                    direct_color.g - em.g * emi,
-                    direct_color.b - em.b * emi)
+                    direct_color.r - em.r * emi * layer,
+                    direct_color.g - em.g * emi * layer,
+                    direct_color.b - em.b * emi * layer)
             end
             if albedo_map !== nothing && !base_albedo_map
                 tu, tv = _map_uv(albedo_map, u, v, u2, v2)
@@ -1425,8 +1487,8 @@ function _shade_mesh_faces_mapped!(colors::Vector{Color3{Float64}},
                     tu, tv = _map_uv(emissive_map, u, v, u2, v2)
                     t = sample_texture_linear(emissive_map, tu, tv)
                 end
-                color = color + Color3(em.r * t.r * emi, em.g * t.g * emi,
-                                       em.b * t.b * emi)
+                color = color + Color3(em.r * t.r * emi * layer, em.g * t.g * emi * layer,
+                                       em.b * t.b * emi * layer)
             end
         end
 
@@ -1865,7 +1927,8 @@ struct _PBRSurface{T<:Real}
     diffuse_weight::T                # 1 - transmission
     clearcoat::T
     clearcoat_alpha::T
-    layer::T                         # 1 - clearcoat · Fcc(N·V)
+    layer::T                         # 1 - clearcoat · Fcc(Ncc·V)
+    clearcoat_normal::Vec3{T}        # clearcoatNormal: unperturbed or clearcoat-mapped
     sheen_color::Color3{T}           # sheenColor · sheen
     sheen_roughness::T
     sheen_albedo_v::T                # IBLSheenBRDF(N·V)
@@ -1884,6 +1947,15 @@ end
     return min(max(roughness, 0.0525), one(roughness))
 end
 
+# meshphysical.glsl.js: the outgoing light, emission included, is scaled by
+# `1 - clearcoat · Fcc` with Fcc = F_Schlick(0.04, 1, saturate(clearcoatNormal·V)).
+@inline function _clearcoat_layer(clearcoat, dot_nv_cc)
+    cc = _saturate(clearcoat)
+    cc > 0 || return one(cc)
+    w = _schlick_weight(dot_nv_cc)
+    return 1 - cc * (0.04 * (1 - w) + w)
+end
+
 # Shared constructor. `specular_color` is the dielectric F0 and `specular_f90`
 # its grazing reflectance (`lights_physical_fragment`'s `specularColor` and
 # `specularF90`).
@@ -1892,7 +1964,8 @@ end
                               clearcoat, clearcoat_roughness, sheen_color::Color3,
                               sheen_roughness, iridescence, iridescence_fresnel::Color3,
                               transmission, fill_roughness,
-                              transmitted::Color3) where {T}
+                              transmitted::Color3, clearcoat_normal::Vec3,
+                              dot_nv_cc) where {T}
     r = _pbr_roughness(roughness)
     blended = Color3(specular_color.r + (albedo.r - specular_color.r) * metalness,
                      specular_color.g + (albedo.g - specular_color.g) * metalness,
@@ -1904,13 +1977,7 @@ end
     ms = Color3(1 + blended.r * gain, 1 + blended.g * gain, 1 + blended.b * gain)
     kd = 1 - metalness
     cc = _saturate(clearcoat)
-    layer = if cc > 0
-        # meshphysical.glsl.js: outgoingLight · (1 - clearcoat · Fcc).
-        w = _schlick_weight(dot_nv)
-        1 - cc * (0.04 * (1 - w) + w)
-    else
-        one(cc)
-    end
+    layer = _clearcoat_layer(clearcoat, dot_nv_cc)
     sheen_albedo = _max3(sheen_color) > 0 ?
         _ibl_sheen_brdf(dot_nv, sheen_roughness) : zero(sheen_roughness)
     return _PBRSurface{T}(
@@ -1919,6 +1986,7 @@ end
         convert(T, specular_f90), convert(T, r * r), _color_as(T, ms),
         convert(T, 1 - transmission), convert(T, cc),
         convert(T, _pbr_roughness(clearcoat_roughness)^2), convert(T, layer),
+        Vec3{T}(clearcoat_normal.x, clearcoat_normal.y, clearcoat_normal.z),
         _color_as(T, sheen_color), convert(T, sheen_roughness),
         convert(T, sheen_albedo), convert(T, iridescence),
         _color_as(T, iridescence_fresnel), _color_as(T, albedo),
@@ -1944,7 +2012,7 @@ end
     z = zero(T)
     zc = Color3(z, z, z)
     return _pbr_surface(T, dot_nv, albedo, metalness, roughness, f0, f90,
-                        z, z, zc, one(T), z, zc, z, roughness, zc)
+                        z, z, zc, one(T), z, zc, z, roughness, zc, n, dot_nv)
 end
 
 # Physical terms of a material without texture maps.
@@ -2000,9 +2068,11 @@ end
     m.transmission > 0.0 ? _transmission_fill(m, n, v, fc) : Color3(0.0, 0.0, 0.0)
 
 # MeshPhysicalMaterial surface from resolved (possibly texture-mapped) terms.
+# `ccn` is three.js `clearcoatNormal` (clearcoat_normal_fragment_begin/maps):
+# the shading normal before normal mapping, or the clearcoat-normal-mapped one.
 function _physical_surface(m::MeshPhysicalMaterial, t::_PhysicalMappedTerms,
-                           n::Vec3, v::Vec3, albedo::Color3)
-    T = _pbr_scalar_type(n, v, albedo.r)
+                           n::Vec3, v::Vec3, albedo::Color3, ccn::Vec3=n)
+    T = _pbr_scalar_type(n, v, albedo.r, ccn.x)
     dot_nv = _saturate(dot(n, v))
     metalness = t.metalness
     # lights_physical_fragment.glsl.js (IOR, USE_SPECULAR):
@@ -2042,13 +2112,16 @@ function _physical_surface(m::MeshPhysicalMaterial, t::_PhysicalMappedTerms,
                         t.clearcoat, t.clearcoat_roughness, sheen_color,
                         _sheen_roughness(t.sheen_roughness), iridescence, irid_fresnel,
                         t.transmission, _physical_mapped_roughness(t),
-                        transmitted)
+                        transmitted, ccn, ccn === n ? dot_nv : _saturate(dot(ccn, v)))
 end
 
 @inline _lit_surface(m::MeshStandardMaterial, n::Vec3, v::Vec3, albedo::Color3) =
     _standard_surface(n, v, albedo, m.metalness, m.roughness)
-@inline _lit_surface(m::MeshPhysicalMaterial, n::Vec3, v::Vec3, albedo::Color3) =
-    _physical_surface(m, _physical_terms(m), n, v, albedo)
+@inline _lit_surface(m::MeshPhysicalMaterial, n::Vec3, v::Vec3, albedo::Color3,
+                     ccn::Vec3=n) =
+    _physical_surface(m, _physical_terms(m), n, v, albedo, ccn)
+@inline _lit_surface(m::MeshStandardMaterial, n::Vec3, v::Vec3, albedo::Color3,
+                     ccn::Vec3) = _lit_surface(m, n, v, albedo)
 @inline _lit_surface(m, n::Vec3, v::Vec3, albedo::Color3) = m
 
 # RE_Direct_Physical with the clearcoat, sheen and iridescence lobes and the
@@ -2057,16 +2130,40 @@ end
 @inline function _direct_response(s::_PBRSurface, n::Vec3, v::Vec3,
                                   lc::Color3, li, ldir::Vec3)
     dot_nl = _saturate(dot(n, ldir))
-    if !(dot_nl > 0)
-        # Every lobe is scaled by the irradiance N·L (clearcoat shares the normal).
+    coated = s.clearcoat > 0
+    ccn = s.clearcoat_normal
+    dot_nl_cc = coated ? _saturate(dot(ccn, ldir)) : zero(dot_nl)
+    if !(dot_nl > 0) && !(dot_nl_cc > 0)
+        # Every base lobe is scaled by the irradiance N·L and the clearcoat
+        # lobe by its own Ncc·L (lights_physical_pars_fragment RE_Direct_Physical).
         z = zero(dot_nl * li * s.alpha * lc.r)
         return Color3(z, z, z)
     end
     h = _half_vec(ldir, v)
+    w = _schlick_weight(_saturate(dot(v, h)))
+    r = g = b = zero(dot_nl * li * s.alpha * lc.r)
+    if dot_nl > 0
+        r, g, b = _direct_base_response(s, n, v, li, ldir, h, w, dot_nl)
+    end
+    if coated && dot_nl_cc > 0
+        # BRDF_GGX_Clearcoat (F0 = 0.04, F90 = 1) on clearcoatNormal, weighted
+        # by clearcoat.
+        dot_nv_cc = _saturate(dot(ccn, v))
+        dot_nh_cc = _saturate(dot(ccn, h))
+        coat = (0.04 * (1 - w) + w) *
+               _v_ggx_smith_correlated(s.clearcoat_alpha, dot_nl_cc, dot_nv_cc) *
+               _d_ggx(s.clearcoat_alpha, dot_nh_cc) * (dot_nl_cc * li) * s.clearcoat
+        r += coat; g += coat; b += coat
+    end
+    return Color3(r * lc.r, g * lc.g, b * lc.b)
+end
+
+# Specular, diffuse and sheen lobes of RE_Direct_Physical under the clearcoat
+# layering, for a light with N·L = `dot_nl` > 0 and Schlick weight `w`.
+@inline function _direct_base_response(s::_PBRSurface, n::Vec3, v::Vec3, li,
+                                       ldir::Vec3, h::Vec3, w, dot_nl)
     dot_nv = _saturate(dot(n, v))
     dot_nh = _saturate(dot(n, h))
-    dot_vh = _saturate(dot(v, h))
-    w = _schlick_weight(dot_vh)
     irradiance = dot_nl * li
     sheen = Color3(zero(irradiance), zero(irradiance), zero(irradiance))
     base_irradiance = irradiance
@@ -2093,14 +2190,7 @@ end
     r = (F.r * ms.r * spec_scale + dc.r * (1 - Fd.r) * diffuse_scale + sheen.r) * s.layer
     g = (F.g * ms.g * spec_scale + dc.g * (1 - Fd.g) * diffuse_scale + sheen.g) * s.layer
     b = (F.b * ms.b * spec_scale + dc.b * (1 - Fd.b) * diffuse_scale + sheen.b) * s.layer
-    if s.clearcoat > 0
-        # BRDF_GGX_Clearcoat (F0 = 0.04, F90 = 1) weighted by clearcoat.
-        coat = (0.04 * (1 - w) + w) *
-               _v_ggx_smith_correlated(s.clearcoat_alpha, dot_nl, dot_nv) *
-               _d_ggx(s.clearcoat_alpha, dot_nh) * irradiance * s.clearcoat
-        r += coat; g += coat; b += coat
-    end
-    return Color3(r * lc.r, g * lc.g, b * lc.b)
+    return r, g, b
 end
 
 # Fill (ambient/hemisphere/probe) response of a PBR surface: the package's
@@ -2346,7 +2436,9 @@ end
 end
 
 @inline _emitted(m) = m.emissive * _material_scalar(m, :emissive_intensity)
-@inline _emitted(s::_PBRSurface{T}, m) where {T} = _color_as(T, _emitted(m))
+# meshphysical.glsl.js applies the clearcoat layering to totalEmissiveRadiance
+# as well (outgoingLight includes it before `· (1 - clearcoat · Fcc)`).
+@inline _emitted(s::_PBRSurface{T}, m) where {T} = _color_as(T, _emitted(m)) * s.layer
 
 function _shade_phong_mapped_color(normal::Vec3, view_dir::Vec3,
                                    position::Vec3,
@@ -2381,17 +2473,18 @@ function _shade_physical_mapped_color(normal::Vec3, view_dir::Vec3,
                                       material::MeshPhysicalMaterial,
                                       lights, shadow_fn,
                                       terms::_PhysicalMappedTerms,
-                                      albedo::Color3)
-    s = _physical_surface(material, terms, normal, view_dir, albedo)
+                                      albedo::Color3, ccn::Vec3=normal)
+    s = _physical_surface(material, terms, normal, view_dir, albedo, ccn)
     return _shade_model(s, _emitted(s, material), normal, view_dir, position,
                         lights, shadow_fn)
 end
 
 function _shade_physical_mapped(normal::Vec3, view_dir::Vec3, position::Vec3,
                                 material::MeshPhysicalMaterial, lights,
-                                shadow_fn, terms::_PhysicalMappedTerms)
+                                shadow_fn, terms::_PhysicalMappedTerms,
+                                ccn::Vec3=normal)
     _shade_physical_mapped_color(normal, view_dir, position, material, lights,
-                                 shadow_fn, terms, material.color)
+                                 shadow_fn, terms, material.color, ccn)
 end
 
 function _shade_physical_mapped_vertex_color(normal::Vec3, view_dir::Vec3,
@@ -2399,10 +2492,11 @@ function _shade_physical_mapped_vertex_color(normal::Vec3, view_dir::Vec3,
                                              material::MeshPhysicalMaterial,
                                              lights, shadow_fn,
                                              terms::_PhysicalMappedTerms,
-                                             vertex_color::Color3)
+                                             vertex_color::Color3,
+                                             ccn::Vec3=normal)
     albedo = _modulate(material.color, vertex_color)
     _shade_physical_mapped_color(normal, view_dir, position, material, lights,
-                                 shadow_fn, terms, albedo)
+                                 shadow_fn, terms, albedo, ccn)
 end
 
 function _shade_standard_mapped(normal::Vec3, view_dir::Vec3, position::Vec3,
@@ -2432,9 +2526,9 @@ end
 
 function _shade_lit(m::Union{MeshStandardMaterial,MeshPhysicalMaterial},
                     normal::Vec3, view_dir::Vec3, position::Vec3, lights,
-                    shadow_fn)
+                    shadow_fn, ccn::Vec3=normal)
     _validate_material_parameters(m)
-    s = _lit_surface(m, normal, view_dir, m.color)
+    s = _lit_surface(m, normal, view_dir, m.color, ccn)
     return _shade_model(s, _emitted(s, m), normal, view_dir, position, lights,
                         shadow_fn)
 end
@@ -2451,9 +2545,10 @@ end
 
 function _shade_lit_vertex_color(m::Union{MeshStandardMaterial,MeshPhysicalMaterial},
                                  normal::Vec3, view_dir::Vec3, position::Vec3,
-                                 lights, shadow_fn, vertex_color::Color3)
+                                 lights, shadow_fn, vertex_color::Color3,
+                                 ccn::Vec3=normal)
     _validate_material_parameters(m)
-    s = _lit_surface(m, normal, view_dir, _modulate(m.color, vertex_color))
+    s = _lit_surface(m, normal, view_dir, _modulate(m.color, vertex_color), ccn)
     return _shade_model(s, _emitted(s, m), normal, view_dir, position, lights,
                         shadow_fn)
 end

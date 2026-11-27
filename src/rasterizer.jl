@@ -634,10 +634,12 @@ end
     has_lightmap = light_map !== nothing
     env_map = _envmap_field(material)
     has_env = env_map !== nothing
+    clearcoat_map = _clearcoat_normal_map(material)
+    has_clearcoat_map = clearcoat_map !== nothing
     has_uv_maps = has_albedo || has_alpha_map || has_normalmap || has_roughness ||
                   has_metalness || has_specular || has_glossiness ||
                   has_physical_pbr || has_ao || has_emissive || has_lightmap ||
-                  has_env
+                  has_env || has_clearcoat_map
     has_clip = !isempty(clipping_planes)
     alpha_test = material_alpha_test(material)
     alpha_base = Float64(material_opacity(material))
@@ -651,6 +653,17 @@ end
         normal_seed_valid, normal_tangent, normal_handedness =
             _normal_map_tangent_seed(wp1, wp2, wp3, normal_uvs[1], normal_uvs[2],
                                      normal_uvs[3])
+    end
+    clearcoat_seed_valid = false
+    clearcoat_tangent = Vec3(0.0, 0.0, 0.0)
+    clearcoat_handedness = 0.0
+    if has_clearcoat_map
+        clearcoat_uvs = _texture_uv_set(clearcoat_map) == 1 ?
+            ((uv2_1.x, uv2_1.y), (uv2_2.x, uv2_2.y), (uv2_3.x, uv2_3.y)) :
+            ((uv1.x, uv1.y), (uv2.x, uv2.y), (uv3.x, uv3.y))
+        clearcoat_seed_valid, clearcoat_tangent, clearcoat_handedness =
+            _normal_map_tangent_seed(wp1, wp2, wp3, clearcoat_uvs[1],
+                                     clearcoat_uvs[2], clearcoat_uvs[3])
     end
     @inbounds for px in min_x:max_x
         for py in min_y:max_y
@@ -711,6 +724,16 @@ end
                         sample_texture_linear(albedo_map, au, av))
                 end
                 use_surface_color = UseVertexColors || base_albedo_map
+                # three.js clearcoatNormal is the normal before normalMap
+                # perturbation, or the clearcoatNormalMap-perturbed one
+                # (clearcoat_normal_fragment_begin/maps.glsl.js).
+                clearcoat_n = wn
+                if clearcoat_seed_valid
+                    cu, cv = _map_uv(clearcoat_map, u, v, u2, v2)
+                    clearcoat_n = _apply_normal_map_tangent_seed(
+                        wn, clearcoat_map, cu, cv, clearcoat_tangent,
+                        clearcoat_handedness, material.clearcoat_normal_scale)
+                end
                 # normalMap perturbs the shading normal before lighting (same
                 # helper as the flat path); the tangent frame uses the UV set
                 # selected by the texture metadata.
@@ -721,6 +744,7 @@ end
                                                         normal_handedness,
                                                         normal_scale)
                 end
+                physical_clearcoat = _material_scalar(material, :clearcoat, 0.0)
                 if material isa MeshDepthMaterial
                     depth = clamp(
                         (fragment_view_depth - material.near) /
@@ -754,13 +778,14 @@ end
                        (has_roughness || has_metalness || has_physical_pbr)
                     terms = _physical_mapped_terms(material, roughness_map,
                                                    metalness_map, u, v, u2, v2)
+                    physical_clearcoat = terms.clearcoat
                     vd = _direction_between(wp, cam_pos)
                     col = use_surface_color ?
                           _shade_physical_mapped_vertex_color(
                               wn, vd, wp, material, lights, shadow_fn, terms,
-                              surface_color) :
+                              surface_color, clearcoat_n) :
                           _shade_physical_mapped(wn, vd, wp, material, lights,
-                                                 shadow_fn, terms)
+                                                 shadow_fn, terms, clearcoat_n)
                 elseif has_roughness || has_metalness || has_physical_pbr
                     eff_mat = _apply_pbr_maps(material, roughness_map, metalness_map,
                                               u, v, u2, v2)
@@ -778,20 +803,23 @@ end
                     col = use_surface_color ?
                           _shade_face_vertex_color_with_camera_view(
                               wn, vd, wp, eff_mat, lights, surface_color,
-                              camera_view, shadow_fn) :
+                              camera_view, shadow_fn, clearcoat_n) :
                           _shade_face_with_camera_view(
                               wn, vd, wp, eff_mat, lights,
-                              camera_view, shadow_fn)
+                              camera_view, shadow_fn, clearcoat_n)
                 end
                 # three.js keeps emission OUT of the diffuse map chain: remove the
                 # base `emissive · intensity` added by `shade_face` before the
                 # multiplicative maps below, and add the modulated form
                 # `emissive · emissiveMap texel · intensity` back afterwards.
+                # Both carry the clearcoat layering of meshphysical.glsl.js.
                 em = _material_field(material, :emissive)
                 emi = em === nothing ? 0.0 : _material_scalar(material, :emissive_intensity)
+                layer = _emission_layer(material, physical_clearcoat, clearcoat_n,
+                                        _direction_between(wp, cam_pos))
                 if em !== nothing
-                    col = Color3(col.r - em.r * emi, col.g - em.g * emi,
-                                 col.b - em.b * emi)
+                    col = Color3(col.r - em.r * emi * layer, col.g - em.g * emi * layer,
+                                 col.b - em.b * emi * layer)
                 end
                 if has_albedo && !base_albedo_map &&
                    !(material isa MeshDepthMaterial)
@@ -845,10 +873,11 @@ end
                                 _shade_physical_mapped_vertex_color(
                                     wn, direct_view, wp, material,
                                     direct_lights, shadow_fn, terms,
-                                    surface_color) :
+                                    surface_color, clearcoat_n) :
                                 _shade_physical_mapped(
                                     wn, direct_view, wp, material,
-                                    direct_lights, shadow_fn, terms)
+                                    direct_lights, shadow_fn, terms,
+                                    clearcoat_n)
                         elseif has_roughness || has_metalness ||
                                has_physical_pbr
                             direct_material = _apply_pbr_maps(
@@ -862,6 +891,15 @@ end
                                 shade_face(
                                     wn, direct_view, wp, direct_material,
                                     direct_lights; shadow_fn=shadow_fn)
+                        elseif material isa MeshPhysicalMaterial
+                            use_surface_color ?
+                                _shade_lit_vertex_color(
+                                    material, wn, direct_view, wp,
+                                    direct_lights, shadow_fn, surface_color,
+                                    clearcoat_n) :
+                                _shade_lit(
+                                    material, wn, direct_view, wp,
+                                    direct_lights, shadow_fn, clearcoat_n)
                         elseif use_surface_color
                             _shade_face_vertex_color(
                                 wn, direct_view, wp, material,
@@ -874,9 +912,9 @@ end
                         end
                         if em !== nothing
                             direct_col = Color3(
-                                direct_col.r - em.r * emi,
-                                direct_col.g - em.g * emi,
-                                direct_col.b - em.b * emi)
+                                direct_col.r - em.r * emi * layer,
+                                direct_col.g - em.g * emi * layer,
+                                direct_col.b - em.b * emi * layer)
                         end
                         if has_albedo && !base_albedo_map
                             au, av = _map_uv(
@@ -899,8 +937,8 @@ end
                         tu, tv = _map_uv(emissive_map, u, v, u2, v2)
                         t = sample_texture_linear(emissive_map, tu, tv)
                     end
-                    col = col + Color3(em.r * t.r * emi, em.g * t.g * emi,
-                                       em.b * t.b * emi)
+                    col = col + Color3(em.r * t.r * emi * layer, em.g * t.g * emi * layer,
+                                       em.b * t.b * emi * layer)
                 end
                 if has_env
                     mapped_kind = 0
@@ -1135,12 +1173,13 @@ function _render_smooth_geometry!(rt::RenderTarget, geo::BufferGeometry,
     ao_map = has_uvs ? _material_field(mat, :ao_map) : nothing
     emissive_map = has_uvs ? _material_field(mat, :emissive_map) : nothing
     light_map = has_uvs ? _material_field(mat, :light_map) : nothing
+    clearcoat_normal_map = has_uvs ? _clearcoat_normal_map(mat) : nothing
     has_uv_maps = albedo_map !== nothing || alpha_map !== nothing ||
                   normal_map !== nothing || roughness_map !== nothing ||
                   metalness_map !== nothing || specular_map !== nothing ||
                   glossiness_map !== nothing || physical_pbr_map !== nothing ||
                   ao_map !== nothing || emissive_map !== nothing ||
-                  light_map !== nothing
+                  light_map !== nothing || clearcoat_normal_map !== nothing
     has_env = _envmap_field(mat) !== nothing
     has_mapped_inputs = has_uv_maps || has_env
     uv2_attr = _uv2_attribute(geo)
