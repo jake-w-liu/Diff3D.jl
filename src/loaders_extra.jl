@@ -10284,10 +10284,7 @@ function _gltf_expand_attribute(data::AbstractVector, item_size::Int,
     return out
 end
 
-# Give every element of `order` its own vertex. Triangle output keeps a
-# sequential index list so faces remain addressable.
-function _gltf_expand_geometry(geo::BufferGeometry, order::Vector{Int};
-                               triangles::Bool=false)
+function _gltf_expand_nontriangle_geometry(geo::BufferGeometry, order::Vector{Int})
     nverts = geo.n_vertices
     positions = _gltf_expand_attribute(geo.positions, 3, order, nverts, "glTF POSITION")
     normals = isempty(geo.normals) ? Float64[] :
@@ -10300,10 +10297,7 @@ function _gltf_expand_geometry(geo::BufferGeometry, order::Vector{Int};
             _gltf_expand_attribute(attr.data, attr.item_size, order, nverts, String(name)),
             attr.item_size)
     end
-    count = length(order)
-    return triangles ?
-        BufferGeometry(positions, normals, uvs, collect(1:count), count, count ÷ 3, attrs) :
-        BufferGeometry(positions, normals, uvs, Int[], count, 0, attrs)
+    return BufferGeometry(positions, normals, uvs, Int[], length(order), 0, attrs)
 end
 
 function _gltf_validate_node_matrix_trs(matrix::Mat4{Float64})
@@ -10890,17 +10884,9 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
             end
         end
         if mode in (0, 1, 2, 3)
-            geo = _gltf_expand_geometry(geo, indices)
+            geo = _gltf_expand_nontriangle_geometry(geo, indices)
             preserve_nontriangle_morphs || _gltf_bake_static_morphs!(geo, morph_weights)
         elseif isempty(normals)
-            # glTF 2.0 §3.7.2.1: without NORMAL, clients MUST calculate flat
-            # normals (three.js GLTFLoader.js:3500 enables flatShading).
-            # Unshared triangle vertices make the computed vertex normals
-            # face normals.
-            if haskey(prim, "indices") || mode != 4
-                geo = _gltf_expand_geometry(geo, tri_indices; triangles=true)
-                nverts = geo.n_vertices
-            end
             compute_vertex_normals!(geo)
         end
         mat = _gltf_cached_material(get(prim, "material", nothing), has_attribute(geo, :color))
