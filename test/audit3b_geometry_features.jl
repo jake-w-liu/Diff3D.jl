@@ -619,3 +619,20 @@ end
         @test D.get_point(path, t) == D.get_point_at(path.curves[i], u)
     end
 end
+
+@testset "EllipseCurve reduces long sweeps without looping forever" begin
+    # EllipseCurve.js:131-132 subtracts 2π until the sweep is at most 2π, which
+    # never ends once delta - 2π == delta. A sweep of 1e18 radians is the
+    # exact remainder rem(1e18, 2π) of a turn.
+    D = Diff3D
+    delta = rem(1e18, 2π)
+    delta < 0 && (delta += 2π)
+    long = D.EllipseCurve(0, 0, 1, 1, 0.0, 1e18)
+    @test D.get_point(long, 0.5) == Vec2(cos(0.5 * delta), sin(0.5 * delta))
+    @test isfinite(D.get_length(long))
+    # Shorter sweeps keep three.js's steps: node prints
+    # new THREE.EllipseCurve(0, 0, 1, 1, 0, 1000).getPoint(0.5).
+    @test D.get_point(D.EllipseCurve(0, 0, 1, 1, 0.0, 1000.0), 0.5) ==
+          Vec2(0.8838492734309304, 0.4677718053235107)
+    @test_throws ArgumentError D.EllipseCurve(0, 0, 1, 1, -1e308, 1e308)
+end

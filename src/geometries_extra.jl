@@ -937,7 +937,7 @@ end
 radians, counterclockwise unless `clockwise`, rotated by `rotation` about its
 centre (three.js `EllipseCurve`, including its handling of the sweep: angles
 equal within machine epsilon give a point, a sweep that is a multiple of 2π a
-full turn).
+full turn). The angles and their difference must be finite.
 """
 struct EllipseCurve <: Curve{Vec2{Float64}}
     ax::Float64
@@ -952,9 +952,12 @@ struct EllipseCurve <: Curve{Vec2{Float64}}
                           start_angle::Real=0.0, end_angle::Real=2π, clockwise::Bool=false,
                           rotation::Real=0.0)
         f(value, label) = _geometry_finite_float(value, "EllipseCurve $label")
+        start_value = f(start_angle, "start_angle")
+        end_value = f(end_angle, "end_angle")
+        isfinite(end_value - start_value) ||
+            throw(ArgumentError("EllipseCurve end_angle - start_angle must be finite"))
         return new(f(ax, "ax"), f(ay, "ay"), f(x_radius, "x_radius"), f(y_radius, "y_radius"),
-                   f(start_angle, "start_angle"), f(end_angle, "end_angle"), clockwise,
-                   f(rotation, "rotation"))
+                   start_value, end_value, clockwise, f(rotation, "rotation"))
     end
 end
 
@@ -1103,6 +1106,11 @@ function get_point(c::EllipseCurve, t::Real)
     two_pi = π * 2
     delta = c.end_angle - c.start_angle
     same_points = abs(delta) < eps(Float64)
+    # three.js reduces the sweep by repeated 2π steps, which takes |delta| / 2π
+    # iterations and never ends once delta - 2π == delta (|delta| >= 2^55).
+    # Long sweeps take the exact remainder first; shorter ones keep three.js's
+    # steps and rounding.
+    abs(delta) > 1024 * two_pi && (delta = rem(delta, two_pi))
     while delta < 0
         delta += two_pi
     end
