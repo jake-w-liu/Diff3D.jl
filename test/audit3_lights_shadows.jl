@@ -29,6 +29,24 @@ const _AUDIT3_IES_PROFILE = IESProfile([0.0, 30.0, 60.0, 90.0],
         fd = (f(0.7 + h) - f(0.7 - h)) / (2h)
         @test ForwardDiff.derivative(f, 0.7) ≈ fd rtol = 1e-6
         @test reverse_gradient(v -> f(v[1]), [0.7])[1] ≈ fd rtol = 1e-6
+        # On the luminaire axis acosd(1) has an infinite partial. The angle sits
+        # on the profile's first knot, so the clamped branch (zero IES slope)
+        # applies in both modes; ForwardDiff's partial-aware comparison used to
+        # pick the interpolating branch and return NaN (x = 0) or -Inf (x = 1e-9,
+        # where the cosine rounds to 1). f is even in x, so 0 is exact at x = 0.
+        for x0 in (0.0, 1e-9)
+            forward = ForwardDiff.derivative(f, x0)
+            @test isfinite(forward)
+            @test forward ≈ reverse_gradient(v -> f(v[1]), [x0])[1] atol = 1e-12
+        end
+        @test ForwardDiff.derivative(f, 0.0) == 0.0
+    end
+    # A dual angle exactly on a tabulated endpoint takes the clamped branch,
+    # whatever the sign of its partial (as ADVar comparisons do).
+    for partial in (1.0, -1.0, Inf)
+        d = ForwardDiff.Dual{Nothing}(0.0, partial)
+        @test ForwardDiff.partials(ies_candela(profile, d))[1] == 0.0
+        @test ForwardDiff.value(ies_candela(profile, d)) == 100.0
     end
 end
 
@@ -199,6 +217,45 @@ end
     @test occursin("\"type\":\"pointStatic\",\"size\":64,", json)
 end
 
+@testset "Cube faces fit near planes to the frustum, not only the depth slab" begin
+    # A point light outside a small scene. Its -X and -Y faces see the scene
+    # off-axis, so the slab bound zc - radius alone put their near planes at
+    # 0.1 and 0.03 (the old single frustum used d - radius = 0.85). The fixed
+    # NDC bias then spans a large world distance and shadows detach from their
+    # casters: 131 of 38024 ground samples disagreed with a ray cast, 114 of
+    # them falsely lit. Every scene point inside a 90-degree face also has view
+    # depth >= (d - radius) / sqrt(3) (the corner-ray bound), which restores
+    # the precision without clipping.
+    scene = Scene()
+    ground = Mesh(PlaneGeometry(width=4.0, height=4.0), MeshStandardMaterial();
+                  receive_shadow=true)
+    ground.rotation = Euler(-π / 2, 0.0, 0.0)
+    add!(scene, ground)
+    boxes = Tuple{Vec3{Float64},Vec3{Float64}}[]
+    for (x, z, s, h) in ((0.8, 0.3, 0.5, 1.0), (-0.9, -0.5, 0.4, 1.5), (0.2, -1.0, 0.6, 0.6))
+        box = Mesh(BoxGeometry(width=s, height=h, depth=s), MeshStandardMaterial();
+                   cast_shadow=true)
+        box.position = Vec3(x, h / 2, z)
+        add!(scene, box)
+        push!(boxes, (Vec3(x - s / 2, 0.0, z - s / 2), Vec3(x + s / 2, h, z + s / 2)))
+    end
+    light_position = Vec3(3.0, 3.0, 0.0)
+    sm = compute_shadow_map(scene, PointLight(position=light_position, cast_shadow=true);
+                            resolution=1024)
+    total = 0
+    mismatches = 0
+    for i in 0:199, j in 0:199
+        p = Vec3(-1.99 + 0.02 * i, 0.0, -1.99 + 0.02 * j)
+        any(b -> b[1].x <= p.x <= b[2].x && b[1].z <= p.z <= b[2].z, boxes) && continue
+        truth = any(b -> _audit3_ray_hits_box(light_position, p, b[1], b[2]), boxes) ?
+                0.0 : 1.0
+        total += 1
+        mismatches += shadow_visibility(sm, p) != truth
+    end
+    @test total == 38024
+    @test mismatches <= total ÷ 500
+end
+
 function _audit3_shadow_query_allocations(maps, depths, light, meshes)
     Diff3D._build_shadow_query_from_drawables!(maps, depths, [light], meshes,
                                                InstancedMesh[]; resolution=32)
@@ -256,6 +313,11 @@ end
     @test_throws "horizontal-angle count 100000 exceeds the photometric data" parse_ies(
         "TILT=NONE\n1 1000 1 1 1e5 1 2 0 0 0\n1 1 1\n0\n0\n1\n")
     @test parse_ies(header("1")).candela == [1.0]
+    # The documented error type, not only the message.
+    for n in ("9223372036854775807", "1e15", "NaN", "Inf", "-3", "2.5")
+        @test_throws ArgumentError parse_ies(header(n))
+    end
+    @test_throws ArgumentError parse_ies("TILT=INCLUDE\n1\n4611686018427387904\n0 1\n")
 end
 
 @testset "Shadow-map docstrings document the public names" begin

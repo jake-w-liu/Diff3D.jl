@@ -155,20 +155,26 @@ end
 Linearly interpolate the candela value at a vertical angle (degrees), clamping
 to the tabulated endpoints outside `[angles[1], angles[end]]`. Plain real angles
 return a `Float64`; differentiable angle types (ForwardDiff duals, `ADVar`)
-return the same type, carrying the derivative of the interpolation.
+return a differentiable value carrying the derivative of the interpolation (zero
+on the clamped ranges, including the endpoints themselves).
 """
 function ies_candela(profile::IESProfile, angle_deg::Real)
     a = getfield(profile, :angles)
     c = getfield(profile, :candela)
     n = length(a)
     θ = _ies_angle(angle_deg)
+    # Branch on the primal angle, as reverse-mode `ADVar` comparisons do. Dual
+    # comparisons also weigh the partials, so an angle sitting exactly on an
+    # endpoint would take the interpolating branch, which turns the infinite
+    # partial `acosd` produces for an on-axis shading point into Inf/NaN.
+    θp = _primal_value(θ)
     n == 1 && return _ies_value(θ, c[1])
-    θ <= a[1] && return _ies_value(θ, c[1])
-    θ >= a[n] && return _ies_value(θ, c[n])
-    isnan(θ) && return _ies_value(θ, c[n])
+    θp <= a[1] && return _ies_value(θ, c[1])
+    θp >= a[n] && return _ies_value(θ, c[n])
+    isnan(θp) && return _ies_value(θ, c[n])
     # Angles are strictly ascending; binary search keeps per-shading IES lookups
     # logarithmic for dense measured profiles.
-    i = searchsortedfirst(a, θ)
+    i = searchsortedfirst(a, θp)
     @inbounds begin
         t = (θ - a[i-1]) / (a[i] - a[i-1])
         return c[i-1] + (c[i] - c[i-1]) * t

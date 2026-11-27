@@ -168,17 +168,23 @@ function _light_view_proj(light::DirectionalLight, center::Vec3, radius)
     return lp * lv
 end
 
-# Fit the perspective near/far planes to the view-depth slab [zc-radius,
-# zc+radius] of the bounding sphere along the camera `axis` (zc = view depth of
-# the sphere centre), so NDC depth precision (and the fixed bias) stays
-# meaningful at any light distance without clipping casters: every scene point p
-# has view depth dot(p - light, axis) within that slab, even when the camera is
-# not aimed at the centre. The floor keeps `near` positive (and the near/far
-# ratio bounded) when the light sits inside the bounding sphere.
-function _perspective_shadow_planes(light_pos::Vec3, axis::Vec3, center::Vec3, radius)
+# Fit the near/far planes of a square perspective light camera (view matrix
+# `lv`, half field of view with tangent `tan_half_fov`) to the bounding sphere,
+# so NDC depth precision (and the fixed bias) stays meaningful at any light
+# distance without clipping casters. Two lower bounds on the view depth z of a
+# sphere point inside the frustum hold for any aim: z >= zc - radius (zc = view
+# depth of the centre, read from `lv` itself so degenerate aims stay
+# consistent), and z >= |p - light| / sqrt(1 + 2 tan^2) >= (d - radius) / ... since
+# the frustum's corner rays are the most oblique. Using only the first under-fits
+# near for cameras aimed away from the centre (cube faces, off-axis spots).
+# The floor keeps `near` positive (and the near/far ratio bounded) when the
+# light sits inside the bounding sphere.
+function _perspective_shadow_planes(lv::Mat4, light_pos::Vec3, center::Vec3, radius,
+                                    tan_half_fov)
     d = norm(light_pos - center)
-    zc = dot(center - light_pos, axis)
-    near = max(zc - radius, max(radius, d) * 1e-2)
+    zc = -mat4_transform_point(lv, center).z
+    corner = (d - radius) / sqrt(1 + 2 * tan_half_fov^2)
+    near = max(zc - radius, corner, max(radius, d) * 1e-2)
     far = max(zc + radius, near * (1 + 1e-6))
     return (near, far)
 end
@@ -189,8 +195,9 @@ function _light_view_proj(light::SpotLight, center::Vec3, radius)
                 _shadow_direction(light_position, light.target)
     lv = light.rotation_driven ? _view_from_direction(light_position, direction, _safe_up(direction)) :
          mat4_look_at(light_position, light.target, _safe_up(direction))
-    near, far = _perspective_shadow_planes(light_position, direction, center, radius)
-    lp = mat4_perspective(min(light.angle * 2.0, π * 0.9), 1.0, near, far)
+    fov = min(light.angle * 2.0, π * 0.9)
+    near, far = _perspective_shadow_planes(lv, light_position, center, radius, tan(fov / 2))
+    lp = mat4_perspective(fov, 1.0, near, far)
     return lp * lv
 end
 
@@ -201,20 +208,21 @@ function _light_view_proj(light::PointLight, center::Vec3, radius)
     light_position = _light_world_position(light)
     dir = _shadow_direction(light_position, center)
     lv = mat4_look_at(light_position, center, _safe_up(dir))
-    near, far = _perspective_shadow_planes(light_position, dir, center, radius)
+    near, far = _perspective_shadow_planes(lv, light_position, center, radius, 1.0)
     lp = mat4_perspective(π/2, 1.0, near, far)
     return lp * lv
 end
 
 # Six 90-degree cameras at the light (three.js PointLightShadow, rendered per
 # face by WebGLShadowMap.js). Each face fits its own near/far planes to the
-# view-depth slab of the scene bounding sphere along its axis.
+# scene bounding sphere. The view is built from the axis itself rather than
+# `origin + axis`, which rounds back to `origin` for distant lights.
 function _point_shadow_cube(light::PointLight, center::Vec3, radius)
     origin = _light_world_position(light)
     face_vps = ntuple(Val(6)) do face
-        axis = _POINT_SHADOW_DIRECTIONS[face]
-        lv = mat4_look_at(origin, origin + axis, _POINT_SHADOW_UPS[face])
-        near, far = _perspective_shadow_planes(origin, axis, center, radius)
+        lv = _view_from_direction(origin, _POINT_SHADOW_DIRECTIONS[face],
+                                  _POINT_SHADOW_UPS[face])
+        near, far = _perspective_shadow_planes(lv, origin, center, radius, 1.0)
         mat4_perspective(π/2, 1.0, near, far) * lv
     end
     return _PointShadowCube(origin, face_vps)
