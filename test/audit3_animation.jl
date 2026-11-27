@@ -184,6 +184,58 @@ end
     @test sample_track(track, 0.1) == interpolate_catmull_rom(track.times, track.values, 0.1)
 end
 
+@testset "audit3 animation: web player smooth tracks match interpolate_catmull_rom" begin
+    # The exported player's sampleTrack/catmull3/catmullN must evaluate the
+    # same three.js CubicInterpolant curve as the Julia side. This needs a
+    # JavaScript engine, so it runs only where `node` is installed.
+    node = Sys.which("node")
+    if node === nothing
+        @test_skip "node is not installed"
+    else
+        scene = Scene()
+        add!(scene, Mesh(BoxGeometry(), MeshBasicMaterial()))
+        file = tempname() * ".html"
+        save_webgl_html(file, [WebGLExportCase("smooth", "Smooth", "", scene)])
+        html = read(file, String)
+        rm(file; force=true)
+        helper = r"^\s*(const (mix|mix3|sub3|scale3|add3|scaleN|addN|mixN|norm4)=|function (hermite3|catmull3|hermiteN|catmullN|slerp|sampleTrack)\()"
+        lines = filter(l -> occursin(helper, l), split(html, '\n'))
+        @test count(l -> occursin("function catmull3(", l), lines) == 1
+        @test count(l -> occursin("function catmullN(", l), lines) == 1
+        @test count(l -> occursin("function sampleTrack(", l), lines) == 1
+        times = [0.0, 0.3, 1.0, 2.5, 2.7]
+        values = [0.0, 1.0, -2.0, 4.0, 3.5]
+        queries = [0.1, 0.3, 0.65, 1.0, 1.7, 2.6]
+        fmt(xs) = "[" * join((repr(Float64(x)) for x in xs), ",") * "]"
+        vec3_values = reduce(vcat, ([v, -v, 2v] for v in values))
+        @test count(l -> occursin(r"^\s*const mix=", l), lines) == 1
+        script = """
+        $(join(lines, "\n"))
+        const times=$(fmt(times)), queries=$(fmt(queries));
+        const number={times,values:$(fmt(values)),kind:"number",interpolation:"cubic"};
+        const vec3={times,values:$(fmt(vec3_values)),kind:"vec3",interpolation:"cubic"};
+        for(const t of queries){ const n=sampleTrack(number,t), v=sampleTrack(vec3,t);
+          console.log([n[0],v[0],v[1],v[2]].join(" ")); }
+        """
+        js = tempname() * ".js"
+        write(js, script)
+        output = try
+            read(`$node $js`, String)
+        finally
+            rm(js; force=true)
+        end
+        rows = [parse.(Float64, split(line)) for line in split(strip(output), '\n')]
+        @test length(rows) == length(queries)
+        for (t, row) in zip(queries, rows)
+            e = interpolate_catmull_rom(times, values, t)
+            @test row[1] ≈ e atol=1e-12
+            @test row[2] ≈ e atol=1e-12
+            @test row[3] ≈ -e atol=1e-12
+            @test row[4] ≈ 2e atol=1e-12
+        end
+    end
+end
+
 @testset "audit3 animation: morph influence paths resolve target names" begin
     # three.js PropertyBinding.bind (PropertyBinding.js:661-684) maps the index
     # of morphTargetInfluences[...] through morphTargetDictionary before using
