@@ -16227,12 +16227,21 @@ end
 
             strip_obj = mode_object(5, [0, 1, 2, 3])
             @test strip_obj isa Mesh
-            @test strip_obj.geometry.indices == [1, 2, 3, 4, 3, 2]
+            # No NORMAL: flat shading (GLTFLoader.js:3559) gives each triangle
+            # its own corners, in the strip order (1,2,3), (4,3,2).
+            @test strip_obj.geometry.indices == 1:6
+            @test [get_vertex(strip_obj.geometry, i) for i in 1:6] ==
+                  [Vec3(0.0, 0, 0), Vec3(1.0, 0, 0), Vec3(0.0, 1, 0),
+                   Vec3(1.0, 1, 0), Vec3(0.0, 1, 0), Vec3(1.0, 0, 0)]
             @test strip_obj.geometry.n_faces == 2
 
             fan_obj = mode_object(6, [0, 1, 2, 3])
             @test fan_obj isa Mesh
-            @test fan_obj.geometry.indices == [1, 2, 3, 1, 3, 4]
+            # Fan order (1,2,3), (1,3,4), de-indexed as above.
+            @test fan_obj.geometry.indices == 1:6
+            @test [get_vertex(fan_obj.geometry, i) for i in 1:6] ==
+                  [Vec3(0.0, 0, 0), Vec3(1.0, 0, 0), Vec3(0.0, 1, 0),
+                   Vec3(0.0, 0, 0), Vec3(0.0, 1, 0), Vec3(1.0, 1, 0)]
             @test fan_obj.geometry.n_faces == 2
 
             @test_throws ErrorException load_gltf_asset(primitive_mode_path(7, [0, 1, 2]))

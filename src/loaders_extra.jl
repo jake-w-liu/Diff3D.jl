@@ -2967,12 +2967,11 @@ of one object become separate children instead of one object of the last kind.
 Smoothing groups (`s`) are ignored.
 """
 function load_obj_scene(path::String)
-    rec = Diff3D._OBJSceneRecords()
+    rec = _OBJSceneRecords()
     geo, face_mtl, materials = _obj_load(path, true, rec)
     root = Group(name="")
     nobj = length(rec.object_names)
     has_colors = has_attribute(geo, :color)
-    point_colored = !isempty(rec.colors)
     nothing_emitted = geo.n_faces == 0 && isempty(rec.line_vertices) &&
                       isempty(rec.point_vertices)
     if nothing_emitted
@@ -2982,35 +2981,51 @@ function load_obj_scene(path::String)
                                           nothing, rec.object_names[1]))
         return root
     end
+    tri_buckets = _obj_buckets(rec.face_object, face_mtl, nobj)
+    seg_buckets = _obj_buckets(rec.line_object, rec.line_material, nobj)
+    pt_buckets = _obj_buckets(rec.point_object, rec.point_material, nobj)
     for k in 1:nobj
         name = rec.object_names[k]
-        # Triangles of this object, one mesh per material in first-use order.
-        tris = [t for t in eachindex(rec.face_object) if rec.face_object[t] == k]
-        for mtl in unique(face_mtl[t] for t in tris)
-            sel = [t for t in tris if face_mtl[t] == mtl]
+        # One child per material of the object, in first-use order.
+        for (mtl, tris) in tri_buckets[k]
             material = get(materials, mtl, nothing)
             material === nothing && (material = MeshPhongMaterial())
             has_colors && (material = _gltf_enable_vertex_colors(material))
-            add!(root, Mesh(_obj_triangle_subset(geo, sel), material; name=name))
+            add!(root, Mesh(_obj_triangle_subset(geo, tris), material; name=name))
         end
-        segs = [s for s in eachindex(rec.line_object) if rec.line_object[s] == k]
-        for mtl in unique(rec.line_material[s] for s in segs)
-            sel = Int[]
-            for s in segs
-                rec.line_material[s] == mtl || continue
-                push!(sel, rec.line_vertices[2s - 1], rec.line_vertices[2s])
+        for (mtl, segs) in seg_buckets[k]
+            sel = Vector{Int}(undef, 2 * length(segs))
+            for (j, s) in enumerate(segs)
+                sel[2j - 1] = rec.line_vertices[2s - 1]
+                sel[2j] = rec.line_vertices[2s]
             end
             lib = get(materials, mtl, nothing)
             line_mat = LineBasicMaterial(color=lib === nothing ? Color3(1.0, 1.0, 1.0) : lib.color)
             add!(root, LineSegments(_obj_vertex_subset(rec.verts, sel), line_mat; name=name))
         end
-        pts = [q for q in eachindex(rec.point_object) if rec.point_object[q] == k]
-        for mtl in unique(rec.point_material[q] for q in pts)
-            sel = [rec.point_vertices[q] for q in pts if rec.point_material[q] == mtl]
+        for (mtl, pts) in pt_buckets[k]
+            sel = rec.point_vertices[pts]
             add!(root, _obj_points_object(rec, sel, mtl, get(materials, mtl, nothing), name))
         end
     end
     return root
+end
+
+# Items (triangles, segments or points) of each object, grouped by material
+# in first-use order: buckets[object] = [(material, item indices), ...].
+function _obj_buckets(objects::Vector{Int}, mtls::Vector{String}, nobj::Int)
+    buckets = [Tuple{String,Vector{Int}}[] for _ in 1:nobj]
+    slot = Dict{Tuple{Int,String},Int}()
+    for i in eachindex(objects)
+        k = objects[i]
+        j = get(slot, (k, mtls[i]), 0)
+        if j == 0
+            push!(buckets[k], (mtls[i], Int[]))
+            j = slot[(k, mtls[i])] = length(buckets[k])
+        end
+        push!(buckets[k][j][2], i)
+    end
+    return buckets
 end
 
 # Positions of the given file vertices, one geometry vertex each.
