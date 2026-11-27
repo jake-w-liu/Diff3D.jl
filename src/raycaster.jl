@@ -3,9 +3,28 @@
 # Uses the Möller–Trumbore algorithm against world-space triangles.
 # --------------------------------------------------------------------------
 
-"""A picking result. `instance_id` is 1-based for instances and `nothing` otherwise.
-`face_index` identifies a mesh face, point vertex, or line segment's start vertex;
-it is zero for a sprite.
+"""
+A picking result, the counterpart of a three.js `Raycaster` intersection.
+
+- `distance`, `point`: world-space distance from the ray origin and hit point.
+- `object`: the object that was hit.
+- `face_index`: mesh face, point vertex, or line segment's start vertex (all
+  1-based); zero for a sprite.
+- `instance_id`: 1-based instance for an `InstancedMesh`, otherwise `nothing`.
+- `face`: 1-based vertex indices `(a, b, c)` of the hit triangle (three.js
+  `face.a/b/c`); `nothing` for points, lines and sprites.
+- `face_normal`: unit normal of the hit triangle in the object's local space
+  (three.js `face.normal`), from its morphed or posed vertices.
+- `normal`: the geometry's vertex normals interpolated at the hit, in local
+  space and flipped to face the ray origin (three.js `normal`); `nothing` when
+  the geometry has no normals.
+- `uv`, `uv1`: first and second (`:uv2` attribute) texture coordinates
+  interpolated at the hit; a sprite reports its quad `uv`.
+- `barycoord`: barycentric weights of the hit for `face`'s three vertices.
+- `distance_to_ray`: for points, the world-space distance from the vertex to
+  the ray, in the same units as the world-space `point_threshold` (three.js
+  `distanceToRay` is measured in the object's local space, so the two differ
+  under a scaled world matrix).
 """
 struct Intersection
     distance::Float64
@@ -13,10 +32,21 @@ struct Intersection
     object::AbstractObject3D
     face_index::Int
     instance_id::Union{Nothing,Int}
+    face::Union{Nothing,NTuple{3,Int}}
+    face_normal::Union{Nothing,Vec3{Float64}}
+    normal::Union{Nothing,Vec3{Float64}}
+    uv::Union{Nothing,Vec2{Float64}}
+    uv1::Union{Nothing,Vec2{Float64}}
+    barycoord::Union{Nothing,Vec3{Float64}}
+    distance_to_ray::Union{Nothing,Float64}
 end
 
 Intersection(distance,point,object,face_index) =
     Intersection(distance,point,object,face_index,nothing)
+
+Intersection(distance,point,object,face_index,instance_id) =
+    Intersection(distance,point,object,face_index,instance_id,
+                 nothing,nothing,nothing,nothing,nothing,nothing,nothing)
 
 """
 Möller–Trumbore ray/triangle test. Returns the ray parameter `t > 0` at the
@@ -121,12 +151,21 @@ mutable struct Raycaster
     morph_positions::Vector{Vec3{Float64}}
     worlds::Vector{Mat4{Float64}}  # per-depth world-matrix traversal stack
     camera::Union{Nothing,AbstractCamera}
+    vertex_codes::Vector{UInt8}             # lateral pre-filter scratch, one per vertex
+    skinned_positions::Vector{Vec3{Float64}} # posed skin vertices, one per vertex
+    hits::Vector{Intersection}              # per-cast hit scratch; `raycast` returns a copy
 end
 
 Raycaster(ray,near,far,layers,point_threshold,line_threshold,
           skinning_matrices,morph_positions) =
     Raycaster(ray,near,far,layers,point_threshold,line_threshold,
               skinning_matrices,morph_positions,Mat4{Float64}[],nothing)
+
+Raycaster(ray,near,far,layers,point_threshold,line_threshold,
+          skinning_matrices,morph_positions,worlds,camera) =
+    Raycaster(ray,near,far,layers,point_threshold,line_threshold,
+              skinning_matrices,morph_positions,worlds,camera,
+              UInt8[],Vec3{Float64}[],Intersection[])
 
 function Raycaster(ray::Ray{Float64}, near::Float64, far::Float64,
                    layers::Layers, point_threshold::Float64,
@@ -150,6 +189,11 @@ end
 
 function _raycaster_direction(dir::Vec3)
     d = _raycaster_vec3(dir, "direction")
+    # Normalizing an already normalized vector can move it by an ulp, so a
+    # raycaster revalidated on every `raycast` would drift between calls. A
+    # direction whose squared length is within rounding of one (normalized
+    # output is within 3 ulps) is kept as is, which makes this idempotent.
+    abs(d.x * d.x + d.y * d.y + d.z * d.z - 1.0) <= 8 * eps(Float64) && return d
     scale = max(abs(d.x), abs(d.y), abs(d.z))
     scale > 0.0 || throw(ArgumentError("Raycaster direction must be finite and non-zero"))
     scaled = d / scale
@@ -434,6 +478,150 @@ function _ray_segment_distance(
     return (ray_parameter, distance, segment_point)
 end
 
+# three.js Mesh.raycast culls in the object's local space. Triangles are tested
+# here in world space, where a mirroring (negative-determinant) transform
+# reverses the winding, so the culled side must be swapped to match.
+@inline function _raycast_world_side(side::Symbol, world::Mat4)
+    side === :double && return side
+    _mat4_linear_orientation_sign(world) < 0 || return side
+    return side === :front ? :back : :front
+end
+
+# Exact power-of-two rescaling. `ldexp` on each component stays exact where a
+# multiplier ldexp(1.0, k) would overflow (k > 1023, i.e. subnormal inputs).
+@inline _hit_ldexp(v::Vec3{Float64}, k::Int) =
+    Vec3(ldexp(v.x, k), ldexp(v.y, k), ldexp(v.z, k))
+
+@inline _hit_max_abs(v::Vec3{Float64}) = max(abs(v.x), abs(v.y), abs(v.z))
+
+# three.js Triangle.getBarycoord: weights of `p` for (a, b, c), zero for a
+# degenerate triangle. Offsets are scaled by an exact power of two first so
+# extreme world coordinates neither overflow nor underflow the dot products.
+function _hit_barycoord(p::Vec3{Float64}, a::Vec3{Float64}, b::Vec3{Float64},
+                        c::Vec3{Float64})
+    v0 = c - a
+    v1 = b - a
+    v2 = p - a
+    magnitude = max(_hit_max_abs(v0), _hit_max_abs(v1))
+    (isfinite(magnitude) && magnitude > 0.0) || return Vec3(0.0, 0.0, 0.0)
+    k = -exponent(magnitude)
+    v0 = _hit_ldexp(v0, k)
+    v1 = _hit_ldexp(v1, k)
+    v2 = _hit_ldexp(v2, k)
+    dot00 = dot(v0, v0)
+    dot01 = dot(v0, v1)
+    dot02 = dot(v0, v2)
+    dot11 = dot(v1, v1)
+    dot12 = dot(v1, v2)
+    denominator = dot00 * dot11 - dot01 * dot01
+    denominator == 0.0 && return Vec3(0.0, 0.0, 0.0)
+    inverse = 1.0 / denominator
+    u = (dot11 * dot02 - dot01 * dot12) * inverse
+    v = (dot00 * dot12 - dot01 * dot02) * inverse
+    return Vec3(1.0 - u - v, v, u)
+end
+
+# three.js Triangle.getInterpolatedAttribute for flat attribute storage.
+@inline function _hit_interpolate2(data::AbstractVector, stride::Int, i1::Int,
+                                   i2::Int, i3::Int, w::Vec3{Float64})
+    b1 = (i1 - 1) * stride
+    b2 = (i2 - 1) * stride
+    b3 = (i3 - 1) * stride
+    return @inbounds Vec2(
+        Float64(data[b1 + 1]) * w.x + Float64(data[b2 + 1]) * w.y + Float64(data[b3 + 1]) * w.z,
+        Float64(data[b1 + 2]) * w.x + Float64(data[b2 + 2]) * w.y + Float64(data[b3 + 2]) * w.z)
+end
+
+@inline function _hit_interpolate_attribute2(attribute::BufferAttribute, i1::Int, i2::Int,
+                                             i3::Int, w::Vec3{Float64})
+    data = attribute.data
+    stride = attribute.item_size
+    data isa Vector{Float64} && return _hit_interpolate2(data, stride, i1, i2, i3, w)
+    data isa Vector{Float32} && return _hit_interpolate2(data, stride, i1, i2, i3, w)
+    return _hit_interpolate2(data, stride, i1, i2, i3, w)
+end
+
+@inline function _hit_interpolate3(data::AbstractVector, i1::Int, i2::Int,
+                                   i3::Int, w::Vec3{Float64})
+    b1 = 3i1 - 3
+    b2 = 3i2 - 3
+    b3 = 3i3 - 3
+    return @inbounds Vec3(
+        Float64(data[b1 + 1]) * w.x + Float64(data[b2 + 1]) * w.y + Float64(data[b3 + 1]) * w.z,
+        Float64(data[b1 + 2]) * w.x + Float64(data[b2 + 2]) * w.y + Float64(data[b3 + 2]) * w.z,
+        Float64(data[b1 + 3]) * w.x + Float64(data[b2 + 3]) * w.y + Float64(data[b3 + 3]) * w.z)
+end
+
+# (c - b) × (a - b) with the edges rescaled by a common power of two, so the
+# product neither overflows nor underflows at extreme coordinates. Only its
+# direction is used.
+@inline function _hit_scaled_face_cross(a::Vec3{Float64}, b::Vec3{Float64},
+                                        c::Vec3{Float64})
+    e1 = c - b
+    e2 = a - b
+    magnitude = max(_hit_max_abs(e1), _hit_max_abs(e2))
+    (isfinite(magnitude) && magnitude > 0.0) || return Vec3(0.0, 0.0, 0.0)
+    k = -exponent(magnitude)
+    return cross(_hit_ldexp(e1, k), _hit_ldexp(e2, k))
+end
+
+# three.js Triangle.getNormal: normalize((c - b) × (a - b)), zero if degenerate.
+@inline _hit_triangle_normal(a::Vec3{Float64}, b::Vec3{Float64}, c::Vec3{Float64}) =
+    _hit_unit(_hit_scaled_face_cross(a, b, c))
+
+# Unit vector along `v`, zero for a zero or non-finite `v`. The exact
+# power-of-two prescale keeps tiny and huge vectors from under/overflowing.
+@inline function _hit_unit(v::Vec3{Float64})
+    magnitude = _hit_max_abs(v)
+    (isfinite(magnitude) && magnitude > 0.0) || return Vec3(0.0, 0.0, 0.0)
+    w = _hit_ldexp(v, -exponent(magnitude))
+    return w / sqrt(dot(w, w))
+end
+
+# Hit record for triangle `face` of `geo` (vertices i1, i2, i3), mirroring
+# three.js checkGeometryIntersection (src/objects/Mesh.js). `a, b, c` are the
+# world-space vertices that were intersected and `m` maps the object's local
+# space to world. `local_triangle` holds the local vertices when known;
+# otherwise (posed skins) the local face normal is pulled back from world
+# space through `m`, since (M e₁) × (M e₂) = det(M) M⁻ᵀ (e₁ × e₂).
+function _triangle_intersection(obj, distance::Float64, rc::Raycaster,
+                                face::Int, instance_id, geo::BufferGeometry,
+                                i1::Int, i2::Int, i3::Int, a::Vec3{Float64},
+                                b::Vec3{Float64}, c::Vec3{Float64},
+                                local_triangle, m::Mat4{Float64})
+    o = rc.ray.origin
+    d = rc.ray.direction
+    point = o + d * distance
+    weights = _hit_barycoord(point, a, b, c)
+    n = geo.n_vertices
+    uv = length(geo.uvs) >= 2n ? _hit_interpolate2(geo.uvs, 2, i1, i2, i3, weights) : nothing
+    uv1_attribute = _uv2_attribute(geo)
+    # Attributes are stored with an abstract element type; the barrier keeps
+    # the interpolated value concrete instead of boxing it.
+    uv1 = uv1_attribute === nothing ? nothing :
+          _hit_interpolate_attribute2(uv1_attribute, i1, i2, i3, weights)::Vec2{Float64}
+    if local_triangle === nothing
+        e = m.e
+        world_normal = _hit_scaled_face_cross(a, b, c)
+        pulled = Vec3(e[1] * world_normal.x + e[2] * world_normal.y + e[3] * world_normal.z,
+                      e[5] * world_normal.x + e[6] * world_normal.y + e[7] * world_normal.z,
+                      e[9] * world_normal.x + e[10] * world_normal.y + e[11] * world_normal.z)
+        pulled = _mat4_linear_orientation_sign(m) < 0 ? -pulled : pulled
+        face_normal = _hit_unit(pulled)
+    else
+        la, lb, lc = local_triangle
+        face_normal = _hit_triangle_normal(la, lb, lc)
+    end
+    normal = nothing
+    if length(geo.normals) >= 3n
+        interpolated = _hit_interpolate3(geo.normals, i1, i2, i3, weights)
+        local_direction = mat4_transform_direction(mat4_inverse(m), d)
+        normal = dot(interpolated, local_direction) > 0.0 ? -interpolated : interpolated
+    end
+    return Intersection(distance, point, obj, face, instance_id, (i1, i2, i3),
+                        face_normal, normal, uv, uv1, weights, nothing)
+end
+
 @inline function _raycast_morph_positions(rc::Raycaster, obj, geo::BufferGeometry)
     return _object_morph_positions(obj, geo, rc.morph_positions)
 end
@@ -443,6 +631,85 @@ end
     p0 = morphed === nothing ? get_vertex(geo, vi) : morphed[vi]
     return _skin_position(mats, sm.skin_indices[vi], sm.skin_weights[vi], p0)
 end
+
+# Lateral pre-filter. Two orthogonal planes contain the ray; a primitive whose
+# vertices all lie beyond the same plane by more than `pad` plus a rounding
+# margin cannot meet the ray, so the exact test is skipped for it. The planes
+# are pulled back through the affine matrix `m` (u = (Mᵀn)·p + n·(t - o)), so
+# local vertices are classified without a world transform. The margin is 1e-9
+# relative to the coordinate magnitudes involved, many orders above the
+# rounding error of either computation, so the filter never rejects anything
+# the exact test could accept; non-finite values disable it.
+struct _RayLateralFilter
+    au::Vec3{Float64}
+    bu::Float64
+    av::Vec3{Float64}
+    bv::Float64
+    linear_scale::Float64   # largest |entry| of the linear part of `m`
+    offset_scale::Float64   # |translation|₁ + |ray origin|₁
+    pad::Float64            # pick radius for points and lines, zero for triangles
+end
+
+function _ray_lateral_filter(rc::Raycaster, m::Mat4{Float64}, pad::Float64)
+    e = m.e
+    (e[4] == 0.0 && e[8] == 0.0 && e[12] == 0.0 && e[16] == 1.0) || return nothing
+    o = rc.ray.origin
+    d = rc.ray.direction
+    ax, ay, az = abs(d.x), abs(d.y), abs(d.z)
+    helper = ax <= ay && ax <= az ? Vec3(1.0, 0.0, 0.0) :
+             ay <= az ? Vec3(0.0, 1.0, 0.0) : Vec3(0.0, 0.0, 1.0)
+    nu = normalize(cross(d, helper))
+    nv = cross(d, nu)
+    c1 = Vec3(e[1], e[2], e[3])
+    c2 = Vec3(e[5], e[6], e[7])
+    c3 = Vec3(e[9], e[10], e[11])
+    t = Vec3(e[13], e[14], e[15])
+    relative = t - o
+    au = Vec3(dot(c1, nu), dot(c2, nu), dot(c3, nu))
+    av = Vec3(dot(c1, nv), dot(c2, nv), dot(c3, nv))
+    bu = dot(relative, nu)
+    bv = dot(relative, nv)
+    linear_scale = max(abs(e[1]), abs(e[2]), abs(e[3]), abs(e[5]), abs(e[6]),
+                       abs(e[7]), abs(e[9]), abs(e[10]), abs(e[11]))
+    offset_scale = abs(t.x) + abs(t.y) + abs(t.z) + abs(o.x) + abs(o.y) + abs(o.z)
+    (_finite_vec3(au) && _finite_vec3(av) && isfinite(bu) && isfinite(bv) &&
+     isfinite(linear_scale) && isfinite(offset_scale)) || return nothing
+    return _RayLateralFilter(au, bu, av, bv, linear_scale, offset_scale, pad)
+end
+
+# Bit set of the half-spaces (u > s, u < -s, v > s, v < -s) holding `p`; a
+# primitive is beyond a plane when the codes of all its vertices share a bit.
+@inline function _ray_lateral_code(f::_RayLateralFilter, p::Vec3{Float64})
+    u = dot(f.au, p) + f.bu
+    v = dot(f.av, p) + f.bv
+    slack = f.pad + 1.0e-9 * (f.pad + f.offset_scale +
+                              f.linear_scale * (abs(p.x) + abs(p.y) + abs(p.z)))
+    (isfinite(u) && isfinite(v) && isfinite(slack)) || return 0x00
+    return (u > slack ? 0x01 : 0x00) | (u < -slack ? 0x02 : 0x00) |
+           (v > slack ? 0x04 : 0x00) | (v < -slack ? 0x08 : 0x00)
+end
+
+# Codes for every vertex of `geo` (optionally morphed); `nothing` when the
+# filter is unavailable for this matrix.
+function _ray_lateral_codes!(rc::Raycaster, geo::BufferGeometry, positions,
+                             m::Mat4{Float64}, pad::Float64)
+    filter = _ray_lateral_filter(rc, m, pad)
+    filter === nothing && return nothing
+    codes = rc.vertex_codes
+    n = geo.n_vertices
+    length(codes) < n && resize!(codes, n)
+    @inbounds for vi in 1:n
+        codes[vi] = _ray_lateral_code(filter, _geometry_vertex(geo, positions, vi))
+    end
+    return codes
+end
+
+@inline _ray_lateral_rejects(::Nothing, i1::Int, i2::Int, i3::Int) = false
+@inline _ray_lateral_rejects(codes::Vector{UInt8}, i1::Int, i2::Int, i3::Int) =
+    @inbounds((codes[i1] & codes[i2] & codes[i3]) != 0x00)
+@inline _ray_lateral_rejects(::Nothing, i1::Int, i2::Int) = false
+@inline _ray_lateral_rejects(codes::Vector{UInt8}, i1::Int, i2::Int) =
+    @inbounds((codes[i1] & codes[i2]) != 0x00)
 
 # Build the world-space ray through normalized device coords (x,y ∈ [-1,1]).
 function _camera_ray(camera::PerspectiveCamera, ndc_x, ndc_y)
@@ -518,14 +785,19 @@ function _raycast_points!(hits,rc::Raycaster,obj,geo::BufferGeometry,wm::Mat4,
     o,d = rc.ray.origin,rc.ray.direction
     thr = rc.point_threshold
     _raycast_bounds_miss(rc, geo, morphed_positions, wm, thr) && return hits
+    filter = _ray_lateral_filter(rc, wm, thr)
     @inbounds for entry in _draw_entry_range(geo)
         vi = _draw_vertex_index(geo, entry)
-        p = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, vi))
+        local_point = _geometry_vertex(geo, morphed_positions, vi)
+        filter === nothing || _ray_lateral_code(filter, local_point) == 0x00 || continue
+        p = mat4_transform_point(wm, local_point)
         t, dist = _ray_point_distance(o, d, p)
         if dist < thr && rc.near <= t <= rc.far
             # Hit location is the closest ray point (three.js Points testPoint);
             # face_index = vertex index.
-            push!(hits, Intersection(t, o + d * t, obj, vi, instance_id))
+            push!(hits, Intersection(t, o + d * t, obj, vi, instance_id,
+                                     nothing, nothing, nothing, nothing, nothing,
+                                     nothing, dist))
         end
     end
     return hits
@@ -541,11 +813,13 @@ function _raycast_lines!(hits,rc::Raycaster,obj,geo::BufferGeometry,wm::Mat4,
     entries = _draw_entry_range(geo)
     isempty(entries) && return hits
     _raycast_bounds_miss(rc, geo, morphed_positions, wm, thr) && return hits
+    codes = _ray_lateral_codes!(rc, geo, morphed_positions, wm, thr)
     first_entry = first(entries)
     last_entry = last(entries)
     @inbounds for entry in first_entry:step:(last_entry - 1)
         vi1 = _draw_vertex_index(geo, entry)
         vi2 = _draw_vertex_index(geo, entry + 1)
+        _ray_lateral_rejects(codes, vi1, vi2) && continue
         a = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, vi1))
         b = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, vi2))
         t, dist, seg_pt = _ray_segment_distance(o, d, a, b)
@@ -557,6 +831,7 @@ function _raycast_lines!(hits,rc::Raycaster,obj,geo::BufferGeometry,wm::Mat4,
     if mode === :line_loop && last_entry - first_entry + 1 > 2
         vi1 = _draw_vertex_index(geo, last_entry)
         vi2 = _draw_vertex_index(geo, first_entry)
+        _ray_lateral_rejects(codes, vi1, vi2) && return hits
         a = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, vi1))
         b = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, vi2))
         t, dist, seg_pt = _ray_segment_distance(o, d, a, b)
@@ -580,7 +855,18 @@ function _raycast_sprite!(hits,rc::Raycaster,obj::Sprite,wm::Mat4)
     distance = first_hit === nothing ? second_hit :
                second_hit === nothing ? first_hit : min(first_hit,second_hit)
     if distance !== nothing && rc.near <= distance <= rc.far
-        push!(hits,Intersection(distance,origin+direction*distance,obj,0))
+        point = origin + direction * distance
+        # three.js Sprite.raycast interpolates the corner UVs (0,0), (1,0),
+        # (1,1) over the first triangle, or (0,0), (0,1), (1,1) over (a, d, c).
+        uv = if distance === first_hit
+            w = _hit_barycoord(point, a, b, c)
+            Vec2(w.y + w.z, w.z)
+        else
+            w = _hit_barycoord(point, a, d, c)
+            Vec2(w.z, w.y + w.z)
+        end
+        push!(hits, Intersection(distance, point, obj, 0, nothing, nothing, nothing,
+                                 nothing, uv, nothing, nothing, nothing))
     end
     return hits
 end
@@ -599,17 +885,24 @@ function _raycast_object!(hits::Vector{Intersection}, rc::Raycaster,
         geo = _mesh_geometry(obj)
         _validate_triangle_geometry_indices(geo, "raycast")
         morphed_positions = _raycast_morph_positions(rc, obj, geo)
-        # Cull by material side like three.js Mesh.raycast (default :front).
-        side = material_side(_mesh_material(obj))
         _raycast_bounds_miss(rc, geo, morphed_positions, wm, 0.0) && return hits
+        # Cull by material side like three.js Mesh.raycast (default :front).
+        side = _raycast_world_side(material_side(_mesh_material(obj)), wm)
+        codes = _ray_lateral_codes!(rc, geo, morphed_positions, wm, 0.0)
         @inbounds for fi in _draw_face_range(geo)
             i1, i2, i3 = get_face(geo, fi)
+            _ray_lateral_rejects(codes, i1, i2, i3) && continue
             a = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, i1))
             b = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, i2))
             c = mat4_transform_point(wm, _geometry_vertex(geo, morphed_positions, i3))
             t = _ray_triangle_intersect_unchecked(o, d, a, b, c, 1e-9, side)
             if t !== nothing && rc.near <= t <= rc.far
-                push!(hits, Intersection(t, o + d * t, obj, fi))
+                local_triangle = (_geometry_vertex(geo, morphed_positions, i1),
+                                  _geometry_vertex(geo, morphed_positions, i2),
+                                  _geometry_vertex(geo, morphed_positions, i3))
+                push!(hits, _triangle_intersection(obj, t, rc, fi, nothing, geo,
+                                                   i1, i2, i3, a, b, c,
+                                                   local_triangle, wm))
             end
         end
     elseif obj isa InstancedMesh
@@ -626,14 +919,22 @@ function _raycast_object!(hits::Vector{Intersection}, rc::Raycaster,
             m = wm*im
             if triangle_mode
                 _raycast_bounds_miss(rc, bounds, m, 0.0) && continue
+                instance_side = _raycast_world_side(side, m)
+                codes = _ray_lateral_codes!(rc, geo, nothing, m, 0.0)
                 for fi in _draw_face_range(geo)
                     i1, i2, i3 = get_face(geo, fi)
+                    _ray_lateral_rejects(codes, i1, i2, i3) && continue
                     a = mat4_transform_point(m, get_vertex(geo, i1))
                     b = mat4_transform_point(m, get_vertex(geo, i2))
                     c = mat4_transform_point(m, get_vertex(geo, i3))
-                    t = _ray_triangle_intersect_unchecked(o, d, a, b, c, 1e-9, side)
+                    t = _ray_triangle_intersect_unchecked(o, d, a, b, c, 1e-9, instance_side)
                     if t !== nothing && rc.near <= t <= rc.far
-                        push!(hits, Intersection(t, o + d * t, obj, fi, instance_index))
+                        local_triangle = (get_vertex(geo, i1), get_vertex(geo, i2),
+                                          get_vertex(geo, i3))
+                        push!(hits, _triangle_intersection(obj, t, rc, fi,
+                                                           instance_index, geo,
+                                                           i1, i2, i3, a, b, c,
+                                                           local_triangle, m))
                     end
                 end
             elseif _instanced_point_drawable(obj)
@@ -650,15 +951,26 @@ function _raycast_object!(hits::Vector{Intersection}, rc::Raycaster,
         _validate_skinned_mesh(obj, "SkinnedMesh")
         mats = _skinning_matrices!(rc.skinning_matrices, obj, :world)
         morphed_positions = _raycast_morph_positions(rc, obj, geo)
-        side = material_side(obj.material)
+        side = _raycast_world_side(material_side(obj.material), wm)
+        # Pose each vertex once (faces share vertices); skinned positions are
+        # already in world space.
+        posed = rc.skinned_positions
+        resize!(posed, geo.n_vertices)
+        @inbounds for vi in 1:geo.n_vertices
+            posed[vi] = _raycast_skinned_vertex(obj, geo, mats, morphed_positions, vi)
+        end
+        codes = _ray_lateral_codes!(rc, geo, posed, Mat4{Float64}(), 0.0)
         @inbounds for fi in _draw_face_range(geo)
             i1, i2, i3 = get_face(geo, fi)
-            a = _raycast_skinned_vertex(obj, geo, mats, morphed_positions, i1)
-            b = _raycast_skinned_vertex(obj, geo, mats, morphed_positions, i2)
-            c = _raycast_skinned_vertex(obj, geo, mats, morphed_positions, i3)
+            _ray_lateral_rejects(codes, i1, i2, i3) && continue
+            a = posed[i1]
+            b = posed[i2]
+            c = posed[i3]
             t = _ray_triangle_intersect_unchecked(o, d, a, b, c, 1e-9, side)
             if t !== nothing && rc.near <= t <= rc.far
-                push!(hits, Intersection(t, o + d * t, obj, fi))
+                push!(hits, _triangle_intersection(obj, t, rc, fi, nothing, geo,
+                                                   i1, i2, i3, a, b, c,
+                                                   nothing, wm))
             end
         end
     elseif obj isa PointsObject
@@ -746,16 +1058,25 @@ visits the LOD's visible children, so that level can be reported twice.
 """
 function raycast(rc::Raycaster, root::AbstractObject3D; recursive::Bool=true)
     _validate_raycaster!(rc)
-    hits = Intersection[]
-    if recursive
-        _visible_in_tree(root) &&
-            _raycast_recursive!(hits, rc, root, compute_world_matrix(root),
-                                rc.worlds)
-    else
-        if _visible_in_tree(root) && _layers_test_object(root, rc.layers)
-            _raycast_object!(hits, rc, root, compute_world_matrix(root))
+    # Hits collect in the raycaster's scratch vector and are copied out at
+    # their exact count: an Intersection is 256 bytes, and growing a fresh
+    # vector by push! would reserve several of them even for a single hit.
+    hits = rc.hits
+    empty!(hits)
+    try
+        if recursive
+            _visible_in_tree(root) &&
+                _raycast_recursive!(hits, rc, root, compute_world_matrix(root),
+                                    rc.worlds)
+        else
+            if _visible_in_tree(root) && _layers_test_object(root, rc.layers)
+                _raycast_object!(hits, rc, root, compute_world_matrix(root))
+            end
         end
+        sort!(hits; lt=_intersection_distance_lt)
+        return copy(hits)
+    finally
+        # Drop the scratch references so hit objects are not kept alive.
+        empty!(hits)
     end
-    sort!(hits; lt=_intersection_distance_lt)
-    return hits
 end

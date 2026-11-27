@@ -126,8 +126,11 @@ end
         quad_center=Vec3(0.4,-0.2,-4.0)
         factor=perspective && !attenuate ? 4.0 : 1.0
         for (u,v,inside) in ((0.23,0.76,true),(0.2,0.7,true),(-0.05,0.4,false),(1.05,0.4,false),(0.4,1.05,false))
-            # A quarter-turn maps local (x,y) to (-y,x); scale follows rotation.
-            target=quad_center+right*(-(v-0.7)*0.8factor)+up*((u-0.2)*0.3factor)
+            # A quarter-turn maps (x,y) to (-y,x). The world scale (0.8,0.3)
+            # applies before the rotation, as in three.js Sprite.raycast
+            # transformVertex (src/objects/Sprite.js:233-239) and the sprite
+            # vertex shader (src/renderers/shaders/ShaderLib/sprite.glsl.js).
+            target=quad_center+right*(-(v-0.7)*0.3factor)+up*((u-0.2)*0.8factor)
             ndc=mat4_transform_point(projection_matrix(view_camera)*view_matrix(view_camera),target)
             picker=Raycaster(Vec3(),Vec3(0.0,0.0,-1.0))
             set_from_camera!(picker,view_camera,ndc.x,ndc.y)

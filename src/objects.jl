@@ -384,9 +384,16 @@ function sprite_world_matrix(sprite::Sprite, camera::AbstractCamera,
           p.x,        p.y,        p.z,        1.0))
 end
 
+# Quad corners in world space, ordered (0,0), (1,0), (1,1), (0,1) in sprite UV.
+# Like three.js Sprite.raycast (transformVertex) and the sprite vertex shader,
+# each centered corner is scaled by the world scale first and then rotated in
+# the view plane, so non-uniform scale stays aligned with the screen axes.
 @inline function _sprite_quad_corners(sprite::Sprite, material,
                                        camera::AbstractCamera, world::Mat4, view::Mat4)
-    world64 = convert(Mat4{Float64},world)
+    world64 = convert(Mat4{Float64}, world)
+    # Rows 1 and 2 of the view matrix are the camera right/up axes in world space.
+    right = Vec3(mat4_get(view,1,1), mat4_get(view,1,2), mat4_get(view,1,3))
+    up    = Vec3(mat4_get(view,2,1), mat4_get(view,2,2), mat4_get(view,2,3))
     rotation = _material_field(material, :rotation)
     rotation === nothing && (rotation = 0.0)
     size_attenuation = _material_field(material, :size_attenuation)
@@ -394,19 +401,13 @@ end
     center_view = mat4_transform_vec4(view,Vec4(center.x,center.y,center.z,1.0))
     attenuation = size_attenuation === false && camera isa PerspectiveCamera ?
                   max(0.0001,-center_view.z) : 1.0
+    scale_x = _mat4_linear_column_norm(world64, 1) * attenuation
+    scale_y = _mat4_linear_column_norm(world64, 2) * attenuation
     cosine, sine = cos(rotation), sin(rotation)
-    # three.js sprite.glsl.js scales the centred quad by the world scale, then
-    # rotates it in the view plane, so a non-square sprite stays rectangular.
-    sx = _mat4_linear_column_norm(world64,1)
-    sy = _mat4_linear_column_norm(world64,2)
-    right = Vec3(mat4_get(view,1,1),mat4_get(view,1,2),mat4_get(view,1,3))
-    up = Vec3(mat4_get(view,2,1),mat4_get(view,2,2),mat4_get(view,2,3))
     return ntuple(4) do index
-        x = ((index in (2,3) ? 1.0 : 0.0)-sprite.center.x)*sx
-        y = ((index in (3,4) ? 1.0 : 0.0)-sprite.center.y)*sy
-        lx = (cosine*x-sine*y)*attenuation
-        ly = (sine*x+cosine*y)*attenuation
-        center+right*lx+up*ly
+        x = ((index in (2,3) ? 1.0 : 0.0)-sprite.center.x)*scale_x
+        y = ((index in (3,4) ? 1.0 : 0.0)-sprite.center.y)*scale_y
+        center + right*(cosine*x-sine*y) + up*(sine*x+cosine*y)
     end
 end
 
