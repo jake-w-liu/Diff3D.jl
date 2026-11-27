@@ -3139,9 +3139,19 @@ end
     return nothing
 end
 
-# Whole loops in `x = time / duration`, saturated so the Int conversion
-# cannot throw (exact for every count below 2^52).
-@inline _action_loop_delta(x::Float64) = Int(clamp(floor(x), -2.0^52, 2.0^52))
+# Whole loops in `x = time / duration` (three.js `Math.floor`), returned as
+# the Float64 the time is wrapped by and as the loop-count increment
+# |floor(x)|. The increment saturates at 2^53, which keeps its parity (every
+# Float64 at or above 2^53 is even), so the Int conversion cannot throw; the
+# wrapped time still uses the exact floor, as three.js does.
+@inline function _action_loop_delta(x::Float64)
+    loops = floor(x)
+    return loops, Int(min(abs(loops), 2.0^53))
+end
+
+# Loop count plus `n` wraps, saturated instead of overflowing.
+@inline _action_add_loops(count::Int, n::Int) =
+    count > typemax(Int) - n ? typemax(Int) : count + n
 
 # three.js AnimationAction._updateTime (AnimationAction.js:724-880): advance
 # the clip-local time by the scaled `delta` and return the clip time to
@@ -3191,9 +3201,9 @@ function _update_action_time!(mixer::AnimationMixer, delta::Float64)
         return 0.0
     end
     if time >= duration || time < 0.0
-        loop_delta = _action_loop_delta(time / duration)
+        loop_delta, wraps = _action_loop_delta(time / duration)
         time -= duration * loop_delta
-        loop_count += abs(loop_delta)
+        loop_count = _action_add_loops(loop_count, wraps)
         if repetitions >= 0 && repetitions - loop_count <= 0
             _finish_action!(mixer)
             time = delta > 0.0 ? duration : 0.0
@@ -3247,9 +3257,9 @@ function _animation_loop_time(t::Real, duration::Real, loop::Symbol,
     time = x
     loop_count = x > 0.0 ? 0 : -1
     if time >= d || time < 0.0
-        loop_delta = _action_loop_delta(time / d)
+        loop_delta, wraps = _action_loop_delta(time / d)
         time -= d * loop_delta
-        loop_count += abs(loop_delta)
+        loop_count = _action_add_loops(loop_count, wraps)
         if repetitions >= 0 && repetitions - loop_count <= 0
             clamp_when_finished || return nothing
             time = x > 0.0 ? d : 0.0
@@ -4290,6 +4300,8 @@ draws every line in that colour instead.
 function GridHelper(size=10.0, divisions=10; color=nothing,
                     color1=_HELPER_GRID_COLOR1, color2=_HELPER_GRID_COLOR2)
     size = _geometry_finite_float(size, "GridHelper size")
+    color1 = _validated_material_color(color1, :color1)
+    color2 = _validated_material_color(color2, :color2)
     divisions = _clamp_seg(divisions, 1)   # divisions=0 would make step=Inf -> NaN vertices
     lines = _geometry_checked_mul(
         2, _geometry_checked_add(divisions, 1, "GridHelper line count"),
@@ -4618,6 +4630,8 @@ every segment in that one colour instead.
 """
 function SkeletonHelper(skeleton::Skeleton; color=nothing,
                         color1=Color3(0.0, 0.0, 1.0), color2=Color3(0.0, 1.0, 0.0))
+    color1 = _validated_material_color(color1, :color1)
+    color2 = _validated_material_color(color2, :color2)
     bones = skeleton.bones
     n_bones = length(bones)
     pos = Vector{Float64}(
@@ -4722,6 +4736,8 @@ function PolarGridHelper(radius=10.0, sectors::Int=16, rings::Int=8;
                          circle_segments::Int=64, color=nothing,
                          color1=_HELPER_GRID_COLOR1, color2=_HELPER_GRID_COLOR2)
     radius = _geometry_finite_float(radius, "PolarGridHelper radius")
+    color1 = _validated_material_color(color1, :color1)
+    color2 = _validated_material_color(color2, :color2)
     sectors = _geometry_nonnegative_int(sectors, "PolarGridHelper sectors")
     rings = _geometry_nonnegative_int(rings, "PolarGridHelper rings")
     circle_segments = _geometry_nonnegative_int(

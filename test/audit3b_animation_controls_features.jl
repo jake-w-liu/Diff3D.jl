@@ -750,3 +750,34 @@ end
     @test all(isapprox.(_helper_colors(pg)[1:6:end],
                        [c2, c1, c2, c1, c2, c2, c2, c2, c1, c1, c1, c1]; atol=1e-8))
 end
+
+@testset "mixer wraps very large times like three.js (review)" begin
+    # three.js r186 (node): mixer.setTime(t) on a repeat clip of 1.5 s with
+    # position[x] [0, 1.5] -> [0, 1.5] wraps by the exact Math.floor of
+    # t / duration and samples 0 at each of these times. A loop count clamped
+    # to 2^52 before wrapping left the time past the last key (1.5).
+    obj = Group()
+    tr = NumberKeyframeTrack(obj, "position[x]", [0.0, 1.5], [0.0, 1.5])
+    for t in (0.75 + 2.0^53 * 1.5, 1e17 + 0.25, 3.7e20, -1e18 - 0.3)
+        m = AnimationMixer(AnimationClip("c", 1.5, AbstractKeyframeTrack[tr]))
+        mixer_set_time!(m, t)
+        @test obj.position.x == 0.0
+        @test Diff3D._animation_loop_time(t, 1.5, :repeat, -1, false) == 0.0
+        mixer_update!(m, 0.25)                   # the count stays usable
+        @test obj.position.x == 0.25
+    end
+    # The saturated increment keeps the parity: every Float64 >= 2^53 is even.
+    @test Diff3D._action_loop_delta(2.0^60) == (2.0^60, 2^53)
+    @test Diff3D._action_add_loops(typemax(Int) - 1, 5) == typemax(Int)
+end
+
+@testset "helper colour keywords are validated (review)" begin
+    bad = Color3(NaN, 0.0, 0.0)
+    @test_throws ArgumentError GridHelper(4.0, 2; color1=bad)
+    @test_throws ArgumentError GridHelper(4.0, 2; color2=bad)
+    @test_throws ArgumentError PolarGridHelper(2.0, 4, 2; color1=bad)
+    @test_throws ArgumentError PolarGridHelper(2.0, 4, 2; color2=(0.5, 0.5, 0.5))
+    b0 = Bone(); b1 = Bone(); add!(b0, b1)
+    @test_throws ArgumentError SkeletonHelper(Skeleton([b0, b1]); color2=bad)
+    @test GridHelper(4.0, 2; color1=Color3{Float32}(1, 0, 0)) isa LineSegments
+end
