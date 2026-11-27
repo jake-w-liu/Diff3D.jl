@@ -17853,8 +17853,11 @@ end
             # float preserves the ADVar; unsupported Base math now fails loudly
             # (old code: asinh constant-folds to Float64 and reverse_gradient throws
             # ErrorException("f must return a scalar ADVar") instead)
+            # asinh gained a reverse rule (d/dx asinh(x) = 1/sqrt(1 + x^2)), so
+            # the unsupported example is now `significand`.
             @test float(ADVar(2.0)) isa ADVar
-            @test_throws MethodError reverse_gradient(x -> asinh(x[1]), [1.0])
+            @test reverse_gradient(x -> asinh(x[1]), [1.0])[1] ≈ 1 / sqrt(2.0)
+            @test_throws MethodError reverse_gradient(x -> significand(x[1]), [1.0])
         end
 
         @testset "renderer_extra" begin
