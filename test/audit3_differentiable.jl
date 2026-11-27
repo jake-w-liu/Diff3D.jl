@@ -227,3 +227,43 @@ const AUDIT3_GENERIC_LOSS = Tuple{Array{T,3} where T, Array{S,3} where S}
         @test_throws ArgumentError reverse_gradient(p -> loss(reshape(p, H, W, C), zeros(H, W, 2)), x)
     end
 end
+
+function audit3_sphere(eye)
+    geo = SphereGeometry(radius=1.0, width_segments=16, height_segments=8)
+    faces = [get_face(geo, i) for i in 1:geo.n_faces]
+    colors = [Color3(0.5, 0.2 + 0.003i, 0.3) for i in eachindex(faces)]
+    p = Float64[]
+    for i in 1:geo.n_vertices
+        v = get_vertex(geo, i)
+        push!(p, v.x, v.y, v.z)
+    end
+    vp = projection_matrix_from_params(pi / 4, 1.0, 0.1, 100.0) *
+         view_matrix_from_params(eye..., 0.0, 0.0, 0.0, 0.0, 1.0, 0.0)
+    return p, faces, colors, vp
+end
+
+@testset "Reverse soft render projects shared vertices once" begin
+    width = height = 24
+    # The second eye leaves one vertex behind the near plane, so its faces are
+    # clipped into interpolated vertices that must not reuse cached ones.
+    for eye in ((0.4, 0.6, 3.0), (0.1, 0.1, 1.05))
+        p, faces, colors, vp = audit3_sphere(eye)
+        render = vertex_render_fn(faces, colors, vp, width, height)
+        weights = audit3_weights(height, width)
+        objective(q) = sum(render(q) .* weights)
+        # Reverse and forward mode differentiate the same primal program.
+        @test normwise(reverse_gradient(objective, p), ForwardDiff.gradient(objective, p)) < 1e-9
+        recorded = Ref(0)
+        reverse_gradient(p) do q
+            before = length(Diff3D._ad_tape_stack()[end])
+            image = render(q)
+            recorded[] = length(Diff3D._ad_tape_stack()[end]) - before
+            sum(image)
+        end
+        # Each of the 153 vertices is transformed and projected once and clip
+        # and bounding-box decisions read primal values, leaving about fifty
+        # nodes per face for edges and depth; per-face projection of all
+        # three vertices recorded about two hundred.
+        eye[3] == 3.0 && @test recorded[] <= 3 * width * height + 80 * length(faces)
+    end
+end

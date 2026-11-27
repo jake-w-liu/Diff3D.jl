@@ -260,31 +260,35 @@ function soft_render(vertices::AbstractVector{Vec3{Tv}},
     max_screen_tris = _render_checked_mul(
         3, n_faces, "soft_render clipped triangle count")
 
+    TW = T(W)
+    TH = T(H)
+    # Heap-backed AD scalars record every operation, so their vertices are
+    # transformed and projected once instead of once per incident face.
+    cache = isbitstype(T) ? nothing : _SoftVertexCache{T}(n_vertices)
     for fi in 1:n_faces
         i1, i2, i3 = faces[fi]
-        v1 = verts[i1]; v2 = verts[i2]; v3 = verts[i3]
-        c1 = mat4_transform_vec4(vp, Vec4(v1.x, v1.y, v1.z, one(T)))
-        c2 = mat4_transform_vec4(vp, Vec4(v2.x, v2.y, v2.z, one(T)))
-        c3 = mat4_transform_vec4(vp, Vec4(v3.x, v3.y, v3.z, one(T)))
-        n_clipped, c1, c2, c3, c4 = _soft_clip_near_triangle(c1, c2, c3, eps)
+        a = _soft_vertex_clip(cache, verts, vp, i1)
+        b = _soft_vertex_clip(cache, verts, vp, i2)
+        c = _soft_vertex_clip(cache, verts, vp, i3)
+        n_clipped, c1, c2, c3, c4 = _soft_clip_near_triangle(a, b, c, eps)
         n_clipped < 3 && continue
         n_clipped, c1, c2, c3, c4, c5 = _soft_clip_far_polygon(
             n_clipped, c1, c2, c3, c4, eps)
         n_clipped < 3 && continue
-        s1 = _soft_project_clip_to_screen(c1, T(W), T(H))
-        s2 = _soft_project_clip_to_screen(c2, T(W), T(H))
-        s3 = _soft_project_clip_to_screen(c3, T(W), T(H))
+        s1 = _soft_vertex_screen(cache, c1, a, i1, b, i2, c, i3, TW, TH)
+        s2 = _soft_vertex_screen(cache, c2, a, i1, b, i2, c, i3, TW, TH)
+        s3 = _soft_vertex_screen(cache, c3, a, i1, b, i2, c, i3, TW, TH)
         n_screen_tris = _soft_store_screen_triangle!(
             screen_tris, n_screen_tris, max_screen_tris,
             s1, s2, s3, cols[fi], σ, γ, eps, use_relative_depth, W, H)
         if n_clipped >= 4
-            s4 = _soft_project_clip_to_screen(c4, T(W), T(H))
+            s4 = _soft_vertex_screen(cache, c4, a, i1, b, i2, c, i3, TW, TH)
             n_screen_tris = _soft_store_screen_triangle!(
                 screen_tris, n_screen_tris, max_screen_tris,
                 s1, s3, s4, cols[fi], σ, γ, eps, use_relative_depth, W, H)
         end
         if n_clipped == 5
-            s5 = _soft_project_clip_to_screen(c5, T(W), T(H))
+            s5 = _soft_project_clip_to_screen(c5, TW, TH)
             n_screen_tris = _soft_store_screen_triangle!(
                 screen_tris, n_screen_tris, max_screen_tris,
                 s1, s4, s5, cols[fi], σ, γ, eps, use_relative_depth, W, H)
@@ -438,6 +442,47 @@ end
         _stable_color_lerp(average_color, bg, w_bg / denom)
 end
 
+# Per-vertex clip and screen positions, filled on first use.
+struct _SoftVertexCache{T}
+    clip::Vector{Vec4{T}}
+    screen::Vector{Vec3{T}}
+    has_clip::Vector{Bool}
+    has_screen::Vector{Bool}
+end
+
+_SoftVertexCache{T}(n::Int) where {T} =
+    _SoftVertexCache{T}(Vector{Vec4{T}}(undef, n), Vector{Vec3{T}}(undef, n),
+                        fill(false, n), fill(false, n))
+
+@inline function _soft_vertex_clip(::Nothing, verts, vp, index::Int)
+    v = verts[index]
+    return mat4_transform_vec4(vp, Vec4(v.x, v.y, v.z, one(v.x)))
+end
+
+@inline function _soft_vertex_clip(cache::_SoftVertexCache, verts, vp, index::Int)
+    if !cache.has_clip[index]
+        cache.clip[index] = _soft_vertex_clip(nothing, verts, vp, index)
+        cache.has_clip[index] = true
+    end
+    return cache.clip[index]
+end
+
+@inline _soft_vertex_screen(::Nothing, clip, a, ia, b, ib, c, ic, W, H) =
+    _soft_project_clip_to_screen(clip, W, H)
+
+# A clipped polygon vertex that is one of the face's own vertices (`===`
+# identity, so interpolated vertices never match) reuses its cached projection.
+@inline function _soft_vertex_screen(cache::_SoftVertexCache, clip,
+                                     a, ia::Int, b, ib::Int, c, ic::Int, W, H)
+    index = clip === a ? ia : clip === b ? ib : clip === c ? ic : 0
+    index == 0 && return _soft_project_clip_to_screen(clip, W, H)
+    if !cache.has_screen[index]
+        cache.screen[index] = _soft_project_clip_to_screen(clip, W, H)
+        cache.has_screen[index] = true
+    end
+    return cache.screen[index]
+end
+
 function _soft_render_screen(::Type{T}, screen_tris, n_screen_tris::Int,
                              W::Int, H::Int, σ, γ, bg::Color3{T}, eps::T,
                              use_relative_depth::Bool, workspace) where {T}
@@ -541,37 +586,21 @@ end
 @inline _soft_far_value(v::Vec4, eps) =
     v.w - v.z + eps * abs(v.w)
 
+# Inside tests evaluate the same expressions on primal values: the decisions
+# are identical, and heap-backed AD scalars record no nodes for vertices that
+# need no interpolation.
+@inline _soft_primal_vec4(v::Vec4) = Vec4(_primal_value(v.x), _primal_value(v.y),
+                                          _primal_value(v.z), _primal_value(v.w))
+@inline _soft_near_inside(v::Vec4, eps) =
+    _soft_near_value(_soft_primal_vec4(v), _primal_value(eps)) >= 0
+@inline _soft_far_inside(v::Vec4, eps) =
+    _soft_far_value(_soft_primal_vec4(v), _primal_value(eps)) >= 0
+
 @inline function _soft_lerp_clip(a::Vec4, b::Vec4, t)
     Vec4(a.x + t * (b.x - a.x),
          a.y + t * (b.y - a.y),
          a.z + t * (b.z - a.z),
          a.w + t * (b.w - a.w))
-end
-
-function _soft_clip_near!(out::Vector{Vec4{T}}, poly::Vector{Vec4{T}},
-                          n::Int, eps) where {T}
-    out_n = 0
-    prev = poly[n]
-    prev_d = _soft_near_value(prev, eps)
-    prev_in = prev_d >= zero(prev_d)
-    @inbounds for i in 1:n
-        curr = poly[i]
-        curr_d = _soft_near_value(curr, eps)
-        curr_in = curr_d >= zero(curr_d)
-        if curr_in != prev_in
-            t = prev_d / (prev_d - curr_d)
-            out_n += 1
-            out[out_n] = _soft_lerp_clip(prev, curr, t)
-        end
-        if curr_in
-            out_n += 1
-            out[out_n] = curr
-        end
-        prev = curr
-        prev_d = curr_d
-        prev_in = curr_in
-    end
-    return out_n
 end
 
 @inline function _soft_clip_push(n::Int, v::Vec4{T},
@@ -597,12 +626,12 @@ function _soft_clip_near_triangle(a::Vec4{T}, b::Vec4{T}, c::Vec4{T}, eps) where
     c3 = a
     c4 = a
     prev = c
-    prev_d = _soft_near_value(prev, eps)
-    prev_in = prev_d >= zero(prev_d)
+    prev_in = _soft_near_inside(prev, eps)
     @inbounds for curr in (a, b, c)
-        curr_d = _soft_near_value(curr, eps)
-        curr_in = curr_d >= zero(curr_d)
+        curr_in = _soft_near_inside(curr, eps)
         if curr_in != prev_in
+            prev_d = _soft_near_value(prev, eps)
+            curr_d = _soft_near_value(curr, eps)
             t = prev_d / (prev_d - curr_d)
             out_n, c1, c2, c3, c4 =
                 _soft_clip_push(out_n, _soft_lerp_clip(prev, curr, t), c1, c2, c3, c4)
@@ -611,7 +640,6 @@ function _soft_clip_near_triangle(a::Vec4{T}, b::Vec4{T}, c::Vec4{T}, eps) where
             out_n, c1, c2, c3, c4 = _soft_clip_push(out_n, curr, c1, c2, c3, c4)
         end
         prev = curr
-        prev_d = curr_d
         prev_in = curr_in
     end
     return out_n, c1, c2, c3, c4
@@ -652,13 +680,13 @@ function _soft_clip_far_polygon(n::Int, a::Vec4{T}, b::Vec4{T},
     c4 = a
     c5 = a
     prev = _soft_clip_vertex(n, a, b, c, d)
-    prev_distance = _soft_far_value(prev, eps)
-    prev_in = prev_distance >= zero(prev_distance)
+    prev_in = _soft_far_inside(prev, eps)
     @inbounds for index in 1:n
         current = _soft_clip_vertex(index, a, b, c, d)
-        current_distance = _soft_far_value(current, eps)
-        current_in = current_distance >= zero(current_distance)
+        current_in = _soft_far_inside(current, eps)
         if current_in != prev_in
+            prev_distance = _soft_far_value(prev, eps)
+            current_distance = _soft_far_value(current, eps)
             t = prev_distance / (prev_distance - current_distance)
             out_n, c1, c2, c3, c4, c5 = _soft_clip_push5(
                 out_n, _soft_lerp_clip(prev, current, t),
@@ -669,7 +697,6 @@ function _soft_clip_far_polygon(n::Int, a::Vec4{T}, b::Vec4{T},
                 out_n, current, c1, c2, c3, c4, c5)
         end
         prev = current
-        prev_distance = current_distance
         prev_in = current_in
     end
     return out_n, c1, c2, c3, c4, c5
@@ -695,24 +722,31 @@ function _soft_screen_triangle(s1::Vec3{T}, s2::Vec3{T}, s3::Vec3{T},
 
     # The sigmoid tail extends with sigma. Do not impose a fixed pixel cap here:
     # very soft silhouettes are expected to influence distant pixels.
-    margin = max(T(3.0) * σ, one(T))
-    finite = isfinite(s1.x) && isfinite(s1.y) &&
-             isfinite(s2.x) && isfinite(s2.y) &&
-             isfinite(s3.x) && isfinite(s3.y)
+    # The integer bounds are discrete, so they use primal values: AD scalars
+    # select the same bounds and record nothing.
+    x1 = _primal_value(s1.x); y1 = _primal_value(s1.y)
+    x2 = _primal_value(s2.x); y2 = _primal_value(s2.y)
+    x3 = _primal_value(s3.x); y3 = _primal_value(s3.y)
+    P = typeof(x1)
+    margin = max(P(3.0) * _primal_value(σ), one(P))
+    finite = isfinite(x1) && isfinite(y1) &&
+             isfinite(x2) && isfinite(y2) &&
+             isfinite(x3) && isfinite(y3)
     fW = Float64(W)
     fH = Float64(H)
     if finite
-        bmin_x = max(floor(Int, clamp(min(s1.x, s2.x, s3.x) - margin, 1.0, fW)), 1)
-        bmax_x = min(ceil(Int,  clamp(max(s1.x, s2.x, s3.x) + margin, 1.0, fW)), W)
-        bmin_y = max(floor(Int, clamp(min(s1.y, s2.y, s3.y) - margin, 1.0, fH)), 1)
-        bmax_y = min(ceil(Int,  clamp(max(s1.y, s2.y, s3.y) + margin, 1.0, fH)), H)
+        bmin_x = max(floor(Int, clamp(min(x1, x2, x3) - margin, 1.0, fW)), 1)
+        bmax_x = min(ceil(Int,  clamp(max(x1, x2, x3) + margin, 1.0, fW)), W)
+        bmin_y = max(floor(Int, clamp(min(y1, y2, y3) - margin, 1.0, fH)), 1)
+        bmax_y = min(ceil(Int,  clamp(max(y1, y2, y3) + margin, 1.0, fH)), H)
     else
         bmin_x = 1
         bmax_x = 0
         bmin_y = 1
         bmax_y = 0
     end
-    valid = finite && abs(area) > eps && bmax_x >= bmin_x && bmax_y >= bmin_y
+    valid = finite && abs(_primal_value(area)) > _primal_value(eps) &&
+            bmax_x >= bmin_x && bmax_y >= bmin_y
     return _SoftScreenTriangle(s1, s2, s3, color, depth, logit,
                                bmin_x, bmax_x, bmin_y, bmax_y,
                                area, valid)
