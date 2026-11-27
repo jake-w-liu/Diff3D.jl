@@ -12,3 +12,7 @@ __pycache__/
 *.pyc
 
 .DS_Store
+
+# Backup and reject files left by patch/merge tools.
+*.orig
+*.rej
