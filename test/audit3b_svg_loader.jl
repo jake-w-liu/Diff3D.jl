@@ -512,3 +512,84 @@ _audit3b_fills(svg) = [p.style.fill for p in _audit3b_svg(svg).paths]
     @test _audit3b_fills("""<svg $W><style>rect::before { fill: rgb(255,0,0) }</style>
         <rect width="5" height="5"/></svg>""") == [_audit3b_srgb(0, 0, 0)]
 end
+
+@testset "SVG exact fills of many crossing loops stay near-linear" begin
+    # 240 overlapping circles in one path: every neighbour pair crosses, so
+    # the fill takes the exact slab path. Intersections are searched only
+    # between edges whose boxes overlap, and each slab visits only the edges
+    # spanning it; testing all edge pairs and all edges per slab took about
+    # 7.5 s here (15360 edges) against 0.03 s, with identical pieces.
+    n = 240
+    d = join(["M$(10i) 50 a 8 8 0 1 0 16 0 a 8 8 0 1 0 -16 0 Z" for i in 1:n], " ")
+    doc = _audit3b_svg("""<svg width="4000" height="100"><path d="$d"/></svg>""")
+    small = _audit3b_svg("""<svg width="100" height="100"><path d="M0 0 H10 V10 H0 Z M5 5 H15 V15 H5 Z"/></svg>""")
+    svg_meshes(small)
+    elapsed = @elapsed meshes = svg_meshes(doc)
+    @test elapsed < 3.0
+    @test length(meshes) == 1
+    area = _audit3b_area(meshes[1].geometry)
+    # Union of n radius-8 discs 10 apart: n*pi*r^2 - (n-1)*lens; the
+    # 64-gon circles fall slightly short of it.
+    lens = 2 * 64 * acos(10 / 16) - 5 * sqrt(4 * 64 - 100)
+    exact_discs = n * pi * 64 - (n - 1) * lens
+    @test 0.995 * exact_discs < area < exact_discs
+end
+
+@testset "SVG style sheets ignore keyframes, CDO/CDC and CDATA markup" begin
+    # Keyframe selectors (`0%`, `from`) are not element selectors and their
+    # blocks never style a static shape (CSS Animations 1 section 3); the
+    # rest of the sheet still applies. The round-2 cascade rejected `0%`.
+    @test _audit3b_fills("""<svg width="10" height="10"><style>
+        @keyframes pulse { 0% { opacity: 0 } 50% { fill: blue } 100% { opacity: 1 } }
+        @-webkit-keyframes spin { from { fill: blue } to { fill: green } }
+        @font-face { font-family: f; src: url(f.woff) }
+        rect { fill: rgb(255,0,0) }</style><rect width="5" height="5"/></svg>""") ==
+          [_audit3b_srgb(255, 0, 0)]
+    # `<!--`/`-->` inside CDATA are character data (XML 1.0 section 2.7) and
+    # CSS CDO/CDC tokens, which a style sheet skips (CSS Syntax 3 section
+    # 5.4.1): the rule applies.
+    @test _audit3b_fills("""<svg width="10" height="10"><style><![CDATA[<!--
+        rect { fill: rgb(0,0,255) } -->]]></style><rect width="5" height="5"/></svg>""") ==
+          [_audit3b_srgb(0, 0, 255)]
+    # `a<b` in a script's CDATA is not an element, so the rect stays a child
+    # of the root and is not inside <script> for selectors.
+    doc = _audit3b_svg("""<svg width="10" height="10"><style>script > rect { stroke: blue }
+        svg > rect:last-child { stroke-width: 7 }</style>
+        <script><![CDATA[ if (a<b && c<rect) {} ]]></script><rect width="5" height="5"/></svg>""")
+    @test doc.paths[1].style.stroke === nothing
+    @test doc.paths[1].style.stroke_width == 7.0
+end
+
+@testset "SVG percentages inside a symbol refer to the symbol viewport" begin
+    # SVG 1.1 section 7.10: a percentage refers to the viewport of the
+    # current user coordinate system; inside an instantiated symbol that is
+    # the symbol's viewBox (else its viewport), not the root viewport.
+    doc = _audit3b_svg("""<svg width="100" height="100">
+        <symbol id="v" viewBox="0 0 10 10"><rect width="50%" height="50%"/></symbol>
+        <symbol id="p"><rect x="25%" width="50%" height="50%"/></symbol>
+        <use href="#v" width="40" height="40"/>
+        <use href="#p" y="50" width="40" height="20"/>
+        <rect x="50%" width="10%" height="10%"/></svg>""")
+    groups = Diff3D._svg_element_path_groups(doc.paths)
+    @test length(groups) == 3
+    # viewBox 10 -> rect 5x5 user units, scaled 4x into the 40x40 viewport.
+    @test _audit3b_close(_audit3b_bbox(groups[1]), (0.0, 0.0, 20.0, 20.0))
+    # No viewBox: percentages of the 40x20 viewport.
+    @test _audit3b_close(_audit3b_bbox(groups[2]), (10.0, 50.0, 30.0, 60.0))
+    # Outside the symbol the root viewport applies again.
+    @test _audit3b_close(_audit3b_bbox(groups[3]), (50.0, 0.0, 60.0, 10.0))
+end
+
+@testset "SVG clip-path chains are bounded instead of overflowing the stack" begin
+    # Clip definitions parse lazily and recursively; each clipPath here clips
+    # with the one before it. 200 levels resolve (the innermost 60x60 clip
+    # wins); 2000 levels overflowed the stack (StackOverflowError, about 800
+    # levels on the main task) and now raise a plain error.
+    chain(n) = "<svg width=\"100\" height=\"100\"><clipPath id=\"c0\"><rect width=\"60\" height=\"60\"/></clipPath>" *
+               join(["<clipPath id=\"c$i\" clip-path=\"url(#c$(i - 1))\"><rect width=\"90\" height=\"$(90 - i * 0.001)\"/></clipPath>"
+                     for i in 1:n]) *
+               "<rect width=\"80\" height=\"80\" clip-path=\"url(#c$n)\"/></svg>"
+    doc = _audit3b_svg(chain(200))
+    @test _audit3b_close(_audit3b_bbox(doc.paths), (0.0, 0.0, 60.0, 60.0))
+    @test_throws r"nest deeper than 256 levels" _audit3b_svg(chain(2000))
+end

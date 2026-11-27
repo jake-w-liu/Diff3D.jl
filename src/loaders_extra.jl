@@ -4963,14 +4963,68 @@ function _svg_selector_chain(selector::AbstractString)
     return chain, combinators
 end
 
+# At-rules whose blocks hold keyframes, descriptors or page boxes rather than
+# style rules for elements (CSS Animations 1 section 3, CSS Fonts 4 section
+# 4, CSS Paged Media 3 section 3, ...). Their contents never style a static
+# shape, and keyframe selectors (`0%`, `from`) are not element selectors.
+const _SVG_CSS_INERT_AT_RULE_RE =
+    r"(?i)@(?:-[a-z]+-)?(?:keyframes|font-face|font-feature-values|font-palette-values|counter-style|property|page)(?![-A-Za-z0-9_])"
+
+# Remove every inert at-rule (see `_SVG_CSS_INERT_AT_RULE_RE`) with its
+# brace-balanced block; an unterminated block extends to the end of the
+# style sheet, as CSS Syntax 3 section 5.4 closes it at end of input.
+function _svg_css_drop_inert_at_rules(css::AbstractString)
+    text = String(css)
+    out = IOBuffer()
+    position = firstindex(text)
+    while true
+        m = findnext(_SVG_CSS_INERT_AT_RULE_RE, text, position)
+        m === nothing && break
+        write(out, SubString(text, position, prevind(text, first(m))))
+        open_brace = findnext('{', text, last(m))
+        statement_end = findnext(';', text, last(m))
+        if open_brace === nothing ||
+           (statement_end !== nothing && statement_end < open_brace)
+            # A block-less statement form: drop it up to its semicolon.
+            statement_end === nothing && return String(take!(out))
+            position = nextind(text, statement_end)
+            continue
+        end
+        depth = 0
+        k = open_brace
+        close_brace = nothing
+        while k <= lastindex(text)
+            c = text[k]
+            if c == '{'
+                depth += 1
+            elseif c == '}'
+                depth -= 1
+                if depth == 0
+                    close_brace = k
+                    break
+                end
+            end
+            k = nextind(text, k)
+        end
+        close_brace === nothing && return String(take!(out))
+        position = nextind(text, close_brace)
+    end
+    position <= lastindex(text) && write(out, SubString(text, position))
+    return String(take!(out))
+end
+
 function _svg_css_rules(raw::AbstractString)
     rules = _SVGStyleRule[]
     order = 0
     for style_match in eachmatch(r"(?is)<\s*style\b[^>]*>(.*?)<\s*/\s*style\s*>",
                                  raw)
+        # XML comments were removed with the markup; `<!--` and `-->` left in
+        # CDATA are CSS CDO/CDC tokens, which a style sheet ignores (CSS
+        # Syntax 3 section 5.4.1).
         css = replace(style_match.captures[1], "<![CDATA[" => "",
-                      "]]>" => "")
+                      "]]>" => "", "<!--" => " ", "-->" => " ")
         css = replace(css, r"(?s)/\*.*?\*/" => "")
+        css = _svg_css_drop_inert_at_rules(css)
         for block in eachmatch(r"(?s)([^{}]+)\{([^{}]*)\}", css)
             normal, important = _svg_style_declaration_sets(block.captures[2])
             filter!(kv -> kv.first in _SVG_STYLE_KEYS, normal)
@@ -7575,10 +7629,34 @@ function _svg_boolean_x_breaks(loops::Vector{Vector{Vec2{Float64}}})
         push!(xs, p.x)
     end
     edges = _svg_loop_edges(loops)
-    for i in 1:length(edges)
-        a, b = edges[i]
-        for j in (i + 1):length(edges)
-            c, d = edges[j]
+    n = length(edges)
+    # Bounding-box sweep over the edge pairs. `_svg_segment_intersection_point`
+    # accepts a point within a 1e-9 parameter tolerance of both segments, so
+    # it can only report a pair whose boxes, each widened by its own
+    # parameter tolerance plus floating-point rounding, overlap; the widening
+    # below is larger than that. Every pair is still tested in edge order
+    # (i < j), so the reported points are those of the all-pairs loop.
+    lo_x = Vector{Float64}(undef, n)
+    hi_x = Vector{Float64}(undef, n)
+    lo_y = Vector{Float64}(undef, n)
+    hi_y = Vector{Float64}(undef, n)
+    for (k, (a, b)) in enumerate(edges)
+        pad = 1e-8 * (abs(b.x - a.x) + abs(b.y - a.y)) +
+              16 * eps(max(abs(a.x), abs(a.y), abs(b.x), abs(b.y), 1.0))
+        lo_x[k] = min(a.x, b.x) - pad
+        hi_x[k] = max(a.x, b.x) + pad
+        lo_y[k] = min(a.y, b.y) - pad
+        hi_y[k] = max(a.y, b.y) + pad
+    end
+    order = sortperm(lo_x)
+    for (position, i) in enumerate(order)
+        for next in (position + 1):n
+            j = order[next]
+            lo_x[j] > hi_x[i] && break
+            (lo_y[j] > hi_y[i] || lo_y[i] > hi_y[j]) && continue
+            first_edge, second_edge = i < j ? (i, j) : (j, i)
+            a, b = edges[first_edge]
+            c, d = edges[second_edge]
             hit = _svg_segment_intersection_point(a, b, c, d)
             hit === nothing || push!(xs, hit.x)
         end
@@ -8431,7 +8509,10 @@ end
 # Viewport box and content transform of a symbol instantiated by `use`: the
 # symbol becomes a nested viewport whose width/height come from the `use`,
 # then from the symbol, and default to 100% (SVG 2 sections 5.5 and 5.6.2).
-# A zero width or height disables rendering (`nothing`).
+# A zero width or height disables rendering (`nothing`). The third value is
+# the size of the symbol's own user coordinate system (its viewBox, else the
+# viewport), which percentage lengths of its content refer to (SVG 1.1
+# section 7.10: the viewport in place for the current user coordinate system).
 function _svg_symbol_viewport(use_attrs::AbstractDict, symbol_attrs::AbstractDict,
                               viewport::NTuple{2,Float64})
     dimension(key, axis) =
@@ -8441,10 +8522,16 @@ function _svg_symbol_viewport(use_attrs::AbstractDict, symbol_attrs::AbstractDic
     w = dimension("width", 1)
     h = dimension("height", 2)
     (w < 0.0 || h < 0.0) && error("SVG symbol viewport width/height must be non-negative")
-    (w > 0.0 && h > 0.0) || return nothing, _svg_identity_transform()
+    (w > 0.0 && h > 0.0) || return nothing, _svg_identity_transform(), viewport
     x = _svg_length(symbol_attrs, "x", 0.0; viewport)
     y = _svg_length(symbol_attrs, "y", 0.0; viewport)
-    return (x, y, x + w, y + h), _svg_viewbox_transform(symbol_attrs, x, y, w, h)
+    transform = _svg_viewbox_transform(symbol_attrs, x, y, w, h)
+    view_box = get(symbol_attrs, "viewbox", nothing)
+    inner = view_box === nothing ? (w, h) : (begin
+        values = _svg_numbers(view_box)
+        (values[3], values[4])
+    end)
+    return (x, y, x + w, y + h), transform, inner
 end
 
 # The user-agent style sheet gives symbol `overflow: hidden` (SVG 2 section
@@ -8500,8 +8587,17 @@ const _SVG_RENDERED_TAGS = Set(["svg", "g", "defs", "clippath", "mask", "symbol"
                                 "polygon", "polyline", "use"])
 
 # Comments are not markup: tags inside them are neither rendered nor selector
-# siblings (XML 1.0 section 2.5).
-_svg_strip_comments(raw::AbstractString) = replace(String(raw), r"(?s)<!--.*?-->" => "")
+# siblings (XML 1.0 section 2.5). Inside a CDATA section `<!--` is character
+# data (XML 1.0 section 2.7), so CDATA sections are kept whole.
+const _SVG_CDATA_OR_COMMENT_RE = r"(?s)<!\[CDATA\[.*?\]\]>|<!--.*?-->"
+_svg_strip_comments(raw::AbstractString) =
+    replace(String(raw),
+            _SVG_CDATA_OR_COMMENT_RE => s -> startswith(s, "<!--") ? "" : s)
+
+# Markup with CDATA sections removed: their character data (a script's
+# `a<b`, say) holds no elements.
+_svg_strip_cdata(raw::AbstractString) =
+    replace(String(raw), r"(?s)<!\[CDATA\[.*?\]\]>" => "")
 
 # The element tags the parser renders, with the selector context of each
 # opening tag. Every element of the document (including `style`, `title`,
@@ -8514,7 +8610,8 @@ function _svg_tags(raw::AbstractString)
     contexts = Union{Nothing,_SVGElementContext}[]
     ancestors = _SVGAncestorStack()
     siblings = _SVGSiblingStack([_SVGSiblingState()])
-    for m in eachmatch(r"<\s*(/)?\s*([A-Za-z_][-A-Za-z0-9_:.]*)([^>]*)>", raw)
+    for m in eachmatch(r"<\s*(/)?\s*([A-Za-z_][-A-Za-z0-9_:.]*)([^>]*)>",
+                       _svg_strip_cdata(raw))
         closing = m.captures[1] !== nothing
         name = lowercase(m.captures[2])
         self_closing = occursin(r"/\s*>$", m.match)
@@ -8590,6 +8687,8 @@ end
 # ancestors' transforms excluded), which is the user space of the referencing
 # element (SVG 1.1 sections 14.3.5 and 14.4); its presentation properties
 # inherit from the definition's own ancestors.
+const _SVG_MAX_REFERENCE_DEPTH = 256
+
 function _svg_definition!(state::_SVGParseState, id::String, kind::Symbol)
     definitions = kind === :clip ? state.clip_definitions : state.mask_definitions
     definition = get(definitions, id, nothing)
@@ -8600,6 +8699,12 @@ function _svg_definition!(state::_SVGParseState, id::String, kind::Symbol)
         error("SVG $label references unknown id $id")
     target in state.active_definitions &&
         error("SVG $label creates a circular reference to $id")
+    # Each nested definition parses recursively; a bound keeps a long chain
+    # of clip-path/mask references from overflowing the stack (about 800
+    # levels on the main task).
+    length(state.active_definitions) + length(state.active_uses) <
+        _SVG_MAX_REFERENCE_DEPTH ||
+        error("SVG $label references nest deeper than $(_SVG_MAX_REFERENCE_DEPTH) levels at $id")
     style = _svg_inherited_style(state, target)
     push!(state.active_definitions, target)
     try
@@ -8881,17 +8986,20 @@ function _svg_parse_range!(state::_SVGParseState, first::Int, last::Int,
                 # clip paths and masks on the referenced content move with it.
                 viewport_box = nothing
                 content_transform = _svg_identity_transform()
+                content_viewport = viewport
                 if target_tag == "symbol"
-                    viewport_box, content_transform =
+                    viewport_box, content_transform, content_viewport =
                         _svg_symbol_viewport(attrs, state.tags[target].attrs, viewport)
                 end
                 if viewport_box !== nothing || target_tag != "symbol"
                     push!(state.active_uses, target)
+                    state.viewport = content_viewport
                     try
                         _svg_parse_range!(state, target, state.closers[target],
                                           raw_paths, content_transform,
                                           style, true, :visible)
                     finally
+                        state.viewport = viewport
                         pop!(state.active_uses)
                     end
                 end
@@ -9124,13 +9232,29 @@ function _svg_exact_fill_pieces(loops::Vector{Vector{Vec2{Float64}}},
     edges = _svg_loop_edges(loops)
     pieces = Vector{Vec2{Float64}}[]
     crossings = NamedTuple{(:y0, :y1, :ym, :dir),Tuple{Float64,Float64,Float64,Int}}[]
+    # Only edges whose x range strictly contains a slab's midpoint cross it.
+    # The midpoints increase, so edges enter the active set in order of their
+    # minimum x and leave it for good once their maximum x is passed; the
+    # active edges are visited in edge order, as a scan of all edges would.
+    by_min_x = sortperm([min(a.x, b.x) for (a, b) in edges])
+    next_edge = 1
+    active = Int[]
     for i in 1:(length(xs) - 1)
         x0 = xs[i]
         x1 = xs[i + 1]
         x1 - x0 > 1e-9 || continue
         xm = _stable_midpoint(x0, x1)
+        while next_edge <= length(by_min_x)
+            a, b = edges[by_min_x[next_edge]]
+            min(a.x, b.x) < xm || break
+            push!(active, by_min_x[next_edge])
+            next_edge += 1
+        end
+        filter!(e -> max(edges[e][1].x, edges[e][2].x) > xm, active)
+        sort!(active)
         empty!(crossings)
-        for (a, b) in edges
+        for e in active
+            a, b = edges[e]
             ym = _svg_edge_y_at_x(a, b, xm; strict=true)
             ym === nothing && continue
             y0 = _svg_edge_y_at_x(a, b, x0; strict=false)
