@@ -109,6 +109,28 @@ end
         @test _a3_vec(oc.camera.position) ≈ position atol=1e-12
         @test _a3_vec(oc.target) ≈ target atol=1e-12
     end
+
+    # The same window for a z-up camera (three.js r186 oracle): the single
+    # damped pass works in the camera.up frame.
+    zup = _a3_orbit(Vec3(1.0, -4.5, 0.8), Vec3(0.0, 0.0, 0.0), Vec3(0.0, 0.0, 1.0);
+                    enable_damping=true, damping_factor=0.25,
+                    min_azimuth_angle=3.0, max_azimuth_angle=3.383185307179586,
+                    max_distance=4.0)
+    orbit_rotate!(zup, -1.2, 0.1)
+    orbit_pan!(zup, 0.5, 0.25)
+    expected_zup = (
+        ([-0.8269943565916407, 3.8795888930543234, 0.6468031213060019],
+         [0.11970509308626495, 0.03754860969261319, 0.06157956316311799]),
+        ([0.14365998807617059, 4.032398310114113, 0.6186963176755715],
+         [0.20948391290096366, 0.06571006696207309, 0.10776423553545648]),
+        ([0.87916487107352, 4.0149436299808015, 0.5974969090364495],
+         [0.2768180277619877, 0.08683115991416801, 0.14240273981471036]),
+    )
+    for (position, target) in expected_zup
+        orbit_update!(zup)
+        @test _a3_vec(zup.camera.position) ≈ position atol=1e-12
+        @test _a3_vec(zup.target) ≈ target atol=1e-12
+    end
 end
 
 # three.js helpers store positions in Float32BufferAttributes, so the oracle
@@ -258,6 +280,49 @@ end
     @test map_camera.zoom ≈ 2.0 atol=1e-8
     @test _a3_vec(map_camera.position) ≈ [0.0, 5.0, 5.0] atol=1e-12
 
+    # Every three.js update() re-clamps an orthographic zoom to
+    # [minZoom, maxZoom] (OrbitControls.js:892-895 with _scale = 1), so a zoom
+    # outside the limits moves inside on update, pan, rotate and reset.
+    # Oracle: three.js r186.
+    wide = OrthographicCamera(left=-1.0, right=1.0, top=1.0, bottom=-1.0,
+                              near=0.1, far=100.0)
+    wide.position = Vec3(1.0, 2.0, 3.0)
+    wide.target = Vec3(0.0, 0.0, 0.0)
+    wide.zoom = 5.0
+    wc = OrbitControls(wide; min_zoom=0.5, max_zoom=3.0)
+    @test wc.zoom0 == 5.0
+    orbit_update!(wc)
+    @test wide.zoom == 3.0
+    @test _a3_vec(wide.position) ≈ [1.0, 2.0, 3.0] atol=1e-14
+    wide.zoom = 4.0
+    orbit_pan!(wc, 0.2, 0.1)
+    @test wide.zoom == 3.0
+    @test _a3_vec(wide.position) ≈
+        [1.172833574515533, 2.0845154254728517, 2.886045191512921] atol=1e-12
+    wide.zoom = 4.0
+    orbit_rotate!(wc, 0.3, 0.1)
+    @test wide.zoom == 3.0
+    @test _a3_vec(wide.position) ≈
+        [2.121826615753194, 1.758822772828356, 2.6059939101101195] atol=1e-12
+    orbit_reset!(wc)
+    @test wide.zoom == 3.0
+    @test _a3_vec(wide.position) ≈ [1.0, 2.0, 3.0] atol=1e-12
+    narrow = OrthographicCamera(left=-1.0, right=1.0, top=1.0, bottom=-1.0,
+                                near=0.1, far=100.0)
+    narrow.position = Vec3(1.0, 2.0, 3.0)
+    narrow.target = Vec3(0.0, 0.0, 0.0)
+    narrow.zoom = 0.2
+    nc = OrbitControls(narrow; min_zoom=0.5, max_zoom=3.0)
+    orbit_rotate!(nc, 0.3, 0.1)
+    @test narrow.zoom == 0.5
+    @test _a3_vec(narrow.position) ≈
+        [1.9489930412376613, 1.6743073473555043, 2.7199487185971987] atol=1e-12
+    # A perspective camera's zoom is not an orbit limit.
+    persp = PerspectiveCamera()
+    persp.zoom = 5.0
+    orbit_update!(OrbitControls(persp; max_zoom=3.0))
+    @test persp.zoom == 5.0
+
     # A zoom that cannot stay positive and finite is rejected, not applied.
     @test_throws ArgumentError orbit_zoom!(OrbitControls(OrthographicCamera()), -1.0)
     @test_throws ArgumentError OrbitControls(OrthographicCamera(); min_zoom=2.0, max_zoom=1.0)
@@ -294,6 +359,34 @@ end
         dt === nothing ? orbit_update!(damped) : orbit_update!(damped, dt)
         @test _a3_vec(damped.camera.position) ≈ position atol=1e-12
     end
+    # three.js reset() ends with update(), which auto-rotates one frame
+    # (OrbitControls.js:621-633). Oracle: three.js r186 with the residual
+    # deltas cleared first, as orbit_reset! documents.
+    reset_plain = _a3_orbit(Vec3(0.0, 1.0, 5.0), Vec3(0.0, 0.0, 0.0), Vec3(0.0, 1.0, 0.0);
+                            auto_rotate=true, auto_rotate_speed=3.0)
+    orbit_rotate!(reset_plain, 0.4, 0.1)
+    orbit_reset!(reset_plain)
+    @test _a3_vec(reset_plain.camera.position) ≈
+        [-0.026179819157097894, 0.9999999999999997, 4.999931461237133] atol=1e-12
+    reset_damped = _a3_orbit(Vec3(0.0, 1.0, 5.0), Vec3(0.0, 0.0, 0.0), Vec3(0.0, 0.0, 1.0);
+                             auto_rotate=true, auto_rotate_speed=3.0,
+                             enable_damping=true, damping_factor=0.1)
+    orbit_rotate!(reset_damped, 0.4, 0.1)
+    orbit_update!(reset_damped)
+    @test _a3_vec(reset_damped.camera.position) ≈
+        [-0.041437450035998566, 1.0491311601521787, 4.989750168749156] atol=1e-12
+    orbit_reset!(reset_damped)
+    @test _a3_vec(reset_damped.camera.position) ≈
+        [0.0005235987516737948, 0.9999998629221682, 4.9999999999999964] atol=1e-12
+    orbit_update!(reset_damped)
+    @test _a3_vec(reset_damped.camera.position) ≈
+        [0.0015184358657381013, 0.9999988471756005, 4.999999999999995] atol=1e-12
+    # Without auto-rotation a reset restores the saved pose exactly.
+    reset_still = _a3_orbit(Vec3(0.0, 1.0, 5.0), Vec3(0.0, 0.0, 0.0), Vec3(0.0, 1.0, 0.0))
+    orbit_rotate!(reset_still, 0.4, 0.1)
+    orbit_reset!(reset_still)
+    @test reset_still.camera.position == Vec3(0.0, 1.0, 5.0)
+
     # Defaults match three.js (autoRotate false, autoRotateSpeed 2).
     plain = OrbitControls(PerspectiveCamera())
     @test !plain.auto_rotate && plain.auto_rotate_speed == 2.0

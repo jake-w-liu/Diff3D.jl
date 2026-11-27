@@ -363,6 +363,7 @@ end
 # target-radius limit.
 function _orbit_apply!(oc::OrbitControls, s::Spherical,
                        target::Vec3{Float64}=oc.target)
+    zoom = _orbit_limited_zoom(oc)
     target = _orbit_limited_target(oc, target)
     q = _orbit_up_quaternion(oc)
     offset = spherical_to_cartesian(_orbit_constrained(oc, s))
@@ -374,6 +375,7 @@ function _orbit_apply!(oc::OrbitControls, s::Spherical,
     oc.camera.position = position
     oc.camera.target = target
     _sync_camera_rotation_from_view!(oc.camera)
+    oc.camera isa OrthographicCamera && (oc.camera.zoom = zoom)
     return oc
 end
 
@@ -382,15 +384,19 @@ end
 # window, moves the camera back inside it (OrbitControls.js:729-786). A camera
 # already inside every configured limit is left untouched, keeping such updates
 # exact; this includes a camera placed exactly on the pole, which only the
-# Spherical.makeSafe epsilon (1e-6 rad) would move.
+# Spherical.makeSafe epsilon (1e-6 rad) would move. An orthographic zoom
+# outside [min_zoom, max_zoom] is clamped as well.
 function _orbit_enforce_limits!(oc::OrbitControls)
+    zoom = _orbit_limited_zoom(oc)
     s = _orbit_spherical(oc)
     clamp(s.radius, oc.min_distance, oc.max_distance) == s.radius &&
         clamp(s.phi, oc.min_polar_angle, oc.max_polar_angle) == s.phi &&
         _clamp_azimuth(s.theta, oc.min_azimuth_angle,
                        oc.max_azimuth_angle) == s.theta &&
-        _orbit_limited_target(oc, oc.target) === oc.target && return oc
-    return _orbit_apply!(oc, s)
+        _orbit_limited_target(oc, oc.target) === oc.target ||
+        _orbit_apply!(oc, s)
+    oc.camera isa OrthographicCamera && (oc.camera.zoom = zoom)
+    return oc
 end
 
 """Place the camera at an absolute orbit (azimuth, polar, radius) about the target."""
@@ -416,7 +422,9 @@ end
 
 """
 Restore the saved orbit state (camera position, zoom, and target) and clear
-any damped residual motion.
+any damped residual motion. Like three.js `reset()`, it then runs one update:
+the limits are re-applied and, with `auto_rotate`, the camera turns by one
+frame (see `orbit_update!`).
 """
 function orbit_reset!(oc::OrbitControls)
     position = _checked_control_vec3(
@@ -431,7 +439,9 @@ function orbit_reset!(oc::OrbitControls)
     oc.v_polar = 0.0
     oc.v_zoom = 0.0
     oc.v_pan = Vec3(0.0, 0.0, 0.0)
-    # three.js reset() ends with update(), which applies the limits.
+    # three.js reset() ends with update() (OrbitControls.js:621-633), which
+    # applies the limits and, with auto-rotation, turns the camera one frame.
+    oc.enabled && oc.auto_rotate && return orbit_update!(oc)
     return _orbit_enforce_limits!(oc)
 end
 
@@ -448,6 +458,11 @@ function _orbit_ortho_zoom(oc::OrbitControls, scale)
         "OrbitControls orthographic zoom must stay positive and finite"))
     return zoom
 end
+# Every three.js update() re-clamps an orthographic zoom (scale 1 when not
+# dollying), so a zoom that starts outside [min_zoom, max_zoom], or is left
+# outside by a changed limit, moves back inside it.
+@inline _orbit_limited_zoom(oc::OrbitControls) =
+    oc.camera isa OrthographicCamera ? _orbit_ortho_zoom(oc, 1.0) : oc.camera.zoom
 function _orbit_zoom_now!(oc::OrbitControls, factor)
     camera = oc.camera
     if camera isa OrthographicCamera
@@ -572,9 +587,10 @@ end
     orbit_update!(oc[, delta_time])
 
 Advance the orbit by one frame. Like three.js `OrbitControls.update`, every
-call re-applies the distance, polar, and azimuth limits, so a camera that
-starts (or is left by a changed limit) outside them moves back inside; a camera
-already inside them is not moved. With damping disabled nothing else happens
+call re-applies the distance, polar, azimuth, and target-radius limits (and
+`min_zoom`/`max_zoom` for an orthographic camera), so a camera that starts (or
+is left by a changed limit) outside them moves back inside; a camera already
+inside them is not moved. With damping disabled nothing else happens
 (interactions apply immediately). With damping enabled it applies
 `damping_factor` of the residual rotation, dolly, and pan velocities, then
 decays them by `(1 - damping_factor)` so motion eases to a stop after the last
