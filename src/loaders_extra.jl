@@ -8731,13 +8731,19 @@ function base64_decode(s::AbstractString)
     return out
 end
 
+@inline _gltf_base64_space(unit::Integer) =
+    unit == UInt8(' ') || unit == UInt8('\n') || unit == UInt8('\r') || unit == UInt8('\t')
+
+# Decodes code units: base64 is ASCII, so any non-ASCII byte is rejected as an
+# invalid character.
 function _gltf_base64_decode_strict(s::AbstractString)
+    units = codeunits(s)
     nchars = 0
     pad_run = 0
-    for ch in s
-        ch in (' ', '\n', '\r', '\t') && continue
+    for unit in units
+        _gltf_base64_space(unit) && continue
         nchars += 1
-        pad_run = ch == '=' ? pad_run + 1 : 0
+        pad_run = unit == UInt8('=') ? pad_run + 1 : 0
     end
     out_len = (nchars ÷ 4) * 3
     if nchars % 4 == 0
@@ -8751,15 +8757,34 @@ function _gltf_base64_decode_strict(s::AbstractString)
     q4 = 0
     qlen = 0
     done = false
-    for ch in s
-        ch in (' ', '\n', '\r', '\t') && continue
+    # Fast path: complete quads of four valid symbols (no whitespace or
+    # padding) decode directly. The general loop below resumes at the first
+    # quad that needs its padding, whitespace, and error handling.
+    start = firstindex(units)
+    last_unit = lastindex(units)
+    while start + 3 <= last_unit
+        u1, u2, u3, u4 = units[start], units[start + 1], units[start + 2], units[start + 3]
+        (u1 | u2 | u3 | u4) <= 0xff || break
+        a = @inbounds _B64_LUT[Int(u1) + 1]
+        b = @inbounds _B64_LUT[Int(u2) + 1]
+        c = @inbounds _B64_LUT[Int(u3) + 1]
+        d = @inbounds _B64_LUT[Int(u4) + 1]
+        (a | b | c | d) >= 0 || break
+        out[oi] = UInt8((a << 2) | (b >> 4))
+        out[oi + 1] = UInt8(((b & 0x0f) << 4) | (c >> 2))
+        out[oi + 2] = UInt8(((c & 0x03) << 6) | d)
+        oi += 3
+        start += 4
+    end
+    for unit_index in start:last_unit
+        unit = units[unit_index]
+        _gltf_base64_space(unit) && continue
         done && error("glTF data URI base64 has data after padding")
         v = 0
-        if ch == '='
+        if unit == UInt8('=')
             v = -1
         else
-            Int(ch) <= 255 || error("glTF data URI base64 contains invalid character")
-            v = _B64_LUT[Int(ch) + 1]
+            v = unit <= 0xff ? (@inbounds _B64_LUT[Int(unit) + 1]) : -1
             v >= 0 || error("glTF data URI base64 contains invalid character")
             (q1 < 0 || q2 < 0 || q3 < 0 || q4 < 0) &&
                 error("glTF data URI base64 has data after padding")
