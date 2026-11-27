@@ -184,3 +184,240 @@ end
     mipped = CubeTexture(faces)
     @test sample_cube_lod(mipped, Vec3(1.0, 0.0, -1.0), 1.0).r == 3.5
 end
+
+function _audit3b_tile_scene(light)
+    scene = Scene()
+    floor = Mesh(BoxGeometry(width=10.0, height=0.2, depth=10.0), MeshStandardMaterial())
+    floor.position = Vec3(0.0, -0.1, 0.0)
+    tile = Mesh(BoxGeometry(width=1.0, height=0.1, depth=1.0), MeshStandardMaterial())
+    tile.position = Vec3(0.0, 0.05, 0.0)
+    floor.cast_shadow = true
+    tile.cast_shadow = true
+    add!(scene, floor)
+    add!(scene, tile)
+    add!(scene, light)
+    return scene
+end
+
+@testset "Perspective shadow cameras inside the scene keep thin casters" begin
+    # A 0.1-thick tile on a 10x10 floor, light 3 units above: the floor under
+    # the tile is occluded (three.js renders this shadow with its default
+    # bias 0; the light sits inside the scene bounding sphere, where the old
+    # radius/100 near plane stretched the 3e-3 NDC bias over ~0.27 world units).
+    for light in (PointLight(position=Vec3(0.0, 3.0, 0.0), cast_shadow=true),
+                  SpotLight(position=Vec3(0.0, 3.0, 0.0), target=Vec3(0.0, 0.0, 0.0),
+                            angle=pi / 4, cast_shadow=true))
+        shadow = compute_shadow_map(_audit3b_tile_scene(light), light; resolution=256)
+        for x in (0.0, 0.3, -0.3)
+            @test shadow_visibility(shadow, Vec3(x, 0.0, 0.0)) == 0.0
+        end
+        @test shadow_visibility(shadow, Vec3(3.0, 0.0, 0.0)) == 1.0
+        @test shadow_visibility(shadow, Vec3(0.0, 0.1, 0.0)) == 1.0
+    end
+    # The caster bound is the distance to the nearest caster triangle box.
+    light = PointLight(position=Vec3(0.0, 3.0, 0.0), cast_shadow=true)
+    scene = _audit3b_tile_scene(light)
+    meshes = collect_meshes(scene)
+    @test Diff3D._shadow_caster_distance(meshes, InstancedMesh[], Vec3(0.0, 3.0, 0.0)) ≈ 2.9
+end
+
+@testset "LightShadow intensity and normalBias" begin
+    # three.js LightShadow.js:41/74 defaults: intensity 1, normalBias 0.
+    for Light in (DirectionalLight, PointLight, SpotLight)
+        light = Light()
+        @test light.shadow_intensity == 1.0
+        @test light.shadow_normal_bias == 0.0
+        @test_throws ArgumentError Light(shadow_intensity=1.5)
+        @test_throws ArgumentError Light(shadow_intensity=NaN)
+        @test_throws ArgumentError Light(shadow_normal_bias=Inf)
+    end
+    light = PointLight(position=Vec3(0.0, 3.0, 0.0), cast_shadow=true,
+                       shadow_intensity=0.4, shadow_normal_bias=0.15)
+    shadow = compute_shadow_map(_audit3b_tile_scene(light), light; resolution=256)
+    @test shadow.intensity == 0.4
+    @test shadow.normal_bias == 0.15
+    # shadowmap_pars_fragment.glsl.js:180: mix(1.0, shadow, shadowIntensity).
+    @test shadow_visibility(shadow, Vec3(0.0, 0.0, 0.0)) ≈ 0.6 rtol = 1e-15
+    @test shadow_visibility(shadow, Vec3(3.0, 0.0, 0.0)) == 1.0
+    # shadowmap_vertex.glsl.js: the lookup moves along the normal by normalBias;
+    # 0.15 lifts the floor point above the 0.1-high tile top.
+    @test shadow_visibility(shadow, Vec3(0.0, 0.0, 0.0); normal=Vec3(0.0, 1.0, 0.0)) == 1.0
+    @test shadow_visibility(shadow, Vec3(0.0, 0.0, 0.0); normal=Vec3(0.0, -1.0, 0.0)) ≈ 0.6
+    # Mutating the light property is honoured by the next shadow pass.
+    light.shadow_intensity = 1.0
+    shadow = compute_shadow_map(_audit3b_tile_scene(light), light; resolution=256)
+    @test shadow_visibility(shadow, Vec3(0.0, 0.0, 0.0)) == 0.0
+    # Explicit ShadowMap construction accepts the same settings.
+    manual = ShadowMap(fill(-1.0, 4, 4), Mat4(), 0.0, 0; intensity=0.25)
+    @test manual.intensity == 0.25
+    @test manual.normal_bias == 0.0
+    @test_throws ArgumentError ShadowMap(fill(-1.0, 4, 4), Mat4(), 0.0, 0; intensity=-0.1)
+
+    # End to end: render! with shadows multiplies the direct light by
+    # mix(1, visibility, intensity). A slab 1.5 above a subdivided floor, sun
+    # along (1, 1, 0): the shadow falls on x in [-2, -1], beside the slab as
+    # seen from above.
+    function shadow_render(intensity)
+        scene = Scene()
+        floor = Mesh(PlaneGeometry(width=4.0, height=4.0, width_segments=32,
+                                   height_segments=32), MeshLambertMaterial())
+        floor.rotation = Euler(-pi / 2, 0.0, 0.0)
+        floor.receive_shadow = true
+        blocker = Mesh(BoxGeometry(width=1.0, height=0.1, depth=1.0), MeshLambertMaterial())
+        blocker.position = Vec3(0.0, 1.5, 0.0)
+        blocker.cast_shadow = true
+        add!(scene, floor)
+        add!(scene, blocker)
+        add!(scene, DirectionalLight(position=Vec3(1.0, 1.0, 0.0), cast_shadow=true,
+                                     shadow_intensity=intensity))
+        camera = OrthographicCamera(left=-2.0, right=2.0, top=2.0, bottom=-2.0,
+                                    near=0.1, far=20.0)
+        camera.position = Vec3(0.0, 3.0, 0.0)
+        camera.target = Vec3(0.0, 0.0, 0.0)
+        camera.up = Vec3(0.0, 0.0, -1.0)
+        target = RenderTarget(32, 32)
+        render!(target, scene, camera; shadows=true)
+        return target.color
+    end
+    full = shadow_render(1.0)
+    half = shadow_render(0.5)
+    lit = cos(pi / 4) / pi                  # Lambert, N·L = cos 45°, BRDF 1/π
+    shadowed = findall(==(0.0), full)
+    @test length(shadowed) > 100
+    @test all(i -> isapprox(full[i], lit; rtol=1e-12) || full[i] == 0.0, eachindex(full))
+    @test all(i -> isapprox(half[i], 0.5 * lit; rtol=1e-12), shadowed)
+    @test all(i -> half[i] == full[i], findall(>(0.0), full))
+end
+
+# three.js r186 oracle (node, scratch sh_oracle.mjs): LightProbeGenerator
+# .fromCubeTexture on six 3x3 RGBA byte faces whose texel p (row-major from the
+# top) holds channel c = (37 face + 11 p + 5 c^2 + 3) mod 256, face 0-based.
+const _AUDIT3B_SH_SRGB = [
+    (1.0940213140780002, 1.117825762695413, 1.2239500528927483),
+    (-0.1783896417199619, -0.14537630934111473, -0.12333106927543125),
+    (-0.052751592473017105, 0.009041959221841627, 0.06605552609654644),
+    (-0.01548824444838248, 0.026807249489732, 0.005614725557244952),
+    (0.04097215832166889, -0.0016872648535054943, -0.04656643207855053),
+    (-0.04901315649433875, -0.11778417537615926, -0.06739307625340916),
+    (0.6303820943157326, 0.6240337613276759, 0.5760159452786826),
+    (0.01632735444602144, -0.047972213801656644, 0.15110409680765652),
+    (-0.22795119506221742, -0.2416832302352915, -0.32915850500245436)]
+const _AUDIT3B_SH_LINEAR = [
+    (1.8215964673704261, 1.8439466053724527, 1.9347927407900265),
+    (-0.16797455349656043, -0.1283539759919432, -0.08873339848732595),
+    (0.037300772150974944, 0.09673163840790083, 0.1389310700696233),
+    (0.058875102699591425, 0.09849568020420876, 0.07036272576306038),
+    (0.04297449021853791, 2.6996143433202836e-17, -0.04297449021853788),
+    (-0.059044282255733146, -0.12350601758354005, -0.05904428225573306),
+    (0.5235750367716133, 0.49256081492734405, 0.3766377648712525),
+    (0.06446173532780684, -5.099271537382758e-17, 0.19051843000595314),
+    (-0.32719483989848347, -0.32719483989848336, -0.36921373812453223)]
+
+function _audit3b_probe_faces(colorspace)
+    return ntuple(6) do face
+        data = zeros(3, 3, 3)
+        for row in 1:3, col in 1:3, channel in 1:3
+            p = (row - 1) * 3 + (col - 1)
+            data[row, col, channel] =
+                mod(37 * (face - 1) + 11 * p + 5 * (channel - 1)^2 + 3, 256) / 255
+        end
+        Texture(data; colorspace=colorspace)
+    end
+end
+
+@testset "LightProbe spherical harmonics (order 2)" begin
+    # Generator parity. Diff3D cube faces are unmirrored (sample_cube follows the
+    # GL face table, like three.js render-target cubes), while fromCubeTexture
+    # mirrors x for image cube textures (LightProbeGenerator.js face 0 maps to
+    # x = -1; WebGLMaterials.js:247-251 flipEnvMap). The basis functions odd in
+    # x (three.js indices 3, 4, 7) therefore change sign.
+    signs = (1, 1, 1, -1, -1, 1, 1, -1, 1)
+    # three.js decodes sRGB with 10-digit constants (ColorManagement.js:207
+    # `pow(c * 0.9478672986 + 0.0521327014, 2.4)`), Diff3D with the exact
+    # (c + 0.055) / 1.055, so the sRGB faces agree to ~1e-11 relative.
+    for (colorspace, oracle, rtol) in ((:srgb, _AUDIT3B_SH_SRGB, 1e-9),
+                                       (:linear, _AUDIT3B_SH_LINEAR, 1e-12))
+        probe = Diff3D.light_probe_from_cube_texture(CubeTexture(_audit3b_probe_faces(colorspace)))
+        @test probe isa LightProbe
+        @test probe.coeffs == ntuple(_ -> Color3(0.0, 0.0, 0.0), 4)
+        for j in 1:9, (channel, value) in enumerate(oracle[j])
+            got = (probe.sh[j].r, probe.sh[j].g, probe.sh[j].b)[channel]
+            @test isapprox(got, signs[j] * value; rtol=rtol, atol=1e-15)
+        end
+    end
+    @test Diff3D.light_probe_from_cube_texture(CubeTexture(_audit3b_probe_faces(:linear));
+                                        intensity=0.5).intensity == 0.5
+    bad_faces = (Texture(zeros(2, 3, 3)), _audit3b_probe_faces(:linear)[2:6]...)
+    @test_throws ArgumentError Diff3D.light_probe_from_cube_texture(CubeTexture(bad_faces))
+
+    # Irradiance: three.js SphericalHarmonics3.getIrradianceAt oracle for
+    # coefficients c_j = (0.1(j+1), 0.05(9-j), 0.02 j^2 - 0.3), j = 0..8.
+    sh = ntuple(j -> Color3(0.1 * j, 0.05 * (10 - j), 0.02 * (j - 1)^2 - 0.3), 9)
+    probe = LightProbe(sh=sh)
+    oracle = [((0.0, 1.0, 0.0), (-0.266246, 0.7495250000000001, -1.0768994399999998)),
+              ((1.0, 0.0, 0.0), (0.7106969999999999, 0.6900965000000001, -0.07224267999999995)),
+              ((0.0, 0.0, -1.0), (0.12841619999999998, 0.11494989999999997, 0.16733919999999997)),
+              ((0.48, -0.6, 0.64), (0.23802673344000014, 0.43418654048, -0.21925809164799986))]
+    for (normal, expected) in oracle
+        got = Diff3D._fill_color(Vec3(normal...), probe)
+        # Diff3D clamps probe irradiance at zero per channel (as for coeffs).
+        @test got.r ≈ max(expected[1], 0.0) atol = 1e-15
+        @test got.g ≈ max(expected[2], 0.0) atol = 1e-15
+        @test got.b ≈ max(expected[3], 0.0) atol = 1e-15
+    end
+    doubled = Diff3D._fill_color(Vec3(1.0, 0.0, 0.0), LightProbe(sh=sh, intensity=2.0))
+    single = Diff3D._fill_color(Vec3(1.0, 0.0, 0.0), probe)
+    @test (doubled.r, doubled.g, doubled.b) == (2single.r, 2single.g, 2single.b)
+
+    # The order-1 `coeffs` form is unchanged and equals the matching SH9 probe:
+    # DC = 0.886227 L00, gradient = 2 * 0.511664 * (L11, L1-1, L10).
+    coeffs = (Color3(0.5, 0.4, 0.3), Color3(0.1, 0.0, -0.05), Color3(0.2, 0.1, 0.0),
+              Color3(-0.1, 0.05, 0.02))
+    legacy = LightProbe(coeffs=coeffs)
+    @test legacy.sh == ntuple(_ -> Color3(0.0, 0.0, 0.0), 9)
+    k1 = 2.0 * 0.511664
+    zero_color = Color3(0.0, 0.0, 0.0)
+    as_sh = LightProbe(sh=(coeffs[1] * (1 / 0.886227), coeffs[3] * (1 / k1),
+                           coeffs[4] * (1 / k1), coeffs[2] * (1 / k1),
+                           zero_color, zero_color, zero_color, zero_color, zero_color))
+    for normal in (Vec3(0.0, 1.0, 0.0), normalize(Vec3(0.3, -0.4, 0.8)), Vec3(-1.0, 0.0, 0.0))
+        a = Diff3D._fill_color(normal, legacy)
+        b = Diff3D._fill_color(normal, as_sh)
+        @test a.r ≈ b.r atol = 1e-15
+        @test a.g ≈ b.g atol = 1e-15
+        @test a.b ≈ b.b atol = 1e-15
+        manual = coeffs[1] + coeffs[2] * normal.x + coeffs[3] * normal.y + coeffs[4] * normal.z
+        @test a.r ≈ max(manual.r, 0.0) atol = 1e-15
+        @test a.g ≈ max(manual.g, 0.0) atol = 1e-15
+        @test a.b ≈ max(manual.b, 0.0) atol = 1e-15
+    end
+    # Positional (10-field) construction keeps working with an empty SH.
+    positional = LightProbe(Vec3(), Euler(), Vec3(1.0, 1.0, 1.0), nothing,
+                            Diff3D.AbstractObject3D[], true, "p", 1, coeffs, 1.0)
+    @test positional.sh == legacy.sh
+    @test_throws ArgumentError LightProbe(sh=ntuple(_ -> Color3(0.0, 0.0, 0.0), 4))
+    @test_throws ArgumentError LightProbe(sh=(Color3(NaN, 0.0, 0.0),
+                                              ntuple(_ -> zero_color, 8)...))
+    # ForwardDiff normals flow through the SH term.
+    derivative = ForwardDiff.derivative(
+        t -> Diff3D._fill_color(Vec3(t, sqrt(1 - t^2), 0.0), probe).g, 0.6)
+    @test isfinite(derivative)
+
+    # Rendered: an SH probe with only L00 lights a surface like an AmbientLight
+    # of colour 0.886227 L00 (both feed the same irradiance, lights_fragment_begin).
+    function sphere_image(light)
+        scene = Scene()
+        add!(scene, Mesh(SphereGeometry(radius=1.0), MeshLambertMaterial()))
+        add!(scene, light)
+        camera = PerspectiveCamera(fov=pi / 4, aspect=1.0)
+        camera.position = Vec3(0.0, 0.0, 4.0)
+        target = RenderTarget(16, 16)
+        render!(target, scene, camera)
+        return copy(target.color)
+    end
+    l00 = Color3(0.3, 0.6, 0.9)
+    sh_image = sphere_image(LightProbe(sh=(l00, ntuple(_ -> zero_color, 8)...)))
+    ambient_image = sphere_image(AmbientLight(color=l00 * 0.886227))
+    @test maximum(abs.(sh_image .- ambient_image)) <= 1e-12
+    @test maximum(sh_image) > 0
+end

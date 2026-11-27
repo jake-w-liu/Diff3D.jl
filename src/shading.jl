@@ -1533,10 +1533,13 @@ end
     return max(value, zero(value)) * scale
 end
 
-# Order-1 SH irradiance, clamped to non-negative per channel.
+# Order-1 SH irradiance, clamped to non-negative per channel. A probe with
+# three.js SH9 coefficients adds shGetIrradianceAt (lights.jl).
 function _fill_color(normal::Vec3, light::LightProbe)
     _validate_light_parameters(light)
     c = light.coeffs
+    _light_probe_has_sh(light) &&
+        return _light_probe_sh_fill(c, light.sh, normal) * light.intensity
     Color3(
         _light_probe_channel(
             c[1].r, c[2].r, c[3].r, c[4].r, normal),
@@ -2290,7 +2293,8 @@ end
 
 function _accumulate_light(result, m, normal::Vec3, view_dir::Vec3,
                            position::Vec3, light::RectAreaLight, shadow_fn)
-    vis = shadow_fn === nothing ? 1.0 : shadow_fn(light, position)
+    vis = shadow_fn === nothing ? 1.0 :
+              _shadow_fn_visibility(shadow_fn, light, position, normal)
     vis <= 0.0 && return result
     return result + _rect_area_response(m, normal, view_dir, position, light) * vis
 end
@@ -2301,7 +2305,8 @@ function _accumulate_light(result, m, normal::Vec3, view_dir::Vec3,
         return result + _fill_response(m, normal, _fill_color(normal, light))
     else
         lc, li, ldir = light_contribution(light, position)
-        vis = shadow_fn === nothing ? 1.0 : shadow_fn(light, position)
+        vis = shadow_fn === nothing ? 1.0 :
+              _shadow_fn_visibility(shadow_fn, light, position, normal)
         vis <= 0.0 && return result
         return result + _direct_response(m, normal, view_dir, lc, li, ldir) * vis
     end

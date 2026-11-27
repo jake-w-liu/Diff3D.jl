@@ -464,6 +464,28 @@ function _validated_shadow_pcf_radius(v)
     return Int(v)
 end
 
+# three.js LightShadow.intensity (LightShadow.js:41, default 1): the shadowed
+# fraction is mixed back toward lit, `mix(1, shadow, intensity)`
+# (shadowmap_pars_fragment.glsl.js:180).
+function _validated_shadow_intensity(v)
+    v isa Real && !(v isa Bool) ||
+        throw(ArgumentError("shadow_intensity must be a real number in [0, 1]"))
+    value = Float64(v)
+    isfinite(value) && 0.0 <= value <= 1.0 ||
+        throw(ArgumentError("shadow_intensity must be finite and in [0, 1]"))
+    return value
+end
+
+# three.js LightShadow.normalBias (LightShadow.js:74, default 0): world-space
+# offset of the shadow lookup along the surface normal (shadowmap_vertex.glsl.js).
+function _validated_shadow_normal_bias(v)
+    v isa Real && !(v isa Bool) ||
+        throw(ArgumentError("shadow_normal_bias must be finite"))
+    value = Float64(v)
+    isfinite(value) || throw(ArgumentError("shadow_normal_bias must be finite"))
+    return value
+end
+
 @inline function _validated_light_cast_shadow(value)
     value isa Bool || throw(ArgumentError("light cast_shadow must be Bool"))
     return value
@@ -476,6 +498,12 @@ _light_shadow_bias(light, fallback::Real=3e-3) =
 _light_shadow_pcf_radius(light, fallback::Integer=0) =
     hasproperty(light, :shadow_pcf_radius) && getproperty(light, :shadow_pcf_radius) !== nothing ?
     Int(getproperty(light, :shadow_pcf_radius)) : Int(fallback)
+
+_light_shadow_intensity(light) =
+    hasfield(typeof(light), :shadow_intensity) ? getfield(light, :shadow_intensity) : 1.0
+
+_light_shadow_normal_bias(light) =
+    hasfield(typeof(light), :shadow_normal_bias) ? getfield(light, :shadow_normal_bias) : 0.0
 
 # ========================== DirectionalLight ==========================
 
@@ -494,10 +522,17 @@ mutable struct DirectionalLight <: AbstractLight
     cast_shadow::Bool
     shadow_bias::Union{Nothing, Float64}
     shadow_pcf_radius::Union{Nothing, Int}
+    shadow_intensity::Float64     # three.js light.shadow.intensity
+    shadow_normal_bias::Float64   # three.js light.shadow.normalBias
     rotation_driven::Bool
 end
 
+# Positional forms: 14 fields (before rotation_driven existed), 15 (with
+# rotation_driven, before the shadow settings), and 16 (all but rotation_driven).
 DirectionalLight(args::Vararg{Any,14}) = DirectionalLight(args..., false)
+DirectionalLight(args::Vararg{Any,15}) =
+    DirectionalLight(args[1:14]..., 1.0, 0.0, args[15])
+DirectionalLight(args::Vararg{Any,16}) = DirectionalLight(args..., false)
 
 DirectionalLight(position, rotation, scale, parent, children, visible, name, id,
                  color, intensity, target, cast_shadow) =
@@ -508,7 +543,8 @@ DirectionalLight(position, rotation, scale, parent, children, visible, name, id,
 function DirectionalLight(; color=Color3(1.0, 1.0, 1.0), intensity=1.0,
                            position=Vec3(0.0, 1.0, 0.0), name="DirectionalLight",
                            cast_shadow=false, shadow_bias=nothing,
-                           shadow_pcf_radius=nothing, rotation_driven::Bool=false)
+                           shadow_pcf_radius=nothing, rotation_driven::Bool=false,
+                           shadow_intensity=1.0, shadow_normal_bias=0.0)
     DirectionalLight(_validated_light_vec3(position, :position),
                      Euler(), Vec3(1.0,1.0,1.0),
                      nothing, AbstractObject3D[], true, name, _next_id(),
@@ -516,7 +552,9 @@ function DirectionalLight(; color=Color3(1.0, 1.0, 1.0), intensity=1.0,
                      _validated_light_intensity(intensity), Vec3(),
                      _validated_light_cast_shadow(cast_shadow),
                      _validated_shadow_bias(shadow_bias),
-                     _validated_shadow_pcf_radius(shadow_pcf_radius), rotation_driven)
+                     _validated_shadow_pcf_radius(shadow_pcf_radius),
+                     _validated_shadow_intensity(shadow_intensity),
+                     _validated_shadow_normal_bias(shadow_normal_bias), rotation_driven)
 end
 
 get_position(o::DirectionalLight) = o.position
@@ -546,7 +584,11 @@ mutable struct PointLight <: AbstractLight
     shadow_bias::Union{Nothing, Float64}
     shadow_pcf_radius::Union{Nothing, Int}
     ies_profile::Union{Nothing, IESProfile}   # nothing = isotropic
+    shadow_intensity::Float64     # three.js light.shadow.intensity
+    shadow_normal_bias::Float64   # three.js light.shadow.normalBias
 end
+
+PointLight(args::Vararg{Any,16}) = PointLight(args..., 1.0, 0.0)
 
 PointLight(position, rotation, scale, parent, children, visible, name, id,
            color, intensity, distance, decay, cast_shadow, ies_profile) =
@@ -557,7 +599,8 @@ PointLight(position, rotation, scale, parent, children, visible, name, id,
 function PointLight(; color=Color3(1.0, 1.0, 1.0), intensity=1.0,
                     distance=0.0, decay=2.0, position=Vec3(),
                     name="PointLight", cast_shadow=false, shadow_bias=nothing,
-                    shadow_pcf_radius=nothing, ies_profile=nothing)
+                    shadow_pcf_radius=nothing, ies_profile=nothing,
+                    shadow_intensity=1.0, shadow_normal_bias=0.0)
     PointLight(_validated_light_vec3(position, :position),
                Euler(), Vec3(1.0,1.0,1.0),
                nothing, AbstractObject3D[], true, name, _next_id(),
@@ -568,7 +611,9 @@ function PointLight(; color=Color3(1.0, 1.0, 1.0), intensity=1.0,
                _validated_light_cast_shadow(cast_shadow),
                _validated_shadow_bias(shadow_bias),
                _validated_shadow_pcf_radius(shadow_pcf_radius),
-               _validated_light_ies_profile(ies_profile))
+               _validated_light_ies_profile(ies_profile),
+               _validated_shadow_intensity(shadow_intensity),
+               _validated_shadow_normal_bias(shadow_normal_bias))
 end
 
 get_position(o::PointLight) = o.position
@@ -601,10 +646,16 @@ mutable struct SpotLight <: AbstractLight
     shadow_bias::Union{Nothing, Float64}
     shadow_pcf_radius::Union{Nothing, Int}
     ies_profile::Union{Nothing, IESProfile}   # nothing = analytic cone
+    shadow_intensity::Float64     # three.js light.shadow.intensity
+    shadow_normal_bias::Float64   # three.js light.shadow.normalBias
     rotation_driven::Bool
 end
 
+# Positional forms: 19 fields (before rotation_driven existed), 20 (with
+# rotation_driven, before the shadow settings), and 21 (all but rotation_driven).
 SpotLight(args::Vararg{Any,19}) = SpotLight(args..., false)
+SpotLight(args::Vararg{Any,20}) = SpotLight(args[1:19]..., 1.0, 0.0, args[20])
+SpotLight(args::Vararg{Any,21}) = SpotLight(args..., false)
 
 SpotLight(position, rotation, scale, parent, children, visible, name, id,
           color, intensity, distance, angle, penumbra, decay, target, cast_shadow,
@@ -617,7 +668,8 @@ function SpotLight(; color=Color3(1.0, 1.0, 1.0), intensity=1.0,
                    distance=0.0, angle=π/3, penumbra=0.0, decay=2.0,
                    position=Vec3(0.0, 1.0, 0.0), name="SpotLight",
                    target=Vec3(), cast_shadow=false, shadow_bias=nothing,
-                   shadow_pcf_radius=nothing, ies_profile=nothing, rotation_driven::Bool=false)
+                   shadow_pcf_radius=nothing, ies_profile=nothing, rotation_driven::Bool=false,
+                   shadow_intensity=1.0, shadow_normal_bias=0.0)
     SpotLight(_validated_light_vec3(position, :position),
               Euler(), Vec3(1.0,1.0,1.0),
               nothing, AbstractObject3D[], true, name, _next_id(),
@@ -631,7 +683,9 @@ function SpotLight(; color=Color3(1.0, 1.0, 1.0), intensity=1.0,
               _validated_light_cast_shadow(cast_shadow),
               _validated_shadow_bias(shadow_bias),
               _validated_shadow_pcf_radius(shadow_pcf_radius),
-              _validated_light_ies_profile(ies_profile), rotation_driven)
+              _validated_light_ies_profile(ies_profile),
+              _validated_shadow_intensity(shadow_intensity),
+              _validated_shadow_normal_bias(shadow_normal_bias), rotation_driven)
 end
 
 get_position(o::SpotLight) = o.position
@@ -719,9 +773,39 @@ is_visible(o::RectAreaLight) = o.visible
 set_parent!(o::RectAreaLight, p) = (o.parent = p)
 
 # ========================== LightProbe ==========================
-# Order-1 spherical-harmonics ambient probe: irradiance varies linearly with the
-# surface normal. `coeffs` = (DC, x-grad, y-grad, z-grad).
 
+const _ZERO_SH9 = ntuple(_ -> Color3(0.0, 0.0, 0.0), 9)
+
+@noinline function _throw_light_probe_sh()
+    throw(ArgumentError(
+        "light sh must be a tuple of nine Color3 values with finite components"))
+end
+
+@inline function _validated_light_probe_sh(sh)
+    sh isa Tuple && length(sh) == 9 || _throw_light_probe_sh()
+    return ntuple(i -> _validated_light_color(sh[i], :sh), 9)
+end
+
+"""
+    LightProbe(; coeffs=(4 × Color3(0)), sh=(9 × Color3(0)), intensity=1.0, name="LightProbe")
+    LightProbe(ambient::Color3; intensity=1.0)
+
+Ambient light probe whose irradiance depends on the surface normal `n` (world
+space).
+
+- `sh` holds the nine coefficients of a three.js `SphericalHarmonics3`
+  (`LightProbe.sh`, order L00, L1-1, L10, L11, L2-2, L2-1, L20, L21, L22) in
+  radiance units. They contribute three.js `shGetIrradianceAt(n)`
+  (SphericalHarmonics3.js `getIrradianceAt`, lights_pars_begin.glsl.js). Build
+  them from an environment with [`light_probe_from_cube_texture`](@ref).
+- `coeffs` is Diff3D's order-1 form `(DC, x, y, z)`, contributing
+  `DC + x·n.x + y·n.y + z·n.z` directly as irradiance.
+
+The irradiance is the sum of both terms, clamped to be non-negative per channel
+and scaled by `intensity`; it adds to the same ambient irradiance as
+[`AmbientLight`](@ref). `LightProbe(ambient)` is a uniform probe with
+`coeffs[1] = ambient`.
+"""
 mutable struct LightProbe <: AbstractLight
     position::Vec3{Float64}
     rotation::Euler{Float64}
@@ -733,20 +817,136 @@ mutable struct LightProbe <: AbstractLight
     id::Int
     coeffs::NTuple{4, Color3{Float64}}
     intensity::Float64
+    sh::NTuple{9, Color3{Float64}}   # three.js LightProbe.sh coefficients
 end
+
+LightProbe(position, rotation, scale, parent, children, visible, name, id, coeffs,
+           intensity) =
+    LightProbe(position, rotation, scale, parent, children, visible, name, id, coeffs,
+               intensity, _ZERO_SH9)
 
 function LightProbe(; coeffs=(Color3(0.0,0.0,0.0), Color3(0.0,0.0,0.0),
                               Color3(0.0,0.0,0.0), Color3(0.0,0.0,0.0)),
-                     intensity=1.0, name="LightProbe")
+                     sh=_ZERO_SH9, intensity=1.0, name="LightProbe")
     LightProbe(Vec3(), Euler(), Vec3(1.0,1.0,1.0), nothing, AbstractObject3D[],
                true, name, _next_id(), _validated_light_probe_coeffs(coeffs),
-               _validated_light_intensity(intensity))
+               _validated_light_intensity(intensity), _validated_light_probe_sh(sh))
+end
+
+@inline _light_probe_has_sh(light::LightProbe) = getfield(light, :sh) !== _ZERO_SH9
+
+# three.js SphericalHarmonics3.getIrradianceAt (SphericalHarmonics3.js:119-142),
+# the same weights as shGetIrradianceAt in lights_pars_begin.glsl.js, for a unit
+# world-space normal.
+@inline function _sh9_irradiance_channel(c0, c1, c2, c3, c4, c5, c6, c7, c8, normal::Vec3)
+    x = normal.x; y = normal.y; z = normal.z
+    result = c0 * 0.886227
+    result += c1 * (2.0 * 0.511664 * y)
+    result += c2 * (2.0 * 0.511664 * z)
+    result += c3 * (2.0 * 0.511664 * x)
+    result += c4 * (2.0 * 0.429043 * x * y)
+    result += c5 * (2.0 * 0.429043 * y * z)
+    result += c6 * (0.743125 * z * z - 0.247708)
+    result += c7 * (2.0 * 0.429043 * x * z)
+    result += c8 * (0.429043 * (x * x - y * y))
+    return result
+end
+
+@inline function _light_probe_combined_channel(dc, gx, gy, gz, sh_value, normal::Vec3)
+    value = dc + gx * normal.x + gy * normal.y + gz * normal.z + sh_value
+    return max(value, zero(value))
+end
+
+# Irradiance of a probe with spherical-harmonic coefficients: the order-1
+# `coeffs` term plus the SH9 term, clamped per channel (before `intensity`).
+function _light_probe_sh_fill(c::NTuple{4,Color3{Float64}}, sh::NTuple{9,Color3{Float64}},
+                              normal::Vec3)
+    r = _sh9_irradiance_channel(sh[1].r, sh[2].r, sh[3].r, sh[4].r, sh[5].r, sh[6].r,
+                                sh[7].r, sh[8].r, sh[9].r, normal)
+    g = _sh9_irradiance_channel(sh[1].g, sh[2].g, sh[3].g, sh[4].g, sh[5].g, sh[6].g,
+                                sh[7].g, sh[8].g, sh[9].g, normal)
+    b = _sh9_irradiance_channel(sh[1].b, sh[2].b, sh[3].b, sh[4].b, sh[5].b, sh[6].b,
+                                sh[7].b, sh[8].b, sh[9].b, normal)
+    return Color3(
+        _light_probe_combined_channel(c[1].r, c[2].r, c[3].r, c[4].r, r, normal),
+        _light_probe_combined_channel(c[1].g, c[2].g, c[3].g, c[4].g, g, normal),
+        _light_probe_combined_channel(c[1].b, c[2].b, c[3].b, c[4].b, b, normal))
 end
 
 """Build a uniform (DC-only) light probe from an ambient colour."""
 LightProbe(ambient::Color3; intensity=1.0) =
     LightProbe(coeffs=(ambient, Color3(0.0,0.0,0.0), Color3(0.0,0.0,0.0), Color3(0.0,0.0,0.0)),
                intensity=intensity)
+
+# Unit-cube coordinate of the centre of texel (col, row) on a cube face, in the
+# GL face convention `sample_cube` uses (`_cube_face_uv`): s = (col - 1/2)/W
+# runs along the face's sc axis and the first storage row is t = 0.
+@inline function _light_probe_face_coordinate(face::Int, sc::Float64, row::Float64)
+    face == 1 && return Vec3(1.0, row, -sc)
+    face == 2 && return Vec3(-1.0, row, sc)
+    face == 3 && return Vec3(sc, 1.0, -row)
+    face == 4 && return Vec3(sc, -1.0, row)
+    face == 5 && return Vec3(sc, row, 1.0)
+    return Vec3(-sc, row, -1.0)
+end
+
+"""
+    light_probe_from_cube_texture(cube::CubeTexture; intensity=1.0) -> LightProbe
+
+Project a radiance environment onto nine spherical-harmonic coefficients and
+return a [`LightProbe`](@ref) carrying them in `sh`, following three.js
+`LightProbeGenerator.fromCubeTexture` (examples/jsm/lights/LightProbeGenerator.js):
+every texel is weighted by its solid angle `4 / |c|^3` (`c` the texel centre on
+the unit cube), accumulated against the `SphericalHarmonics3.getBasisAt` basis,
+and the sum is normalized by `4π / Σweight`. Faces with `colorspace=:srgb` are
+decoded to linear first, `:linear` faces are used as stored.
+
+Each face must be square (faces may differ in size). Texel directions follow
+[`sample_cube`](@ref), so the probe lights a surface the way the same cube map
+reflects onto it. three.js mirrors the x axis for a `CubeTexture` built from
+images (`flipEnvMap`), so for the same six images its coefficients `sh[4]`,
+`sh[5]` and `sh[8]` (the basis functions odd in x: L11, L2-2, L21) have the
+opposite sign;
+three.js `fromCubeRenderTarget`, which reads unmirrored faces, agrees with this
+function.
+"""
+function light_probe_from_cube_texture(cube::CubeTexture; intensity=1.0)
+    probe_intensity = _validated_light_intensity(intensity)
+    acc_r = zeros(9); acc_g = zeros(9); acc_b = zeros(9)
+    total_weight = 0.0
+    for face in 1:6
+        texture = cube.faces[face]
+        H, W, _ = _checked_texture_data_size(texture, "light_probe_from_cube_texture")
+        H == W || throw(ArgumentError(
+            "light_probe_from_cube_texture faces must be square; face $face is $(H)×$(W)"))
+        decode = _texture_decodes_srgb(texture)
+        data = texture.data
+        pixel_size = 2 / W
+        @inbounds for row_index in 1:H, col_index in 1:W
+            color = _texel_data(data, :clamp, :clamp, col_index - 1, row_index - 1, decode)
+            sc = -1 + (col_index - 0.5) * pixel_size
+            row = 1 - (row_index - 0.5) * pixel_size
+            coord = _light_probe_face_coordinate(face, sc, row)
+            length_sq = coord.x * coord.x + coord.y * coord.y + coord.z * coord.z
+            weight = 4 / (sqrt(length_sq) * length_sq)
+            total_weight += weight
+            inv_length = 1 / sqrt(length_sq)
+            x = coord.x * inv_length; y = coord.y * inv_length; z = coord.z * inv_length
+            # SphericalHarmonics3.getBasisAt (SphericalHarmonics3.js:316-337).
+            basis = (0.282095, 0.488603 * y, 0.488603 * z, 0.488603 * x,
+                     1.092548 * x * y, 1.092548 * y * z, 0.315392 * (3 * z * z - 1),
+                     1.092548 * x * z, 0.546274 * (x * x - y * y))
+            for j in 1:9
+                acc_r[j] += basis[j] * color.r * weight
+                acc_g[j] += basis[j] * color.g * weight
+                acc_b[j] += basis[j] * color.b * weight
+            end
+        end
+    end
+    norm = (4 * pi) / total_weight
+    sh = ntuple(j -> Color3(acc_r[j] * norm, acc_g[j] * norm, acc_b[j] * norm), 9)
+    return LightProbe(; sh=sh, intensity=probe_intensity)
+end
 
 get_position(o::LightProbe) = o.position
 get_rotation(o::LightProbe) = o.rotation
@@ -845,6 +1045,7 @@ end
 @inline function _validate_light_parameters(light::LightProbe)
     _validated_light_probe_coeffs(light.coeffs)
     _validated_light_intensity(light.intensity)
+    _validated_light_probe_sh(light.sh)
     return nothing
 end
 
@@ -862,6 +1063,8 @@ end
         light::Union{DirectionalLight, PointLight, SpotLight})
     _validated_shadow_bias(light.shadow_bias)
     _validated_shadow_pcf_radius(light.shadow_pcf_radius)
+    _validated_shadow_intensity(light.shadow_intensity)
+    _validated_shadow_normal_bias(light.shadow_normal_bias)
     return nothing
 end
 
