@@ -906,11 +906,16 @@ function _morph_bounding_radius(radius::Float64, center::Vec3{Float64},
     return radius
 end
 
-function _compute_bounding_box_validated(g::BufferGeometry)
+function _position_bounding_box(g::BufferGeometry)
     box = Box3()
     @inbounds for vi in 1:g.n_vertices
         box = box3_expand_by_point(box, get_vertex(g, vi))
     end
+    return box
+end
+
+function _compute_bounding_box_validated(g::BufferGeometry)
+    box = _position_bounding_box(g)
     # BufferGeometry.js:671-695 with morphTargetsRelative: Diff3D morph
     # position targets are deltas, so each one grows the box by the extent of
     # its deltas.
@@ -954,7 +959,23 @@ Bounding sphere centred on the bounding-box centre (three.js
 function compute_bounding_sphere(g::BufferGeometry)
     _validate_geometry_vertices(g, "compute_bounding_sphere")
     g.n_vertices == 0 && return BoundingSphere(Vec3(), 0.0)
-    box = _compute_bounding_box_validated(g)
+    return _bounding_sphere_validated(g, true)
+end
+
+# Bounds of the positions alone, for the CPU renderers' frustum culling. They
+# cull the geometry they draw, whose positions already carry the mesh's morph
+# pose (a morph proxy), so these bounds are exact; including every morph target
+# would cost a pass per target per frame and make an unused malformed target an
+# error at render time.
+function _compute_position_bounding_sphere(g::BufferGeometry)
+    _validate_geometry_vertices(g, "compute_bounding_sphere")
+    g.n_vertices == 0 && return BoundingSphere(Vec3(), 0.0)
+    return _bounding_sphere_validated(g, false)
+end
+
+function _bounding_sphere_validated(g::BufferGeometry, include_morph_targets::Bool)
+    box = include_morph_targets ? _compute_bounding_box_validated(g) :
+          _position_bounding_box(g)
     center = Vec3(
         _geometry_midpoint(box.min.x, box.max.x),
         _geometry_midpoint(box.min.y, box.max.y),
@@ -965,6 +986,7 @@ function compute_bounding_sphere(g::BufferGeometry)
         d = get_vertex(g, vi) - center
         radius = max(radius, norm(d))
     end
+    include_morph_targets || return BoundingSphere(center, radius)
     # BufferGeometry.js:747-773 (box) and 790-816 (radius)
     for (name, attr) in g.attributes
         _is_morph_position_name(name) || continue

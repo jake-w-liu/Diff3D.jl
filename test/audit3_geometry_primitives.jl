@@ -360,3 +360,43 @@ end
         @test _audit3_bounding_box_allocations(morph) == 0
     end
 end
+
+function _audit3_morph_cull_render(geo, influences)
+    scene = Scene()
+    add!(scene, Mesh(geo, MeshBasicMaterial(color=Color3(1.0, 0.0, 0.0));
+                     morph_target_influences=influences))
+    camera = PerspectiveCamera(aspect=1.0, near=0.1, far=100.0)
+    camera.position = Vec3(0.0, 0.0, 4.0)
+    rt = RenderTarget(24, 24)
+    render!(rt, scene, camera; cache=RenderCache())
+    return rt.color
+end
+
+@testset "audit3 render culling bounds the posed geometry" begin
+    # The CPU renderers cull the geometry they draw, whose positions already hold
+    # the morph pose, so an unused malformed morph target must not make
+    # render! throw through the bounding volume, and a morph that moves the
+    # mesh into view must still be drawn.
+    base = SphereGeometry(width_segments=8, height_segments=4)
+    clean = _audit3_morph_cull_render(base, Float64[])
+    @test any(>(0.5), clean[:, :, 1])
+    stale = SphereGeometry(width_segments=8, height_segments=4)
+    set_attribute!(stale, :morphPosition0, zeros(length(stale.positions)), 3)
+    # No influence ever reaches morphPosition1, and its count is wrong.
+    set_attribute!(stale, :morphPosition1, zeros(6), 3)
+    @test _audit3_morph_cull_render(stale, [0.5]) == clean
+    unused_nan = SphereGeometry(width_segments=8, height_segments=4)
+    set_attribute!(unused_nan, :morphPosition0, fill(NaN, length(unused_nan.positions)), 3)
+    @test _audit3_morph_cull_render(unused_nan, Float64[]) == clean
+    # The public bounding volumes still validate every target.
+    @test_throws ArgumentError compute_bounding_sphere(stale)
+    @test_throws ArgumentError compute_bounding_box(unused_nan)
+
+    # Base positions far outside the frustum, morphed back to the origin.
+    away = SphereGeometry(width_segments=8, height_segments=4)
+    away.positions .+= repeat([100.0, 0.0, 0.0], away.n_vertices)
+    set_attribute!(away, :morphPosition0, repeat([-100.0, 0.0, 0.0], away.n_vertices), 3)
+    posed = _audit3_morph_cull_render(away, [1.0])
+    @test any(>(0.5), posed[:, :, 1])
+    @test isapprox(posed, clean; atol=1e-9)
+end
