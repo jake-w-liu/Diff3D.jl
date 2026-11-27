@@ -10493,7 +10493,10 @@ function _gltf_skin_tuples(geo::BufferGeometry, name::Symbol, nverts::Int;
             scaled_sum = sum(scaled)
             push!(tuples, ntuple(k -> scaled[k] / scaled_sum, 4))
         else
-            push!(tuples, w)
+            # three.js GLTFLoader.js:3928 calls normalizeSkinWeights, which
+            # binds an all-zero vertex to its first joint slot
+            # (SkinnedMesh.js:274-280).
+            push!(tuples, (1.0, 0.0, 0.0, 0.0))
         end
     end
     return tuples
