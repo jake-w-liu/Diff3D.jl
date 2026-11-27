@@ -320,9 +320,10 @@ end
 
 @testset "flat_shading meshes draw with the face normal in the viewer" begin
     # normal_fragment_begin.glsl.js FLAT_SHADED: normalize(cross(dFdx(p), dFdy(p))), no
-    # gl_FrontFacing flip. The viewer ignored flat_shading: a flat 8x6 sphere drew the smooth
-    # gradient 16 19 22 ... 61 along its centre row. After, the row is 41 x16 then 64 x17,
-    # the same as three.js r186 with flatShading = true at that row (headless Chrome).
+    # gl_FrontFacing flip. The viewer never exported or read flat_shading, so a flat mesh drew
+    # with interpolated vertex normals. Now a flat 8x6 sphere's centre row reads 41 x16 then
+    # 64 x17 (smooth: 16 19 22 ... 61), the same as three.js r186 with flatShading = true at
+    # that row (headless Chrome).
     html = _audit3b_viewer_html()
     @test occursin("vec3 n=uFlatShading>0.5?normalize(cross(dFdx(vWorld),dFdy(vWorld))):safeNormal(vNormal); if(uFlatShading<0.5&&!gl_FrontFacing)n=-n;", html)
     @test occursin("uniform1f(p,\"uFlatShading\",o.flatShading?1:0);", html)
