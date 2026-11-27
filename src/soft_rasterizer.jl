@@ -39,11 +39,16 @@ end
 # max subtraction. A minimum-depth reference keeps every exponent non-positive.
 # Farther deltas that still overflow are beyond the representable softmax tail;
 # return a typed zero so ForwardDiff does not encounter `0 * Inf` partials.
+# Ties and underflowed weights are decided on primal values: a Dual delta with
+# a zero value but nonzero partials, or a weight whose value underflowed while
+# its partials hold `0 * Inf`, would otherwise poison the image with NaN.
 @inline function _soft_relative_depth_weight(nearest_depth, depth, gamma)
     delta = depth - nearest_depth
-    iszero(delta) && return one(delta)
+    iszero(_primal_value(delta)) && return one(delta)
     scaled_delta = delta / gamma
-    return isfinite(scaled_delta) ? exp(-scaled_delta) : zero(scaled_delta)
+    isfinite(scaled_delta) || return zero(scaled_delta)
+    weight = exp(-scaled_delta)
+    return iszero(_primal_value(weight)) ? zero(weight) : weight
 end
 
 @inline _soft_pixel_center(::Type{T}, index::Int) where {T} = T(index) - T(0.5)
@@ -343,7 +348,7 @@ function soft_render(vertices::AbstractVector{Vec3{Tv}},
 
                         w = coverage * depth_weight
                         next_weight = total_weight + w
-                        average_color = iszero(total_weight) ? tri.color :
+                        average_color = iszero(_primal_value(total_weight)) ? tri.color :
                             _stable_color_lerp(
                                 average_color, tri.color, w / next_weight)
                         total_weight = next_weight
@@ -354,7 +359,7 @@ function soft_render(vertices::AbstractVector{Vec3{Tv}},
                     _soft_relative_depth_weight(m, one(T), γ) :
                     exp(background_logit - m)) + eps
                 denom = total_weight + w_bg
-                color = iszero(total_weight) ? bg :
+                color = iszero(_primal_value(total_weight)) ? bg :
                     _stable_color_lerp(
                         average_color, bg, w_bg / denom)
                 image[py, px, 1] = color.r
@@ -495,7 +500,7 @@ function soft_render(vertices::AbstractVector{Vec3{Tv}},
 
                     w = coverage * depth_weight
                     next_weight = total_weight + w
-                    average_color = iszero(total_weight) ? tri.color :
+                    average_color = iszero(_primal_value(total_weight)) ? tri.color :
                         _stable_color_lerp(
                             average_color, tri.color, w / next_weight)
                     total_weight = next_weight
@@ -513,7 +518,7 @@ function soft_render(vertices::AbstractVector{Vec3{Tv}},
                 _soft_relative_depth_weight(m, one(T), γ) :
                 exp(background_logit - m)) + eps
             denom = total_weight + w_bg
-            color = iszero(total_weight) ? bg :
+            color = iszero(_primal_value(total_weight)) ? bg :
                 _stable_color_lerp(
                     average_color, bg, w_bg / denom)
             image[py, px, 1] = color.r
