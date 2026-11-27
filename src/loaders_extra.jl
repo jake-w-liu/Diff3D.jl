@@ -9130,13 +9130,19 @@ function base64_decode(s::AbstractString)
     return out
 end
 
+@inline _gltf_base64_space(unit::Integer) =
+    unit == UInt8(' ') || unit == UInt8('\n') || unit == UInt8('\r') || unit == UInt8('\t')
+
+# Decodes code units: base64 is ASCII, so any non-ASCII byte is rejected as an
+# invalid character.
 function _gltf_base64_decode_strict(s::AbstractString)
+    units = codeunits(s)
     nchars = 0
     pad_run = 0
-    for ch in s
-        ch in (' ', '\n', '\r', '\t') && continue
+    for unit in units
+        _gltf_base64_space(unit) && continue
         nchars += 1
-        pad_run = ch == '=' ? pad_run + 1 : 0
+        pad_run = unit == UInt8('=') ? pad_run + 1 : 0
     end
     out_len = (nchars ÷ 4) * 3
     if nchars % 4 == 0
@@ -9150,15 +9156,34 @@ function _gltf_base64_decode_strict(s::AbstractString)
     q4 = 0
     qlen = 0
     done = false
-    for ch in s
-        ch in (' ', '\n', '\r', '\t') && continue
+    # Fast path: complete quads of four valid symbols (no whitespace or
+    # padding) decode directly. The general loop below resumes at the first
+    # quad that needs its padding, whitespace, and error handling.
+    start = firstindex(units)
+    last_unit = lastindex(units)
+    while start + 3 <= last_unit
+        u1, u2, u3, u4 = units[start], units[start + 1], units[start + 2], units[start + 3]
+        (u1 | u2 | u3 | u4) <= 0xff || break
+        a = @inbounds _B64_LUT[Int(u1) + 1]
+        b = @inbounds _B64_LUT[Int(u2) + 1]
+        c = @inbounds _B64_LUT[Int(u3) + 1]
+        d = @inbounds _B64_LUT[Int(u4) + 1]
+        (a | b | c | d) >= 0 || break
+        out[oi] = UInt8((a << 2) | (b >> 4))
+        out[oi + 1] = UInt8(((b & 0x0f) << 4) | (c >> 2))
+        out[oi + 2] = UInt8(((c & 0x03) << 6) | d)
+        oi += 3
+        start += 4
+    end
+    for unit_index in start:last_unit
+        unit = units[unit_index]
+        _gltf_base64_space(unit) && continue
         done && error("glTF data URI base64 has data after padding")
         v = 0
-        if ch == '='
+        if unit == UInt8('=')
             v = -1
         else
-            Int(ch) <= 255 || error("glTF data URI base64 contains invalid character")
-            v = _B64_LUT[Int(ch) + 1]
+            v = unit <= 0xff ? (@inbounds _B64_LUT[Int(unit) + 1]) : -1
             v >= 0 || error("glTF data URI base64 contains invalid character")
             (q1 < 0 || q2 < 0 || q3 < 0 || q4 < 0) &&
                 error("glTF data URI base64 has data after padding")
@@ -9537,49 +9562,98 @@ end
     UInt32(buf[i]) | (UInt32(buf[i + 1]) << 8) |
     (UInt32(buf[i + 2]) << 16) | (UInt32(buf[i + 3]) << 24)
 
+# Little-endian component loads; callers have bounds-checked the byte range.
+@inline _gltf_load_component(::Type{UInt8}, buf::AbstractVector{UInt8}, i::Int) =
+    @inbounds buf[i]
+@inline _gltf_load_component(::Type{Int8}, buf::AbstractVector{UInt8}, i::Int) =
+    reinterpret(Int8, @inbounds buf[i])
+@inline _gltf_load_component(::Type{UInt16}, buf::AbstractVector{UInt8}, i::Int) =
+    @inbounds _gltf_read_u16_le(buf, i)
+@inline _gltf_load_component(::Type{Int16}, buf::AbstractVector{UInt8}, i::Int) =
+    reinterpret(Int16, @inbounds _gltf_read_u16_le(buf, i))
+@inline _gltf_load_component(::Type{UInt32}, buf::AbstractVector{UInt8}, i::Int) =
+    @inbounds _gltf_read_u32_le(buf, i)
+@inline _gltf_load_component(::Type{Float32}, buf::AbstractVector{UInt8}, i::Int) =
+    reinterpret(Float32, @inbounds _gltf_read_u32_le(buf, i))
+
+# glTF 2.0 normalized-integer decoding (accessors, animation samplers):
+# unsigned c / (2^b - 1), signed max(c / (2^(b-1) - 1), -1).
+@inline _gltf_component_value(v::Float32, ::Bool) = Float64(v)
+@inline _gltf_component_value(v::Unsigned, normalized::Bool) =
+    normalized ? Float64(v) / Float64(typemax(v)) : Float64(v)
+@inline _gltf_component_value(v::Signed, normalized::Bool) =
+    normalized ? max(Float64(v) / Float64(typemax(v)), -1.0) : Float64(v)
+
+@noinline _gltf_nonfinite_float_error(offset::Int) =
+    error("glTF FLOAT accessor value at byte offset $offset must be finite")
+@noinline _gltf_accessor_read_error(sz::Int, offset::Int, len::Int) =
+    error("glTF accessor read of $sz bytes at offset $offset exceeds buffer length $len")
+
+function _gltf_component_type(ctype::Int)
+    ctype == 5126 && return Float32
+    ctype == 5125 && return UInt32
+    ctype == 5123 && return UInt16
+    ctype == 5121 && return UInt8
+    ctype == 5122 && return Int16
+    ctype == 5120 && return Int8
+    error("glTF componentType $ctype")
+end
+
 function _gltf_read_component(buf::AbstractVector{UInt8}, offset::Int, ctype::Int,
                               normalized::Bool)
     sz = _gltf_component_bytes(ctype)
     end_offset = _gltf_checked_byte_end(offset, sz, "accessor")
     (offset >= 0 && end_offset <= length(buf)) ||
-        error("glTF accessor read of $sz bytes at offset $offset exceeds buffer length $(length(buf))")
-    i = offset + 1
-    if ctype == 5126
-        value = Float64(reinterpret(Float32, _gltf_read_u32_le(buf, i)))
-        isfinite(value) ||
-            error("glTF FLOAT accessor value at byte offset $offset must be finite")
-        return value
-    elseif ctype == 5125
-        v = _gltf_read_u32_le(buf, i)
-        return normalized ? Float64(v) / Float64(typemax(UInt32)) : Float64(v)
-    elseif ctype == 5123
-        v = _gltf_read_u16_le(buf, i)
-        return normalized ? Float64(v) / Float64(typemax(UInt16)) : Float64(v)
-    elseif ctype == 5121
-        v = buf[i]
-        return normalized ? Float64(v) / Float64(typemax(UInt8)) : Float64(v)
-    elseif ctype == 5122
-        v = reinterpret(Int16, _gltf_read_u16_le(buf, i))
-        return normalized ? max(Float64(v) / Float64(typemax(Int16)), -1.0) : Float64(v)
-    elseif ctype == 5120
-        v = reinterpret(Int8, buf[i])
-        return normalized ? max(Float64(v) / Float64(typemax(Int8)), -1.0) : Float64(v)
-    end
-    error("glTF componentType $ctype")
+        _gltf_accessor_read_error(sz, offset, length(buf))
+    T = _gltf_component_type(ctype)
+    value = _gltf_component_value(_gltf_load_component(T, buf, offset + 1), normalized)
+    isfinite(value) || _gltf_nonfinite_float_error(offset)
+    return value
 end
 
 function _gltf_read_accessor_payload!(out::Vector{Float64}, buf::AbstractVector{UInt8}, offset::Int,
                                       count::Int, ncomp::Int, ctype::Int, stride::Int,
                                       normalized::Bool, component_offsets::O=nothing,
                                       out_offset::Int=0) where {O}
+    count > 0 && ncomp > 0 || return out
     compbytes = _gltf_component_bytes(ctype)
-    for e in 0:count-1
+    # Component offsets increase within an element, so the final component of
+    # the final element bounds every read; check that range once.
+    element_extent = _gltf_accessor_component_offset(component_offsets, ncomp - 1,
+                                                     compbytes) + compbytes
+    span = _gltf_checked_accessor_span(count, element_extent, stride, "accessor")
+    (offset >= 0 && stride >= 0 &&
+     _gltf_checked_byte_end(offset, span, "accessor") <= length(buf)) ||
+        _gltf_accessor_read_error(span, offset, length(buf))
+    out_offset >= 0 && out_offset + count * ncomp <= length(out) ||
+        throw(BoundsError(out, out_offset + count * ncomp))
+    ctype == 5126 && return _gltf_read_payload_kernel!(
+        out, buf, Float32, offset, count, ncomp, stride, normalized, component_offsets, out_offset)
+    ctype == 5125 && return _gltf_read_payload_kernel!(
+        out, buf, UInt32, offset, count, ncomp, stride, normalized, component_offsets, out_offset)
+    ctype == 5123 && return _gltf_read_payload_kernel!(
+        out, buf, UInt16, offset, count, ncomp, stride, normalized, component_offsets, out_offset)
+    ctype == 5121 && return _gltf_read_payload_kernel!(
+        out, buf, UInt8, offset, count, ncomp, stride, normalized, component_offsets, out_offset)
+    ctype == 5122 && return _gltf_read_payload_kernel!(
+        out, buf, Int16, offset, count, ncomp, stride, normalized, component_offsets, out_offset)
+    return _gltf_read_payload_kernel!(
+        out, buf, Int8, offset, count, ncomp, stride, normalized, component_offsets, out_offset)
+end
+
+function _gltf_read_payload_kernel!(out::Vector{Float64}, buf::AbstractVector{UInt8},
+                                    ::Type{T}, offset::Int, count::Int, ncomp::Int,
+                                    stride::Int, normalized::Bool,
+                                    component_offsets::O, out_offset::Int) where {T,O}
+    compbytes = sizeof(T)
+    @inbounds for e in 0:count-1
         base_offset = offset + e * stride
         base = out_offset + e * ncomp
         for c in 0:ncomp-1
-            component_offset = _gltf_accessor_component_offset(component_offsets, c, compbytes)
-            out[base + c + 1] = _gltf_read_component(buf, base_offset + component_offset,
-                                                   ctype, normalized)
+            byte = base_offset + _gltf_accessor_component_offset(component_offsets, c, compbytes)
+            value = _gltf_component_value(_gltf_load_component(T, buf, byte + 1), normalized)
+            T === Float32 && !isfinite(value) && _gltf_nonfinite_float_error(byte)
+            out[base + c + 1] = value
         end
     end
     return out
@@ -9591,24 +9665,25 @@ function _gltf_check_column_alignment(offset::Int, alignment::Int, label::String
     return nothing
 end
 
-function _gltf_checked_byte_end(offset::Int, len::Int, label::String)::Int
-    try
-        return Base.checked_add(offset, len)
-    catch err
-        err isa OverflowError || rethrow()
-        error("glTF $label byte range is outside the supported integer range")
-    end
+@noinline _gltf_byte_range_overflow_error(label::String) =
+    error("glTF $label byte range is outside the supported integer range")
+@noinline _gltf_byte_span_overflow_error(label::String) =
+    error("glTF $label byte span is outside the supported integer range")
+
+@inline function _gltf_checked_byte_end(offset::Int, len::Int, label::String)::Int
+    value, overflow = Base.Checked.add_with_overflow(offset, len)
+    overflow && _gltf_byte_range_overflow_error(label)
+    return value
 end
 
 function _gltf_checked_accessor_span(count::Int, element_size::Int, stride::Int,
                                      label::String)::Int
     count == 0 && return 0
-    try
-        return Base.checked_add(Base.checked_mul(count - 1, stride), element_size)
-    catch err
-        err isa OverflowError || rethrow()
-        error("glTF $label byte span is outside the supported integer range")
-    end
+    product, mul_overflow = Base.Checked.mul_with_overflow(count - 1, stride)
+    mul_overflow && _gltf_byte_span_overflow_error(label)
+    value, add_overflow = Base.Checked.add_with_overflow(product, element_size)
+    add_overflow && _gltf_byte_span_overflow_error(label)
+    return value
 end
 
 function _gltf_sparse_buffer_layout(gltf, buffers, sparse_def::AbstractDict,
@@ -9772,7 +9847,43 @@ const _GLTF_SUPPORTED_EXTENSIONS = Set([
     "KHR_materials_dispersion",
     "KHR_materials_anisotropy",
     "EXT_mesh_gpu_instancing",
+    "KHR_mesh_quantization",
 ])
+
+# Accessor component types (unnormalized, normalized) accepted for vertex and
+# morph-target attributes. KHR_mesh_quantization README, "Extending Mesh
+# Attributes" and "Extending Morph Target Attributes", adds integer types to
+# the glTF 2.0 core table (§3.7.2.1, morph targets §3.7.2.2).
+const _GLTF_CORE_ATTRIBUTE_TYPES = (
+    position = ((5126,), ()),
+    normal = ((5126,), ()),
+    tangent = ((5126,), ()),
+    texcoord = ((5126,), (5121, 5123)),
+    morph = ((5126,), ()),
+)
+const _GLTF_QUANTIZED_ATTRIBUTE_TYPES = (
+    position = ((5126, 5120, 5121, 5122, 5123), (5120, 5121, 5122, 5123)),
+    normal = ((5126,), (5120, 5122)),
+    tangent = ((5126,), (5120, 5122)),
+    texcoord = ((5126, 5120, 5121, 5122, 5123), (5120, 5121, 5122, 5123)),
+    morph_position = ((5126, 5120, 5122), (5120, 5122)),
+    morph = ((5126,), (5120, 5122)),
+)
+
+function _gltf_declares_extension(gltf, name::String)
+    for key in ("extensionsUsed", "extensionsRequired")
+        list = get(gltf, key, Any[])
+        list isa AbstractVector || continue
+        any(entry -> entry isa AbstractString && entry == name, list) && return true
+    end
+    return false
+end
+
+function _gltf_attribute_types(quantized::Bool, kind::Symbol)
+    quantized || return kind === :morph_position ? _GLTF_CORE_ATTRIBUTE_TYPES.morph :
+                        getfield(_GLTF_CORE_ATTRIBUTE_TYPES, kind)
+    return getfield(_GLTF_QUANTIZED_ATTRIBUTE_TYPES, kind)
+end
 
 function _gltf_check_required_extensions(gltf)
     for ext in get(gltf, "extensionsRequired", Any[])
@@ -10090,6 +10201,9 @@ function _gltf_material(gltf, buffers, dir::String, mi; texture_cache=nothing)
     # OPAQUE ignores the alpha value entirely (spec); only BLEND alpha-blends.
     opacity = (alpha_mode == "BLEND" || alpha_mode == "MASK") ? bc[4] : 1.0
     transparent = alpha_mode == "BLEND"
+    # three.js GLTFLoader.js:3672-3677 disables depth writes for BLEND
+    # materials (three.js issue #17706).
+    depth_write = !transparent
     side = _gltf_checked_bool(get(m, "doubleSided", false), "doubleSided") ? :double : :front
     base_color_texture = _gltf_texture(gltf, buffers, dir, get(pbr, "baseColorTexture", nothing);
                                        colorspace=:srgb, texture_cache=texture_cache)
@@ -10097,6 +10211,7 @@ function _gltf_material(gltf, buffers, dir::String, mi; texture_cache=nothing)
         return MeshBasicMaterial(color=Color3(bc[1], bc[2], bc[3]),
                                   opacity=opacity,
                                   transparent=transparent,
+                                  depth_write=depth_write,
                                   side=side,
                                   map=base_color_texture,
                                   alpha_test=alpha_test)
@@ -10137,6 +10252,7 @@ function _gltf_material(gltf, buffers, dir::String, mi; texture_cache=nothing)
                                  glossiness=glossiness,
                                  opacity=specgloss_opacity,
                                  transparent=transparent,
+                                 depth_write=depth_write,
                                  alpha_test=alpha_test,
                                  side=side,
                                  map=diffuse_texture,
@@ -10205,6 +10321,7 @@ function _gltf_material(gltf, buffers, dir::String, mi; texture_cache=nothing)
                                         get(pbr, "roughnessFactor", 1.0), "roughnessFactor"),
                                      opacity=opacity,
                                      transparent=transparent,
+                                     depth_write=depth_write,
                                      alpha_test=alpha_test,
                                      side=side,
                                      map=base_color_texture,
@@ -10299,6 +10416,7 @@ function _gltf_material(gltf, buffers, dir::String, mi; texture_cache=nothing)
                              get(pbr, "roughnessFactor", 1.0), "roughnessFactor"),
                           opacity=opacity,
                           transparent=transparent,
+                          depth_write=depth_write,
                           alpha_test=alpha_test,
                           side=side,
                           map=base_color_texture,
@@ -10341,7 +10459,10 @@ function _gltf_line_material(mat)
 end
 
 function _gltf_points_material(mat)
+    # glTF points are one pixel; three.js GLTFLoader.js:3514 disables size
+    # attenuation for the same reason.
     PointsMaterial(color=_gltf_material_color(mat),
+                   size_attenuation=false,
                    opacity=_gltf_material_opacity(mat),
                    transparent=_gltf_material_transparent(mat),
                    map=_gltf_material_map(mat),
@@ -10693,6 +10814,29 @@ function _gltf_instance_matrices(gltf, buffers, node)
     return matrices
 end
 
+# three.js GLTFLoader.js:1795-1798 maps the custom instance attribute
+# `_COLOR_0` to `InstancedMesh.instanceColor`. Like COLOR_0 it holds linear
+# RGB(A) as FLOAT or normalized UNSIGNED_BYTE/UNSIGNED_SHORT; alpha is unused.
+function _gltf_instance_colors(gltf, buffers, node, count::Int)
+    ext = get(get(node, "extensions", Dict{String,Any}()),
+              "EXT_mesh_gpu_instancing", nothing)
+    ext === nothing && return nothing
+    attrs = ext["attributes"]
+    haskey(attrs, "_COLOR_0") || return nothing
+    accessor_index = _gltf_checked_accessor_index(
+        gltf, attrs["_COLOR_0"], "EXT_mesh_gpu_instancing _COLOR_0")
+    _gltf_validate_attribute_format(
+        gltf, accessor_index, "EXT_mesh_gpu_instancing _COLOR_0",
+        (5126,), (5121, 5123))
+    data, ncomp, color_count = _gltf_accessor(gltf, buffers, accessor_index)
+    ncomp in (3, 4) ||
+        error("EXT_mesh_gpu_instancing _COLOR_0 accessor must be VEC3 or VEC4")
+    color_count == count ||
+        error("EXT_mesh_gpu_instancing attribute accessors must have matching counts")
+    return [Color3(data[ncomp * (i - 1) + 1], data[ncomp * (i - 1) + 2],
+                   data[ncomp * (i - 1) + 3]) for i in 1:count]
+end
+
 # Decompose a validated TRS matrix. Missing zero-scale axes admit several
 # rotations; complete a proper orthonormal basis that preserves the matrix.
 function _gltf_decompose(M::Mat4)
@@ -10882,7 +11026,10 @@ function _gltf_skin_tuples(geo::BufferGeometry, name::Symbol, nverts::Int;
             scaled_sum = sum(scaled)
             push!(tuples, ntuple(k -> scaled[k] / scaled_sum, 4))
         else
-            push!(tuples, w)
+            # three.js GLTFLoader.js:3928 calls normalizeSkinWeights, which
+            # binds an all-zero vertex to its first joint slot
+            # (SkinnedMesh.js:274-280).
+            push!(tuples, (1.0, 0.0, 0.0, 0.0))
         end
     end
     return tuples
@@ -10978,6 +11125,7 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
     end
     texture_cache = Dict{Any, Texture}()
     material_cache = Dict{Any, AbstractMaterial}()
+    quantized = _gltf_declares_extension(gltf, "KHR_mesh_quantization")
 
     function _gltf_cached_material(mi, vertex_colors::Bool)
         material_key = mi === nothing ? (nothing, vertex_colors) :
@@ -11043,7 +11191,8 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
         position_accessor = _gltf_checked_accessor_index(gltf, attrs["POSITION"],
                                                          "POSITION")
         _gltf_validate_attribute_format(
-            gltf, position_accessor, "POSITION", (5126,), ())
+            gltf, position_accessor, "POSITION",
+            _gltf_attribute_types(quantized, :position)...)
         pos, position_size, nverts = _gltf_accessor(
             gltf, buffers, position_accessor)
         position_size == 3 || error("glTF POSITION accessor must be VEC3")
@@ -11052,7 +11201,8 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
             normal_accessor = _gltf_checked_accessor_index(gltf, attrs["NORMAL"],
                                                            "NORMAL")
             _gltf_validate_attribute_format(
-                gltf, normal_accessor, "NORMAL", (5126,), ())
+                gltf, normal_accessor, "NORMAL",
+                _gltf_attribute_types(quantized, :normal)...)
             normals, normal_size, normal_count = _gltf_accessor(
                 gltf, buffers, normal_accessor)
             _gltf_validate_attribute_shape(
@@ -11064,7 +11214,8 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
             uv_accessor = _gltf_checked_accessor_index(gltf, attrs["TEXCOORD_0"],
                                                        "TEXCOORD_0")
             _gltf_validate_attribute_format(
-                gltf, uv_accessor, "TEXCOORD_0", (5126,), (5121, 5123))
+                gltf, uv_accessor, "TEXCOORD_0",
+                _gltf_attribute_types(quantized, :texcoord)...)
             uvs, uv_size, uv_count = _gltf_accessor(
                 gltf, buffers, uv_accessor)
             _gltf_validate_attribute_shape(
@@ -11095,10 +11246,10 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
             attr_accessor = _gltf_checked_zero_based_index(
                 attrs[gltf_name], length(gltf["accessors"]), "$gltf_name accessor")
             unnormalized_types, normalized_types =
-                gltf_name in ("TEXCOORD_1", "COLOR_0", "WEIGHTS_0") ?
-                    ((5126,), (5121, 5123)) :
-                gltf_name == "JOINTS_0" ? ((5121, 5123), ()) :
-                ((5126,), ())
+                gltf_name == "TEXCOORD_1" ? _gltf_attribute_types(quantized, :texcoord) :
+                gltf_name == "TANGENT" ? _gltf_attribute_types(quantized, :tangent) :
+                gltf_name in ("COLOR_0", "WEIGHTS_0") ? ((5126,), (5121, 5123)) :
+                ((5121, 5123), ())
             _gltf_validate_attribute_format(
                 gltf, attr_accessor, gltf_name,
                 unnormalized_types, normalized_types)
@@ -11119,7 +11270,8 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
                     gltf, target[gltf_name], "morph target $gltf_name")
                 _gltf_validate_attribute_format(
                     gltf, target_accessor, "morph target $gltf_name",
-                    (5126,), ())
+                    _gltf_attribute_types(
+                        quantized, gltf_name == "POSITION" ? :morph_position : :morph)...)
                 data, item_size, attr_count = _gltf_accessor(gltf, buffers, target_accessor)
                 _gltf_validate_attribute_shape(
                     "morph target $gltf_name", item_size, attr_count,
@@ -11222,6 +11374,8 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
         obj = node_objects[node_idx]
         add!(parent, obj)
         instance_matrices = _gltf_instance_matrices(gltf, buffers, node)
+        instance_colors = instance_matrices === nothing ? nothing :
+            _gltf_instance_colors(gltf, buffers, node, length(instance_matrices))
         instance_matrices !== nothing && !haskey(node, "mesh") &&
             error("EXT_mesh_gpu_instancing can only be used on glTF mesh nodes")
         if haskey(node, "mesh")
@@ -11230,8 +11384,19 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
             mesh_idx = _gltf_checked_zero_based_index(
                 node["mesh"], length(get(gltf, "meshes", Any[])), "node mesh")
             mesh_def = gltf["meshes"][mesh_idx + 1]
-            morph_weights = _gltf_checked_number_vector(
-                get(node, "weights", get(mesh_def, "weights", Float64[])), "morph weights")
+            # glTF 2.0 mesh.weights defaults to zero for every morph target.
+            # three.js sizes morphTargetInfluences to the target count, writes
+            # mesh.weights over it element by element (GLTFLoader.js:2474-2486),
+            # then writes node.weights over that (GLTFLoader.js:4228-4238).
+            target_count = maximum(prim -> length(get(prim, "targets", Any[])),
+                                   mesh_def["primitives"]; init=0)
+            mesh_weights = haskey(mesh_def, "weights") ?
+                _gltf_checked_number_vector(mesh_def["weights"], "morph weights") : Float64[]
+            node_weights = haskey(node, "weights") ?
+                _gltf_checked_number_vector(node["weights"], "morph weights") : Float64[]
+            morph_weights = zeros(max(target_count, length(mesh_weights), length(node_weights)))
+            copyto!(morph_weights, mesh_weights)
+            copyto!(morph_weights, node_weights)
             morph_names = _gltf_target_names(mesh_def)
             for (prim_slot, prim) in enumerate(mesh_def["primitives"])
                 if instance_matrices !== nothing
@@ -11253,6 +11418,11 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
                                          cast_shadow=object_casts_shadow(mesh_obj),
                                          receive_shadow=object_receives_shadow(mesh_obj),
                                          draw_mode=draw_mode)
+                    if instance_colors !== nothing
+                        for (instance, color) in enumerate(instance_colors)
+                            set_instance_color!(inst, instance, color)
+                        end
+                    end
                     add!(obj, inst)
                 end
             end
@@ -11381,9 +11551,25 @@ function _gltf_animation_interpolation(value)
     throw(ArgumentError("unsupported glTF animation interpolation: $raw"))
 end
 
+# Objects driven by a glTF `weights` channel on one node: the node object
+# itself when it carries influences, and its primitive objects. Child nodes are
+# excluded; three.js GLTFLoader.js:4586-4607 likewise targets only the node and,
+# for a multi-primitive Group, its direct primitive meshes.
+function _gltf_morph_track_targets(obj, node_object_set)
+    targets = AbstractObject3D[]
+    hasproperty(obj, :morph_target_influences) && push!(targets, obj)
+    for child in get_children(obj)
+        child in node_object_set && continue
+        hasproperty(child, :morph_target_influences) && push!(targets, child)
+    end
+    return targets
+end
+
 function _gltf_animation_clips(gltf, buffers, node_objects)
     haskey(gltf, "animations") || return AnimationClip[]
     clips = AnimationClip[]
+    # Base.IdSet is unexported before Julia 1.11.
+    node_object_set = Base.IdSet{Any}(values(node_objects))
     for (ai, anim) in enumerate(gltf["animations"])
         samplers = anim["samplers"]
         channels = get(anim, "channels", Any[])
@@ -11414,15 +11600,30 @@ function _gltf_animation_clips(gltf, buffers, node_objects)
             out, ncomp, count = _gltf_accessor(gltf, buffers, output_accessor)
             obj = node_objects[node_idx]
             if path == "weights"
+                morph_targets = _gltf_morph_track_targets(obj, node_object_set)
+                isempty(morph_targets) &&
+                    error("glTF weights animation targets node $node_idx, which has no morph-target primitives")
                 if interpolation === :cubicspline
                     ins, vals, outs = _gltf_cubic_weight_values(out, ncomp, tcount)
-                    push!(tracks, CubicSplineMorphWeightsKeyframeTrack(
-                        obj, :morph_target_influences, times, vals, ins, outs))
+                    for (slot, morph_target) in enumerate(morph_targets)
+                        push!(tracks, slot == 1 ?
+                              CubicSplineMorphWeightsKeyframeTrack(
+                                  morph_target, :morph_target_influences, times, vals, ins, outs) :
+                              CubicSplineMorphWeightsKeyframeTrack(
+                                  morph_target, :morph_target_influences, copy(times),
+                                  deepcopy(vals), deepcopy(ins), deepcopy(outs)))
+                    end
                     continue
                 end
                 vals = _gltf_weight_values(out, ncomp, tcount)
-                push!(tracks, MorphWeightsKeyframeTrack(obj, :morph_target_influences,
-                                                        times, vals; interpolation=interpolation))
+                for (slot, morph_target) in enumerate(morph_targets)
+                    push!(tracks, slot == 1 ?
+                          MorphWeightsKeyframeTrack(morph_target, :morph_target_influences,
+                                                    times, vals; interpolation=interpolation) :
+                          MorphWeightsKeyframeTrack(morph_target, :morph_target_influences,
+                                                    copy(times), deepcopy(vals);
+                                                    interpolation=interpolation))
+                end
                 continue
             end
             if interpolation === :cubicspline
