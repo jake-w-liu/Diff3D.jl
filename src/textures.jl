@@ -319,17 +319,49 @@ DepthTexture(depth::Matrix{Float64}; filter=nothing, min_filter=nothing,
     end
 end
 
+# sRGB electro-optical transfer function, the same expression as the exported
+# `srgb_to_linear` (defined later in renderer_extra.jl) so a decoded texel is
+# bit-identical to `srgb_to_linear` of it.
+@inline _srgb_texel_eotf(c::Float64) =
+    c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055)^2.4
+
+# Decoded values of the 256 sRGB byte codes k/255. Loaders store 8-bit images as
+# k/255, so most color texels hit this table instead of evaluating the power.
+const _SRGB_BYTE_TO_LINEAR = Float64[_srgb_texel_eotf(k / 255) for k in 0:255]
+
+# Linear-light value of one stored sRGB texel. The table is used only when the
+# texel is bit-identical to the byte code it was computed from, so the result is
+# always exactly `_srgb_texel_eotf(c)`.
+@inline function _srgb_texel_to_linear(c::Float64)
+    if 0.0 <= c <= 1.0
+        k = unsafe_trunc(Int, muladd(c, 255.0, 0.5))
+        k / 255 === c && return @inbounds _SRGB_BYTE_TO_LINEAR[k + 1]
+    end
+    return _srgb_texel_eotf(c)
+end
+
 # Callers validate that every dimension of `data` is positive, and
 # `_wrap_coord` returns an index in 0:n-1, so the reads below are in bounds.
+# `decode` converts each sRGB texel to linear light before it is filtered, as
+# GL does for the SRGB8_ALPHA8 textures three.js uploads for sRGB color maps
+# (WebGLTextures.js:234; the decode applies per texel, ahead of filtering).
 @inline function _texel_data(data::Array{Float64,3}, wrap_s::Symbol, wrap_t::Symbol,
-                            ix::Int, iy::Int)
+                            ix::Int, iy::Int, decode::Bool=false)
     H, W, C = size(data)
     x = _wrap_coord(ix, W, wrap_s) + 1
     y = _wrap_coord(iy, H, wrap_t) + 1
     @inbounds if C <= 2
-        g = data[y, x, 1]; return Color3(g, g, g)   # gray / gray-alpha
+        g = data[y, x, 1]                           # gray / gray-alpha
+        decode && (g = _srgb_texel_to_linear(g))
+        return Color3(g, g, g)
     else
-        return Color3(data[y, x, 1], data[y, x, 2], data[y, x, 3])
+        r = data[y, x, 1]; gr = data[y, x, 2]; b = data[y, x, 3]
+        if decode
+            r = _srgb_texel_to_linear(r)
+            gr = _srgb_texel_to_linear(gr)
+            b = _srgb_texel_to_linear(b)
+        end
+        return Color3(r, gr, b)
     end
 end
 
@@ -518,14 +550,15 @@ end
 
 function _sample_texture_data(data::Array{Float64,3}, wrap_s::Symbol, wrap_t::Symbol,
                               filter::Symbol, u, v, label::String,
-                              rows_from_top::Bool=false)
+                              rows_from_top::Bool=false, decode::Bool=false)
     H, W, _ = _checked_texture_data_size(data, label)
     wrap_s = _texture_wrap_symbol(wrap_s)
     wrap_t = _texture_wrap_symbol(wrap_t)
     filter = _texture_filter_symbol(filter)
     if filter === :nearest
         ix, iy, T = _nearest_texel_indices(u, v, W, H, wrap_s, wrap_t, rows_from_top)
-        return _texture_filtered_color(_texel_data(data, wrap_s, wrap_t, ix, iy), T)
+        return _texture_filtered_color(
+            _texel_data(data, wrap_s, wrap_t, ix, iy, decode), T)
     end
     u = _sampling_uv(u, wrap_s)
     v = _sampling_uv(v, wrap_t)
@@ -533,10 +566,10 @@ function _sample_texture_data(data::Array{Float64,3}, wrap_s::Symbol, wrap_t::Sy
     fy = (1 - v) * H - 0.5                       # flip v so v=0 maps to the bottom row
     x0 = floor(Int, fx); y0 = floor(Int, fy)
     tx = fx - x0; ty = fy - y0
-    c00 = _texel_data(data, wrap_s, wrap_t, x0,   y0)
-    c10 = _texel_data(data, wrap_s, wrap_t, x0+1, y0)
-    c01 = _texel_data(data, wrap_s, wrap_t, x0,   y0+1)
-    c11 = _texel_data(data, wrap_s, wrap_t, x0+1, y0+1)
+    c00 = _texel_data(data, wrap_s, wrap_t, x0,   y0,   decode)
+    c10 = _texel_data(data, wrap_s, wrap_t, x0+1, y0,   decode)
+    c01 = _texel_data(data, wrap_s, wrap_t, x0,   y0+1, decode)
+    c11 = _texel_data(data, wrap_s, wrap_t, x0+1, y0+1, decode)
     top = _stable_color_lerp(c00, c10, tx)
     bottom = _stable_color_lerp(c01, c11, tx)
     return _stable_color_lerp(top, bottom, ty)
@@ -642,20 +675,36 @@ end
     sample_texture_linear(tex, u, v) -> Color3
 
 Sample the texture and return the color in linear light. When
-`tex.colorspace === :srgb` the filtered RGB sample is converted with the
-standard sRGB→linear transfer function per channel
-(`c ≤ 0.04045 ? c/12.92 : ((c+0.055)/1.055)^2.4`), matching three.js's
-`SRGBColorSpace` decode for color textures. When `tex.colorspace === :linear`
-the raw sample is returned unchanged (for data textures such as normal,
+`tex.colorspace === :srgb` every texel's RGB is converted with the standard
+sRGB→linear transfer function (`c ≤ 0.04045 ? c/12.92 : ((c+0.055)/1.055)^2.4`)
+before the texels are filtered, as GL decodes the `SRGB8_ALPHA8` textures
+three.js uploads for `SRGBColorSpace` color maps. When `tex.colorspace ===
+:linear` the raw sample is returned unchanged (for data textures such as normal,
 roughness, metalness, AO, or depth maps). `sample_texture` itself is left
 untouched and always returns the raw stored values.
+
+    sample_texture_linear(tex, u, v, duv) -> Color3
+
+The same with the automatic magnification/minification and mip-level selection
+of [`sample_texture_auto`](@ref): sRGB texels are decoded before the bilinear
+and the between-level (trilinear) blends.
 """
 function sample_texture_linear(tex::Texture, u, v)
-    c = sample_texture(tex, u, v)
-    tex.colorspace === :linear && return c
-    tex.colorspace === :srgb ||
-        throw(ArgumentError("unsupported texture colorspace: $(tex.colorspace)"))
-    return Color3(srgb_to_linear(c.r), srgb_to_linear(c.g), srgb_to_linear(c.b))
+    decode = _texture_decodes_srgb(tex)
+    tu, tv = _texture_sample_uv(tex, u, v)
+    return _sample_texture_data(tex.data, tex.wrap_s, tex.wrap_t, tex.filter, tu, tv,
+                                "sample_texture", false, decode)
+end
+
+sample_texture_linear(tex::Texture, u, v, duv) =
+    _sample_texture_auto(tex, u, v, duv, _texture_decodes_srgb(tex))
+
+@inline function _texture_decodes_srgb(tex::Texture)
+    colorspace = tex.colorspace
+    colorspace === :linear && return false
+    colorspace === :srgb ||
+        throw(ArgumentError("unsupported texture colorspace: $(colorspace)"))
+    return true
 end
 
 # ========================== Mipmaps ==========================
@@ -755,22 +804,22 @@ end
     filter === :nearest ? :nearest : :bilinear
 
 function _sample_texture_lod_filtered(tex::Texture, u, v, lod::Int, filter::Symbol,
-                                      rows_from_top::Bool=false)
-    lod <= 0 && return _sample_texture_filtered(tex, u, v, filter, rows_from_top)
+                                      rows_from_top::Bool=false, decode::Bool=false)
+    lod <= 0 && return _sample_texture_filtered(tex, u, v, filter, rows_from_top, decode)
     isempty(tex.mipmaps) &&
-        return _sample_texture_filtered(tex, u, v, filter, rows_from_top)
+        return _sample_texture_filtered(tex, u, v, filter, rows_from_top, decode)
     lvl = tex.mipmaps[min(lod, length(tex.mipmaps))]
     tu, tv = _texture_sample_uv(tex, u, v)
     return _sample_texture_data(lvl, tex.wrap_s, tex.wrap_t, filter, tu, tv,
-                                "sample_texture_lod", rows_from_top)
+                                "sample_texture_lod", rows_from_top, decode)
 end
 
 function _sample_texture_filtered(tex::Texture, u, v, filter::Symbol,
-                                  rows_from_top::Bool=false)
+                                  rows_from_top::Bool=false, decode::Bool=false)
     _checked_texture_data_size(tex, "sample_texture")
     tu, tv = _texture_sample_uv(tex, u, v)
     return _sample_texture_data(tex.data, tex.wrap_s, tex.wrap_t, filter, tu, tv,
-                                "sample_texture", rows_from_top)
+                                "sample_texture", rows_from_top, decode)
 end
 
 """
@@ -794,7 +843,9 @@ the filter suffix. The integer level choice is a discrete decision, but the
 linear mip blend weight is carried through unchanged so the result stays smooth
 for `ForwardDiff.Dual`/`ADVar` `duv`.
 """
-function sample_texture_auto(tex::Texture, u, v, duv)
+sample_texture_auto(tex::Texture, u, v, duv) = _sample_texture_auto(tex, u, v, duv, false)
+
+function _sample_texture_auto(tex::Texture, u, v, duv, decode::Bool)
     # isfinite/comparison work directly on Float64/Dual/ADVar; Float64(::Dual) is
     # undefined and would crash the differentiable path the docstring promises.
     isfinite(duv) ||
@@ -811,12 +862,13 @@ function sample_texture_auto(tex::Texture, u, v, duv)
     if _primal_value(span_raw) <= 1.0
         return _texture_filtered_color(
             _sample_texture_filtered(tex, u, v,
-                                     _texture_mag_filter_texel_filter(mag_filter)),
+                                     _texture_mag_filter_texel_filter(mag_filter),
+                                     false, decode),
             weight_type)
     end
     filter = _texture_min_filter_texel_filter(min_filter)
     (isempty(tex.mipmaps) || !_texture_min_filter_uses_mipmaps(min_filter)) &&
-        return _texture_filtered_color(_sample_texture_filtered(tex, u, v, filter),
+        return _texture_filtered_color(_sample_texture_filtered(tex, u, v, filter, false, decode),
                                        weight_type)
     nlevels = length(tex.mipmaps)
     # Continuous LOD; clamp to [0, nlevels]. Keep AD type for the blend weight.
@@ -831,16 +883,17 @@ function sample_texture_auto(tex::Texture, u, v, duv)
     if !_texture_min_filter_blends_mipmaps(min_filter)
         nearest_level = clamp(floor(Int, lod + 0.5), 0, nlevels)
         return _texture_filtered_color(
-            _sample_texture_lod_filtered(tex, u, v, nearest_level, filter),
+            _sample_texture_lod_filtered(tex, u, v, nearest_level, filter,
+                                         false, decode),
             weight_type)
     end
     l0 = floor(Int, lod)
     frac = lod - l0                            # fractional blend weight (AD-stable)
     l1 = min(l0 + 1, nlevels)
-    c0 = _sample_texture_lod_filtered(tex, u, v, l0, filter)
+    c0 = _sample_texture_lod_filtered(tex, u, v, l0, filter, false, decode)
     _primal_value(frac) <= 0 &&
         return _texture_filtered_color(c0, weight_type)  # exactly on a level
-    c1 = _sample_texture_lod_filtered(tex, u, v, l1, filter)
+    c1 = _sample_texture_lod_filtered(tex, u, v, l1, filter, false, decode)
     return _stable_color_lerp(c0, c1, frac)
 end
 
