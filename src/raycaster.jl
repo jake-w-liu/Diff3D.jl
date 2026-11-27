@@ -700,16 +700,30 @@ end
     ax = akx - sx * akz; ay = aky - sy * akz
     bx = bkx - sx * bkz; by = bky - sy * bkz
     cx = ckx - sx * ckz; cy = cky - sy * ckz
-    # u, v, w, det and t_scaled all scale with the square of these sheared
-    # lateral coordinates, so t is unchanged by rescaling them alone. A triangle far
-    # narrower than its distance along the ray (lateral extent below 2^-300
-    # after the span normalization) is rescaled exactly to keep u, v, w from
-    # underflowing to a spurious det == 0.
-    lateral = max(abs(ax), abs(ay), abs(bx), abs(by), abs(cx), abs(cy))
-    if 0.0 < lateral < 0x1p-300
-        j = -exponent(lateral)
-        ax = ldexp(ax, j); ay = ldexp(ay, j); bx = ldexp(bx, j)
-        by = ldexp(by, j); cx = ldexp(cx, j); cy = ldexp(cy, j)
+    # Each of u, v, w (hence det and t_scaled) is a sum of products of one
+    # sheared x and one sheared y coordinate, and t_scaled is linear in the
+    # z coordinates. Rescaling the x, y or z coordinates alone by an exact
+    # power of two therefore leaves t unchanged (z by the factor tracked in
+    # `shift`). After the span normalization a coordinate set far below 1
+    # (under 2^-300) means a triangle far thinner along that axis than its
+    # extent along the others; it is rescaled so u, v, w and t_scaled cannot
+    # underflow to a spurious det == 0 or t == 0. Ordinary inputs never take
+    # these branches, so their arithmetic is three.js's.
+    x_reach = max(abs(ax), abs(bx), abs(cx))
+    if 0.0 < x_reach < 0x1p-300
+        j = -exponent(x_reach)
+        ax = ldexp(ax, j); bx = ldexp(bx, j); cx = ldexp(cx, j)
+    end
+    y_reach = max(abs(ay), abs(by), abs(cy))
+    if 0.0 < y_reach < 0x1p-300
+        j = -exponent(y_reach)
+        ay = ldexp(ay, j); by = ldexp(by, j); cy = ldexp(cy, j)
+    end
+    z_reach = max(abs(akz), abs(bkz), abs(ckz))
+    if 0.0 < z_reach < 0x1p-300
+        j = -exponent(z_reach)
+        akz = ldexp(akz, j); bkz = ldexp(bkz, j); ckz = ldexp(ckz, j)
+        shift -= j
     end
     u = cx * by - cy * bx
     v = ax * cy - ay * cx
