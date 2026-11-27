@@ -228,41 +228,183 @@ function _convex_has_volume(points::Vector{Vec3{Float64}}, eps::Float64)
     return false
 end
 
+# Support-plane test for the triangle (i, j, k): returns the outward unit
+# normal, or `nothing` when the triangle is degenerate or points lie on both
+# sides of its plane beyond `plane_eps`.
+@inline function _convex_triple_normal(points::Vector{Vec3{Float64}}, i::Int, j::Int,
+                                       k::Int, plane_eps::Float64)
+    normal = cross(points[j] - points[i], points[k] - points[i])
+    len = norm(normal)
+    len > plane_eps || return nothing
+    normal = normal * (1 / len)
+    pos = false
+    neg = false
+    @inbounds for p in points
+        side = dot(normal, p - points[i])
+        pos |= side > plane_eps
+        neg |= side < -plane_eps
+        pos && neg && break
+    end
+    pos && neg && return nothing
+    pos && (normal = -normal)
+    return normal
+end
+
+function _convex_coplanar(points::Vector{Vec3{Float64}}, origin::Int,
+                          normal::Vec3{Float64}, plane_eps::Float64)
+    coplanar = Int[]
+    @inbounds for idx in eachindex(points)
+        abs(dot(normal, points[idx] - points[origin])) <= plane_eps &&
+            push!(coplanar, idx)
+    end
+    return coplanar
+end
+
+# Reference enumeration: every triple whose plane supports the point set, in
+# lexicographic triple order, deduplicated by coplanar point set. O(n^4); the
+# gift-wrapping search below reproduces its faces and order and falls back to
+# this when it cannot certify a closed hull.
 function _convex_support_faces(points::Vector{Vec3{Float64}}, eps::Float64)
     n = length(points)
     faces = Tuple{Vector{Int},Vec3{Float64}}[]
     sizehint!(faces, n)
-    seen = Set{Tuple{Vararg{Int}}}()
+    seen = Set{Vector{Int}}()
     sizehint!(seen, n)
     plane_eps = 64 * eps
     for i in 1:(n - 2), j in (i + 1):(n - 1), k in (j + 1):n
-        normal = cross(points[j] - points[i], points[k] - points[i])
-        len = norm(normal)
-        len > plane_eps || continue
-        normal = normal * (1 / len)
-        pos = false
-        neg = false
-        for p in points
-            side = dot(normal, p - points[i])
-            pos |= side > plane_eps
-            neg |= side < -plane_eps
-            pos && neg && break
-        end
-        pos && neg && continue
-        pos && (normal = -normal)
-        coplanar = Int[]
-        sizehint!(coplanar, n)
-        for idx in eachindex(points)
-            abs(dot(normal, points[idx] - points[i])) <= plane_eps &&
-                push!(coplanar, idx)
-        end
-        key = Tuple(coplanar)
-        if !(key in seen)
-            push!(seen, key)
+        normal = _convex_triple_normal(points, i, j, k, plane_eps)
+        normal === nothing && continue
+        coplanar = _convex_coplanar(points, i, normal, plane_eps)
+        if !(coplanar in seen)
+            push!(seen, coplanar)
             push!(faces, (coplanar, normal))
         end
     end
     return faces
+end
+
+# The face that the reference enumeration reports for the support plane
+# containing `candidates` (sorted): its first valid triple in lexicographic
+# order, that triple's outward normal and its coplanar set.
+function _convex_canonical_face(points::Vector{Vec3{Float64}}, candidates::Vector{Int},
+                                plane_eps::Float64)
+    m = length(candidates)
+    @inbounds for a in 1:(m - 2), b in (a + 1):(m - 1), c in (b + 1):m
+        i = candidates[a]; j = candidates[b]; k = candidates[c]
+        normal = _convex_triple_normal(points, i, j, k, plane_eps)
+        normal === nothing && continue
+        return (i, j, k), _convex_coplanar(points, i, normal, plane_eps), normal
+    end
+    return nothing
+end
+
+# Gift wrapping across the edge u -> v of a face (counter-clockwise about that
+# face's outward normal): the neighbouring face lists the edge as v -> u, so
+# its outward normal is cross(u - v, w - v) for the point w that leaves every
+# point behind the plane. Returns the support plane's points (sorted).
+function _convex_wrap_edge(points::Vector{Vec3{Float64}}, u::Int, v::Int,
+                           plane_eps::Float64)
+    pu = points[u]
+    pv = points[v]
+    edge = pu - pv
+    best = 0
+    normal = Vec3(0.0, 0.0, 0.0)
+    @inbounds for idx in eachindex(points)
+        (idx == u || idx == v) && continue
+        candidate = cross(edge, points[idx] - pv)
+        len = norm(candidate)
+        len > plane_eps || continue
+        if best == 0 || dot(normal, points[idx] - pv) > plane_eps
+            best = idx
+            normal = candidate * (1 / len)
+        end
+    end
+    best == 0 && return nothing
+    return _convex_coplanar(points, v, normal, plane_eps)
+end
+
+function _convex_add_wrapped_face!(faces, seen::Set{Vector{Int}},
+                                   edges::Set{Tuple{Int,Int}}, open_edges::Vector{Tuple{Int,Int}},
+                                   points::Vector{Vec3{Float64}}, candidates::Vector{Int},
+                                   eps::Float64, plane_eps::Float64)
+    canonical = _convex_canonical_face(points, candidates, plane_eps)
+    canonical === nothing && return false
+    triple, coplanar, normal = canonical
+    coplanar in seen && return true
+    push!(seen, coplanar)
+    hull = _convex_face_hull(points, coplanar, normal, eps)
+    length(hull) >= 3 || return false
+    push!(faces, (triple, coplanar, normal, hull))
+    m = length(hull)
+    @inbounds for k in 1:m
+        edge = (hull[k], hull[k == m ? 1 : k + 1])
+        edge in edges && return false     # an edge already bounds another face
+        push!(edges, edge)
+        push!(open_edges, edge)
+    end
+    return true
+end
+
+# Output-sensitive search for the reference enumeration's faces: wrap from one
+# support plane across every hull edge. Returns each face's coplanar points,
+# outward normal and boundary polygon (`_convex_face_hull` with this `eps`),
+# or `nothing` unless the faces close up into a consistently oriented surface.
+function _convex_wrapped_support_faces(points::Vector{Vec3{Float64}}, eps::Float64)
+    n = length(points)
+    plane_eps = 64 * eps
+    # Start from the lowest point in (x, y, z) order and the next counter-
+    # clockwise point of the xy-projected hull; the vertical plane through
+    # them supports every point, so wrapping about that segment reaches a face.
+    a = 1
+    @inbounds for idx in 2:n
+        points[idx].x < points[a].x ||
+            (points[idx].x == points[a].x && (points[idx].y, points[idx].z) <
+                                             (points[a].y, points[a].z)) || continue
+        a = idx
+    end
+    b = 0
+    @inbounds for idx in eachindex(points)
+        idx == a && continue
+        d = points[idx] - points[a]
+        hypot(d.x, d.y) > plane_eps || continue
+        if b == 0
+            b = idx
+            continue
+        end
+        db = points[b] - points[a]
+        turn = db.x * d.y - db.y * d.x
+        if turn < 0 || (turn == 0 && hypot(d.x, d.y) > hypot(db.x, db.y))
+            b = idx
+        end
+    end
+    b == 0 && return nothing
+    faces = Tuple{NTuple{3,Int},Vector{Int},Vec3{Float64},Vector{Int}}[]
+    seen = Set{Vector{Int}}()
+    edges = Set{Tuple{Int,Int}}()
+    open_edges = Tuple{Int,Int}[]
+    started = false
+    for (u, v) in ((a, b), (b, a))
+        candidates = _convex_wrap_edge(points, u, v, plane_eps)
+        candidates === nothing && continue
+        _convex_add_wrapped_face!(faces, seen, edges, open_edges, points,
+                                  candidates, eps, plane_eps) || return nothing
+        started = !isempty(faces)
+        started && break
+    end
+    started || return nothing
+    while !isempty(open_edges)
+        u, v = pop!(open_edges)
+        (v, u) in edges && continue
+        candidates = _convex_wrap_edge(points, u, v, plane_eps)
+        candidates === nothing && return nothing
+        before = length(faces)
+        _convex_add_wrapped_face!(faces, seen, edges, open_edges, points,
+                                  candidates, eps, plane_eps) || return nothing
+        # The neighbour must be new and must close the edge it was found from.
+        length(faces) > before && (v, u) in edges || return nothing
+    end
+    sort!(faces; by=first)
+    return [(coplanar, normal, hull) for (_, coplanar, normal, hull) in faces]
 end
 
 function _convex_face_hull(points::Vector{Vec3{Float64}}, face_indices::Vector{Int},
@@ -289,6 +431,20 @@ function _convex_face_hull(points::Vector{Vec3{Float64}}, face_indices::Vector{I
     for idx in face_indices
         d = points[idx] - center
         push!(projected, (dot(d, u), dot(d, v), idx))
+    end
+    sort!(projected, by=t -> (t[1], t[2], t[3]))
+    # Points whose first coordinates differ only by rounding (for example the
+    # stacked points of an edge that projects vertically) must reach the
+    # monotone chain in order along that edge, as exact ties would. Snap each
+    # run of first coordinates within `eps` of its start and re-sort by the
+    # second coordinate inside the run.
+    run_start = 1
+    @inbounds for k in 2:length(projected)
+        if projected[k][1] - projected[run_start][1] <= eps
+            projected[k] = (projected[run_start][1], projected[k][2], projected[k][3])
+        else
+            run_start = k
+        end
     end
     sort!(projected, by=t -> (t[1], t[2], t[3]))
 
@@ -336,6 +492,11 @@ function _convex_face_hull(points::Vector{Vec3{Float64}}, face_indices::Vector{I
     return hull
 end
 
+# Rounding-level tolerance in the normalized coordinates (|x| <= 1): 64x this
+# stays well above the rounding error of a plane-distance evaluation (a few
+# 1e-16), comparable to three.js ConvexHull's 3 * EPSILON * (|x| + |y| + |z|).
+const _CONVEX_TIGHT_EPS = 1e-15
+
 """
     ConvexGeometry(points)
 
@@ -346,18 +507,32 @@ function ConvexGeometry(points::AbstractVector{<:Vec3})
     clean, normalized, eps = _convex_clean_points(points)
     _convex_has_volume(normalized, eps) ||
         throw(ArgumentError("ConvexGeometry needs at least four non-coplanar points"))
-    support_faces = _convex_support_faces(normalized, eps)
-    isempty(support_faces) &&
-        throw(ArgumentError("ConvexGeometry could not find hull support faces"))
-
+    # Gift wrapping certifies a closed hull surface. Points within the `eps`
+    # plane tolerance of one another's faces can make those tolerant face sets
+    # inconsistent; resolving them at rounding-level tolerance instead (as
+    # three.js ConvexHull does) splits them into separate facets. The
+    # exhaustive enumeration is the last resort.
+    wrapped = _convex_wrapped_support_faces(normalized, eps)
+    wrapped === nothing &&
+        (wrapped = _convex_wrapped_support_faces(normalized, _CONVEX_TIGHT_EPS))
     hulls = Tuple{Vector{Int},Vec3{Float64}}[]
-    sizehint!(hulls, length(support_faces))
+    if wrapped === nothing
+        support_faces = _convex_support_faces(normalized, eps)
+        isempty(support_faces) &&
+            throw(ArgumentError("ConvexGeometry could not find hull support faces"))
+        sizehint!(hulls, length(support_faces))
+        for (face_indices, normal) in support_faces
+            hull = _convex_face_hull(normalized, face_indices, normal, eps)
+            length(hull) >= 3 && push!(hulls, (hull, normal))
+        end
+    else
+        sizehint!(hulls, length(wrapped))
+        for (_, normal, hull) in wrapped
+            push!(hulls, (hull, normal))
+        end
+    end
     n_faces = 0
-    for (face_indices, normal) in support_faces
-        hull = _convex_face_hull(
-            normalized, face_indices, normal, eps)
-        length(hull) >= 3 || continue
-        push!(hulls, (hull, normal))
+    for (hull, _) in hulls
         n_faces = _geometry_checked_add(
             n_faces, length(hull) - 2, "ConvexGeometry face count")
     end
@@ -780,6 +955,93 @@ function _catmull_rom_segment(curve::CatmullRomCurve, t::Real)
     return index, scaled - (index - 1)
 end
 
+@inline function _catmull_rom_evaluate(curve::CatmullRomCurve, p0::Vec3, p1::Vec3,
+                                       p2::Vec3, p3::Vec3, local_t::Float64)
+    curve.curve_type === :catmullrom &&
+        return _catmull_rom_uniform(p0, p1, p2, p3, local_t, curve.tension)
+    alpha = curve.curve_type === :centripetal ? 0.5 : 1.0
+    return _catmull_rom_nonuniform(p0, p1, p2, p3, local_t, alpha)
+end
+
+# three.js CatmullRomCurve3.getPoint extrapolates the missing neighbour of an
+# open curve's first or last segment by reflecting the adjacent point:
+# `tmp.subVectors(points[0], points[1]).add(points[0])`.
+@inline _catmull_rom_phantom(endpoint::Vec3, neighbour::Vec3) =
+    (endpoint - neighbour) + endpoint
+
+@inline _catmull_rom_finite(p::Vec3) = isfinite(p.x) && isfinite(p.y) && isfinite(p.z)
+
+# Compensated dot product (Ogita, Rump & Oishi "Dot2"): the result is as
+# accurate as a twice-working-precision evaluation rounded once.
+@inline function _catmull_rom_dot2(w::NTuple{4,Float64}, x::NTuple{4,Float64})
+    p = w[1] * x[1]
+    s = fma(w[1], x[1], -p)
+    for k in 2:4
+        h = w[k] * x[k]
+        r = fma(w[k], x[k], -h)
+        sum = p + h
+        z = sum - p
+        q = (p - (sum - z)) + (h - z)
+        p = sum
+        s += q + r
+    end
+    return p + s
+end
+
+# Reflected neighbours that overflow Float64. The uniform (three.js
+# `initCatmullRom`) cubic is linear in its points, so substitute the
+# reflections p0 = 2p1 - p2 and p3 = 2p2 - p1 into the point weights and sum
+# the quarter-scaled points (power-of-two scaling is exact) with Dot2.
+function _catmull_rom_reflected_uniform(before, p1::Vec3, p2::Vec3, after,
+                                        t::Float64, tension::Float64)
+    t2 = t * t
+    t3 = t2 * t
+    w0 = -tension * (t3 - 2t2 + t)
+    w3 = tension * (t3 - t2)
+    w1 = 2t3 - 3t2 + 1.0 - w3
+    w2 = -2t3 + 3t2 - w0
+    if before === nothing
+        w1 += 2w0
+        w2 -= w0
+        w0 = 0.0
+    end
+    if after === nothing
+        w1 -= w3
+        w2 += 2w3
+        w3 = 0.0
+    end
+    weights = (w0, w1, w2, w3)
+    a = (before === nothing ? p1 : before) * 0.25
+    b = p1 * 0.25
+    c = p2 * 0.25
+    d = (after === nothing ? p2 : after) * 0.25
+    return Vec3(_catmull_rom_dot2(weights, (a.x, b.x, c.x, d.x)),
+                _catmull_rom_dot2(weights, (a.y, b.y, c.y, d.y)),
+                _catmull_rom_dot2(weights, (a.z, b.z, c.z, d.z))) * 4.0
+end
+
+function _catmull_rom_open_end_segment(curve::CatmullRomCurve, before, p1::Vec3,
+                                       p2::Vec3, after, local_t::Float64)
+    p0 = before === nothing ? _catmull_rom_phantom(p1, p2) : before
+    p3 = after === nothing ? _catmull_rom_phantom(p2, p1) : after
+    _catmull_rom_finite(p0) && _catmull_rom_finite(p3) &&
+        return _catmull_rom_evaluate(curve, p0, p1, p2, p3, local_t)
+    # A reflected point can overflow although the curve itself stays finite.
+    curve.curve_type === :catmullrom &&
+        return _catmull_rom_reflected_uniform(
+            before, p1, p2, after, local_t, curve.tension)
+    # The centripetal and chordal parameterizations are invariant under
+    # uniform scaling, and scaling by a power of two is exact, so evaluate a
+    # quarter-size copy (whose reflected points are bounded by 3/4 of
+    # floatmax) and scale the result back.
+    q = 0.25
+    s1 = p1 * q
+    s2 = p2 * q
+    s0 = before === nothing ? _catmull_rom_phantom(s1, s2) : before * q
+    s3 = after === nothing ? _catmull_rom_phantom(s2, s1) : after * q
+    return _catmull_rom_evaluate(curve, s0, s1, s2, s3, local_t) * 4.0
+end
+
 function catmull_rom_point(curve::CatmullRomCurve, t::Real)
     points = curve.points
     n = length(points)
@@ -789,16 +1051,17 @@ function catmull_rom_point(curve::CatmullRomCurve, t::Real)
         p1 = points[mod1(segment, n)]
         p2 = points[mod1(segment + 1, n)]
         p3 = points[mod1(segment + 2, n)]
-    else
-        p0 = points[max(segment - 1, 1)]
-        p1 = points[segment]
-        p2 = points[segment + 1]
-        p3 = points[min(segment + 2, n)]
+        return _catmull_rom_evaluate(curve, p0, p1, p2, p3, local_t)
     end
-    curve.curve_type === :catmullrom &&
-        return _catmull_rom_uniform(p0, p1, p2, p3, local_t, curve.tension)
-    alpha = curve.curve_type === :centripetal ? 0.5 : 1.0
-    return _catmull_rom_nonuniform(p0, p1, p2, p3, local_t, alpha)
+    p1 = points[segment]
+    p2 = points[segment + 1]
+    if segment > 1 && segment + 2 <= n
+        return _catmull_rom_evaluate(curve, points[segment - 1], p1, p2,
+                                     points[segment + 2], local_t)
+    end
+    before = segment > 1 ? points[segment - 1] : nothing
+    after = segment + 2 <= n ? points[segment + 2] : nothing
+    return _catmull_rom_open_end_segment(curve, before, p1, p2, after, local_t)
 end
 
 function catmull_rom_points(curve::CatmullRomCurve; segments::Integer=200)
@@ -2449,7 +2712,9 @@ function ExtrudeGeometry(shape::Vector{<:Vec2}; depth=1.0, extrude_path=nothing,
             z1 = zs[l]; z2 = zs[l + 1]
             n = if offsets[l] == offsets[l + 1]
                 ex, ey = _geometry_unit_delta2(p1.x, p1.y, p2.x, p2.y)
-                Vec3(ey, -ex, 0.0)
+                # Follow the quad winding like three.js computeVertexNormals: a
+                # negative depth turns the wall inside out, normal included.
+                z2 < z1 ? Vec3(-ey, ex, 0.0) : Vec3(ey, -ex, 0.0)
             else
                 # Planar bevel trapezoid: its diagonals span the face plane.
                 normalize(cross(Vec3(q2.x - p1.x, q2.y - p1.y, z2 - z1),
@@ -2585,7 +2850,6 @@ end
     return (UInt128(lo) << 64) | UInt128(hi)
 end
 
-@inline _edge_key(a::Int, b::Int)::UInt128 = _edge_key(UInt128, a, b)
 @inline _edge_key_first(key::UInt64) = Int(key >> 32)
 @inline _edge_key_second(key::UInt64) = Int(key & UInt64(0xffffffff))
 @inline _edge_key_first(key::UInt128) = Int(key >> 64)
@@ -2618,7 +2882,8 @@ end
             record_id = edge_record_ids[idx]
             count = edge_counts[record_id]
             if count == UInt8(1)
-                edge_features[record_id] = dot(edge_normals[record_id], n) < cosT
+                # three.js EdgesGeometry.js keeps an edge when dot <= thresholdDot.
+                edge_features[record_id] = dot(edge_normals[record_id], n) <= cosT
                 edge_counts[record_id] = UInt8(2)
             else
                 # More than two incident faces make this a non-manifold edge.
@@ -2676,6 +2941,8 @@ end
 end
 
 """All unique triangle edges as line segments (three.js `WireframeGeometry`).
+Like three.js, an edge is emitted once however many triangles share its two
+end positions, even when those triangles use separate vertices.
 Returned as a line BufferGeometry (`n_faces = 0`; vertices are segment pairs)."""
 function wireframe_geometry(geo::BufferGeometry)
     _validate_triangle_geometry_indices(geo, "wireframe_geometry")
@@ -2685,13 +2952,20 @@ function wireframe_geometry(geo::BufferGeometry)
 end
 
 function _wireframe_edge_keys(geo::BufferGeometry, faces,
-                               ::Type{K}) where {K<:Union{UInt64,UInt128}}
+                               ::Type{K},
+                               vertex_ids::Union{Nothing,Vector{Int}}=nothing,
+                               ) where {K<:Union{UInt64,UInt128}}
     max_edges = 3 * length(faces)
     seen = zeros(K, _edge_table_capacity(max_edges))
     ordered_edges = Vector{K}()
     sizehint!(ordered_edges, _edge_record_hint(geo, max_edges))
     @inbounds for fi in faces
         i1, i2, i3 = get_face(geo, fi)
+        if vertex_ids !== nothing
+            i1 = vertex_ids[i1]
+            i2 = vertex_ids[i2]
+            i3 = vertex_ids[i3]
+        end
         _record_wireframe_edge!(seen, ordered_edges, i1, i2)
         _record_wireframe_edge!(seen, ordered_edges, i2, i3)
         _record_wireframe_edge!(seen, ordered_edges, i3, i1)
@@ -2699,8 +2973,44 @@ function _wireframe_edge_keys(geo::BufferGeometry, faces,
     return ordered_edges
 end
 
+# Exact position of a vertex as a hash key; `+ 0.0` folds -0.0 into 0.0, as
+# three.js's `${x}` string hashes do.
+@inline function _wireframe_position_key(geo::BufferGeometry, vi::Int)
+    base = 3vi - 2
+    @inbounds return (geo.positions[base] + 0.0, geo.positions[base + 1] + 0.0,
+                      geo.positions[base + 2] + 0.0)
+end
+
+# Map every vertex to the first vertex with exactly the same position
+# (three.js WireframeGeometry `isUniqueEdge` hashes edges by position).
+function _wireframe_position_ids(geo::BufferGeometry)
+    n = geo.n_vertices
+    ids = Vector{Int}(undef, n)
+    table = zeros(Int, _edge_table_capacity(n))
+    last_slot = length(table)
+    mask = last_slot - 1
+    @inbounds for vi in 1:n
+        key = _wireframe_position_key(geo, vi)
+        slot = Int(hash(key) & UInt(mask)) + 1
+        while true
+            existing = table[slot]
+            if existing == 0
+                table[slot] = vi
+                ids[vi] = vi
+                break
+            elseif isequal(_wireframe_position_key(geo, existing), key)
+                ids[vi] = existing
+                break
+            end
+            slot = slot == last_slot ? 1 : slot + 1
+        end
+    end
+    return ids
+end
+
 function _wireframe_geometry_keyed(geo::BufferGeometry, ::Type{K}) where {K<:Union{UInt64,UInt128}}
-    ordered_edges = _wireframe_edge_keys(geo, 1:geo.n_faces, K)
+    ordered_edges = _wireframe_edge_keys(geo, 1:geo.n_faces, K,
+                                         _wireframe_position_ids(geo))
     positions = Vector{Float64}(undef, 6 * length(ordered_edges))
     vi = 0
     pout = 1
@@ -2773,9 +3083,10 @@ end
     return c, cpos_len
 end
 
-"""Feature edges whose adjacent faces differ in orientation by more than
+"""Feature edges whose adjacent faces differ in orientation by at least
 `threshold_angle`, plus boundary edges (three.js `EdgesGeometry`). Returned as a
-line BufferGeometry. Coincident vertices are merged by position first."""
+line BufferGeometry. Coincident vertices are merged by position first, and
+triangles with merged corners are skipped."""
 function edges_geometry(geo::BufferGeometry; threshold_angle=0.349)   # ≈20°
     _validate_triangle_geometry_indices(geo, "edges_geometry")
     threshold_angle = _geometry_finite_float(
@@ -2822,6 +3133,10 @@ function _edges_geometry_keyed(geo::BufferGeometry, cosT::Float64,
         c3, cpos_len = _canonical_edge_vertex!(canonical_ids, canon, csrc,
                                                cpos_len, geo, anchor,
                                                weld_scale, i3)
+        # three.js EdgesGeometry skips triangles with two welded corners: they
+        # have no area and would add a zero-length segment and a spurious
+        # extra face on their remaining edge.
+        (c1 == c2 || c2 == c3 || c3 == c1) && continue
         _record_edge_face!(edge_keys, edge_record_ids, ordered_edges, edge_normals,
                            edge_counts, edge_features, c1, c2, n, cosT)
         _record_edge_face!(edge_keys, edge_record_ids, ordered_edges, edge_normals,
