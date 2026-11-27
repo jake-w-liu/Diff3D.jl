@@ -193,8 +193,10 @@ end
     # The solid name runs to the end of its line, even when it is a keyword.
     named = load_stl(_audit3_file(replace(base, "solid s\n" => "solid vertex 1 2\n"), ".stl"))
     @test named.positions == ref.positions
-    named = load_stl(_audit3_file(replace(base, "solid s\n" => "solid my facet\n"), ".stl"))
-    @test named.positions == ref.positions
+    for name in ("my facet", "my facet normal", "facet normal 1 2")
+        named = load_stl(_audit3_file(replace(base, "solid s\n" => "solid $name\n"), ".stl"))
+        @test named.positions == ref.positions
+    end
     # STLLoader.js matches facets anywhere in the solid text, so a file written
     # on one line loads; three.js r186 gives these positions and normals.
     oneline = "solid x facet normal 0 0 1 outer loop vertex 0 0 0 vertex 1 0 0 " *

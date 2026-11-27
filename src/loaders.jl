@@ -623,10 +623,24 @@ end
     return value, p
 end
 
+# Whether a complete `facet normal nx ny nz` record starts at token `first`.
+function _stl_facet_record_at(bytes::AbstractVector{UInt8}, first::Int, last::Int,
+                              next::Int, n::Int)
+    _stl_token_is(bytes, first, last, "facet") || return false
+    f, l, next = _ply_next_ascii_token(bytes, next, n)
+    f != 0 && _stl_token_is(bytes, f, l, "normal") || return false
+    for _ in 1:3
+        f, l, next = _ply_next_ascii_token(bytes, next, n)
+        f != 0 && _try_parse_ascii_float(bytes, f, l)[2] == UInt8(0) || return false
+    end
+    return true
+end
+
 # Skip the name after `solid`/`endsolid`: the rest of its line (STLLoader.js
 # patternName /solid\s(.+)/). STLLoader.js finds facets anywhere in the solid
-# text, so a file written on one line continues at its first `facet normal`.
-# Returns the offset of the line break, of that `facet`, or n + 1.
+# text, so a file written on one line continues at its first complete
+# `facet normal` record. Returns the offset of the line break, of that
+# `facet`, or n + 1.
 function _stl_skip_solid_name(bytes::AbstractVector{UInt8}, p::Int, n::Int)
     while true
         while p <= n && _ply_ascii_space(bytes[p]) &&
@@ -635,10 +649,7 @@ function _stl_skip_solid_name(bytes::AbstractVector{UInt8}, p::Int, n::Int)
         end
         (p > n || bytes[p] == UInt8('\n') || bytes[p] == UInt8('\r')) && return p
         first, last, next = _ply_next_ascii_token(bytes, p, n)
-        if _stl_token_is(bytes, first, last, "facet")
-            f2, l2, _ = _ply_next_ascii_token(bytes, next, n)
-            f2 != 0 && _stl_token_is(bytes, f2, l2, "normal") && return p
-        end
+        _stl_facet_record_at(bytes, first, last, next, n) && return p
         p = next
     end
 end
