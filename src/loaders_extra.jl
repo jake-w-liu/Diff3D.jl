@@ -6,138 +6,261 @@
 
 # ========================== DEFLATE / INFLATE ==========================
 
+# LSB-first DEFLATE bit reader (RFC 1951 §3.1.1). `bitbuf` holds `bitcnt`
+# unconsumed bits that were read, whole bytes at a time, from `data[..pos-1]`.
 mutable struct _BitReader{D<:AbstractVector{UInt8}}
     data::D
     pos::Int
-    bitbuf::UInt32
+    bitbuf::UInt64
     bitcnt::Int
 end
-_BitReader(d::AbstractVector{UInt8}) = _BitReader{typeof(d)}(d, 1, UInt32(0), 0)
+_BitReader(d::AbstractVector{UInt8}) =
+    _BitReader{typeof(d)}(d, firstindex(d), UInt64(0), 0)
 
-@inline function _getbit(br::_BitReader)
-    if br.bitcnt == 0
-        br.pos <= length(br.data) || error("DEFLATE stream is truncated")
-        br.bitbuf = UInt32(br.data[br.pos]); br.pos += 1; br.bitcnt = 8
+# Top up the bit buffer to at least 56 bits, or with all remaining input.
+# Bits at and above `bitcnt` are either zero or the low bits of the next
+# unread bytes, so OR-ing those bytes in again is harmless.
+@inline function _inflate_refill_bytes(data::AbstractVector{UInt8}, pos::Int, stop::Int,
+                                       bitbuf::UInt64, bitcnt::Int)
+    while bitcnt <= 56 && pos <= stop
+        @inbounds bitbuf |= UInt64(data[pos]) << bitcnt
+        pos += 1
+        bitcnt += 8
     end
-    b = br.bitbuf & 0x1
-    br.bitbuf >>= 1; br.bitcnt -= 1
-    return Int(b)
+    return pos, bitbuf, bitcnt
 end
-@inline function _getbits(br::_BitReader, n::Int)
-    v = 0
-    for i in 0:n-1
-        v |= _getbit(br) << i
+
+const _InflateDenseBytes =
+    Union{Vector{UInt8},Base.FastContiguousSubArray{UInt8,1,Vector{UInt8}}}
+
+# Contiguous input: one unaligned 8-byte load (inside the input, as
+# pos + 7 <= stop is tested first) claims the whole bytes that fit.
+@inline function _inflate_refill(data::_InflateDenseBytes, pos::Int, stop::Int,
+                                 bitbuf::UInt64, bitcnt::Int)
+    if pos + 7 <= stop && bitcnt <= 56
+        word = GC.@preserve data ltoh(unsafe_load(Ptr{UInt64}(pointer(data, pos))))
+        bitbuf |= word << bitcnt
+        pos += (63 - bitcnt) >> 3
+        bitcnt |= 56
+        return pos, bitbuf, bitcnt
     end
+    return _inflate_refill_bytes(data, pos, stop, bitbuf, bitcnt)
+end
+
+@inline _inflate_refill(data::AbstractVector{UInt8}, pos::Int, stop::Int,
+                        bitbuf::UInt64, bitcnt::Int) =
+    _inflate_refill_bytes(data, pos, stop, bitbuf, bitcnt)
+
+@noinline _inflate_truncated() = error("DEFLATE stream is truncated")
+
+@inline function _getbits(br::_BitReader, n::Int)
+    if br.bitcnt < n
+        br.pos, br.bitbuf, br.bitcnt =
+            _inflate_refill(br.data, br.pos, lastindex(br.data), br.bitbuf, br.bitcnt)
+        br.bitcnt < n && _inflate_truncated()
+    end
+    v = Int(br.bitbuf & ((UInt64(1) << n) - UInt64(1)))
+    br.bitbuf >>= n
+    br.bitcnt -= n
     return v
 end
 
-# Canonical Huffman decode table (RFC 1951). Decoding walks MSB-first one bit at
-# a time, but each length check is O(1) instead of scanning all symbols.
-#
-# Fields, indexed by code length `len` (1..maxbits):
-#   first_code[len]   smallest canonical code of that length
-#   first_index[len]  offset into `symbols` where that length's symbols start
-#   count[len]        number of symbols of that length
-#   symbols           symbol values (0-based) sorted by (length, code), i.e. by
-#                     ascending symbol index within each length — exactly the
-#                     order `_build_huff` assigns consecutive codes, so
-#                     symbol = symbols[first_index[len] + (code - first_code[len])].
+# Return the reader to the next byte boundary: drop the partial byte and hand
+# buffered whole bytes back to the input (stored blocks and the zlib trailer
+# are byte-aligned).
+@inline function _bitreader_align!(br::_BitReader)
+    br.pos -= br.bitcnt >> 3
+    br.bitbuf = UInt64(0)
+    br.bitcnt = 0
+    return br
+end
+
+# Canonical Huffman decoder (RFC 1951 §3.2.2). Codes of up to `_HUFF_FAST_BITS`
+# bits resolve with one lookup of the next input bits in `fast`, whose entries
+# are `length << 9 | symbol` (0 = longer code or unused prefix). Longer codes
+# use the canonical bounds: for code length `len`, `maxcode[len]` is one past
+# that length's last code left-aligned to 16 bits, and a code's position in the
+# (length, symbol)-sorted `size`/`value` tables is
+# `code - firstcode[len] + firstsymbol[len]`.
+const _HUFF_FAST_BITS = 10
+const _HUFF_FAST_MASK = (UInt64(1) << _HUFF_FAST_BITS) - UInt64(1)
+
 struct _Huff
-    maxbits::Int
-    first_code::Vector{Int}
-    first_index::Vector{Int}
+    fast::Vector{UInt16}
+    maxcode::Vector{Int}
+    firstcode::Vector{Int}
+    firstsymbol::Vector{Int}
+    size::Vector{UInt8}
+    value::Vector{UInt16}
     count::Vector{Int}
-    symbols::Vector{Int}
+    next_code::Vector{Int}
 end
 
-# Build the canonical-Huffman fast-decode table from per-symbol code lengths.
-# Produces the identical canonical code assignment as the previous (lengths,
-# codes) form: within a length, codes increase in symbol-index order.
-function _build_huff(lengths::AbstractVector{Int})
-    maxbits = isempty(lengths) ? 0 : maximum(lengths)
-    if maxbits == 0
-        return _Huff(0, Int[], Int[], Int[], Int[])
+_Huff() = _Huff(zeros(UInt16, 1 << _HUFF_FAST_BITS), zeros(Int, 16), zeros(Int, 16),
+                zeros(Int, 16), UInt8[], UInt16[], zeros(Int, 16), zeros(Int, 16))
+
+# Unused code space of a code with `count[len]` codes per length, in units of
+# 15-bit codes; negative when the lengths are over-subscribed.
+function _huff_code_space_left(count::Vector{Int})
+    left = 1
+    @inbounds for len in 1:15
+        left = (left << 1) - count[len]
+        left < 0 && return left
     end
-    # Count codes per length and derive the first canonical code per length.
-    blcount = zeros(Int, maxbits + 1)        # blcount[len+1] = #codes of length len
+    return left
+end
+
+function _huff_check_complete(count::Vector{Int}, left::Int, allow_single::Bool)
+    left == 0 && return nothing
+    maxlen = something(findlast(!iszero, count), 0)
+    (maxlen == 0 || (allow_single && maxlen == 1)) && return nothing
+    error("corrupt DEFLATE Huffman code (incomplete code lengths)")
+end
+
+# Build `h` from per-symbol code lengths (0 = unused). Rejects code sets that
+# are not prefix codes (over-subscribed) and incomplete sets, except a set with
+# no codes or a single one-bit code, which RFC 1951 §3.2.7 permits for
+# distances; zlib applies the same rule to every table (inflate_table).
+function _build_huff!(h::_Huff, lengths::AbstractVector{<:Integer},
+                      allow_single::Bool=true; check_complete::Bool=true)
+    count = h.count
+    fill!(count, 0)
+    nsym = 0
     @inbounds for l in lengths
-        l > 0 && (blcount[l + 1] += 1)
-    end
-    first_code = zeros(Int, maxbits)         # first_code[len]
-    count = zeros(Int, maxbits)              # count[len]
-    code = 0
-    @inbounds for len in 1:maxbits
-        code = (code + blcount[len]) << 1    # matches _build_huff(prev) recurrence
-        first_code[len] = code
-        count[len] = blcount[len + 1]
-    end
-    # `symbols` holds symbol values grouped by length, in ascending symbol order.
-    first_index = zeros(Int, maxbits)        # offset (0-based) into symbols per length
-    acc = 0
-    @inbounds for len in 1:maxbits
-        first_index[len] = acc
-        acc += count[len]
-    end
-    symbols = Vector{Int}(undef, acc)
-    fill_pos = copy(first_index)             # running write cursor per length
-    n = 0
-    @inbounds for l in lengths
-        n += 1
+        0 <= l <= 15 || error("invalid DEFLATE Huffman code length $l")
         if l > 0
-            symbols[fill_pos[l] + 1] = n - 1 # 0-based symbol value
-            fill_pos[l] += 1
+            count[l] += 1
+            nsym += 1
         end
     end
-    return _Huff(maxbits, first_code, first_index, count, symbols)
-end
-
-# Decode one symbol. O(code length) bit reads with O(1) work per bit.
-@inline function _decode_sym(br::_BitReader, huff::_Huff)
+    left = _huff_code_space_left(count)
+    left < 0 && error("corrupt DEFLATE Huffman code (over-subscribed code lengths)")
+    check_complete && _huff_check_complete(count, left, allow_single)
+    fast = h.fast
+    fill!(fast, 0x0000)
+    maxcode = h.maxcode
+    firstcode = h.firstcode
+    firstsymbol = h.firstsymbol
+    next_code = h.next_code
     code = 0
-    @inbounds for len in 1:huff.maxbits
-        code = (code << 1) | _getbit(br)
-        cnt = huff.count[len]
-        if cnt > 0
-            off = code - huff.first_code[len]
-            if 0 <= off < cnt
-                return huff.symbols[huff.first_index[len] + off + 1]
+    k = 0
+    @inbounds for len in 1:15
+        next_code[len] = code
+        firstcode[len] = code
+        firstsymbol[len] = k
+        code += count[len]
+        maxcode[len] = code << (16 - len)
+        code <<= 1
+        k += count[len]
+    end
+    @inbounds maxcode[16] = 1 << 16                  # sentinel: ends the slow scan
+    size = resize!(h.size, nsym)
+    value = resize!(h.value, nsym)
+    sym = 0
+    @inbounds for l in lengths
+        if l > 0
+            c = next_code[l]
+            position = c - firstcode[l] + firstsymbol[l] + 1
+            size[position] = UInt8(l)
+            value[position] = UInt16(sym)
+            if l <= _HUFF_FAST_BITS
+                entry = UInt16((l << 9) | sym)
+                j = Int(bitreverse(UInt16(c)) >> (16 - l))
+                while j < (1 << _HUFF_FAST_BITS)
+                    fast[j + 1] = entry
+                    j += 1 << l
+                end
             end
+            next_code[l] = c + 1
         end
+        sym += 1
     end
-    error("invalid Huffman code")
+    return h
 end
 
-const _LEN_BASE   = [3,4,5,6,7,8,9,10,11,13,15,17,19,23,27,31,35,43,51,59,67,83,99,115,131,163,195,227,258]
-const _LEN_EXTRA  = [0,0,0,0,0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5,0]
-const _DIST_BASE  = [1,2,3,4,5,7,9,13,17,25,33,49,65,97,129,193,257,385,513,769,1025,1537,2049,3073,4097,6145,8193,12289,16385,24577]
-const _DIST_EXTRA = [0,0,0,0,1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11,12,12,13,13]
+_build_huff(lengths::AbstractVector{<:Integer}, allow_single::Bool=true) =
+    _build_huff!(_Huff(), lengths, allow_single)
 
-const _FIXED_LITLEN_HUFF = let
-    litlen = Vector{Int}(undef, 288)
-    for i in 1:288
-        litlen[i] = i <= 144 ? 8 : i <= 256 ? 9 : i <= 280 ? 7 : 8
-    end
-    _build_huff(litlen)
+# Decode the symbol at the front of `bitbuf`. Returns `(symbol, code_length)`;
+# a code length of 0 marks an invalid code. The caller checks that the code
+# length does not exceed the bits actually buffered.
+@inline function _huff_decode(h::_Huff, bitbuf::UInt64)
+    @inbounds entry = h.fast[Int(bitbuf & _HUFF_FAST_MASK) + 1]
+    entry != 0x0000 && return Int(entry & 0x01ff), Int(entry >> 9)
+    return _huff_decode_slow(h, bitbuf)
 end
-const _FIXED_DIST_HUFF = _build_huff(fill(5, 30))
+
+@noinline function _huff_decode_slow(h::_Huff, bitbuf::UInt64)
+    k = Int(bitreverse(UInt16(bitbuf & 0xffff)))
+    s = _HUFF_FAST_BITS + 1
+    @inbounds while k >= h.maxcode[s]
+        s += 1
+    end
+    s >= 16 && return 0, 0
+    @inbounds position = (k >> (16 - s)) - h.firstcode[s] + h.firstsymbol[s] + 1
+    (1 <= position <= length(h.size) && @inbounds(h.size[position]) == s) ||
+        return 0, 0
+    return Int(@inbounds h.value[position]), s
+end
+
+function _decode_sym(br::_BitReader, huff::_Huff)
+    if br.bitcnt < 15
+        br.pos, br.bitbuf, br.bitcnt =
+            _inflate_refill(br.data, br.pos, lastindex(br.data), br.bitbuf, br.bitcnt)
+    end
+    sym, len = _huff_decode(huff, br.bitbuf)
+    len == 0 && error("invalid Huffman code")
+    len > br.bitcnt && _inflate_truncated()
+    br.bitbuf >>= len
+    br.bitcnt -= len
+    return sym
+end
+
+const _LEN_BASE   = (3,4,5,6,7,8,9,10,11,13,15,17,19,23,27,31,35,43,51,59,67,83,99,115,131,163,195,227,258)
+const _LEN_EXTRA  = (0,0,0,0,0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5,0)
+const _DIST_BASE  = (1,2,3,4,5,7,9,13,17,25,33,49,65,97,129,193,257,385,513,769,1025,1537,2049,3073,4097,6145,8193,12289,16385,24577)
+const _DIST_EXTRA = (0,0,0,0,1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11,12,12,13,13)
+
+# Fixed Huffman codes (RFC 1951 §3.2.6). The distance code has all 32 five-bit
+# codes; symbols 30 and 31 are rejected when decoded.
+const _FIXED_LITLEN_HUFF = _build_huff(
+    [i <= 144 ? 8 : i <= 256 ? 9 : i <= 280 ? 7 : 8 for i in 1:288])
+const _FIXED_DIST_HUFF = _build_huff(fill(5, 32))
 const _DEFLATE_CODELEN_ORDER = (16,17,18,0,8,7,9,6,10,5,11,4,12,3,13,2,14,1,15)
 const _INFLATE_MIN_SIZEHINT = 1024
 
-@inline function _fixed_huffs()
-    return _FIXED_LITLEN_HUFF, _FIXED_DIST_HUFF
+# Per-stream tables for dynamic blocks, rebuilt in place for every block.
+struct _InflateTables
+    codelen::_Huff
+    lit::_Huff
+    dist::_Huff
+    lengths::Vector{Int}
+    codelen_lengths::Vector{Int}
 end
 
-function _read_dynamic(br::_BitReader)
+_InflateTables() = _InflateTables(_Huff(), _Huff(), _Huff(), zeros(Int, 320), zeros(Int, 19))
+
+@noinline _inflate_repeat_error() =
+    error("corrupt DEFLATE dynamic Huffman (repeat length exceeds table)")
+
+function _read_dynamic!(tables::_InflateTables, br::_BitReader)
     hlit = _getbits(br, 5) + 257
     hdist = _getbits(br, 5) + 1
     hclen = _getbits(br, 4) + 4
-    cl_lengths = zeros(Int, 19)
+    # RFC 1951 §3.2.7: HLIT is 257-286. HDIST may name 32 codes; symbols 30
+    # and 31 are rejected if they are ever decoded.
+    hlit <= 286 ||
+        error("corrupt DEFLATE dynamic Huffman (HLIT $hlit exceeds 286 literal/length codes)")
+    cl_lengths = tables.codelen_lengths
+    fill!(cl_lengths, 0)
     for i in 1:hclen
         cl_lengths[_DEFLATE_CODELEN_ORDER[i] + 1] = _getbits(br, 3)
     end
-    cl_huff = _build_huff(cl_lengths)
+    # Completeness of the code-length code is checked after the lengths are
+    # read, so a repeat that overruns the table reports that defect first.
+    cl_huff = _build_huff!(tables.codelen, cl_lengths, false; check_complete=false)
     target = hlit + hdist
-    all_lengths = Vector{Int}(undef, target)
+    all_lengths = tables.lengths
     pos = 1
     while pos <= target
         sym = _decode_sym(br, cl_huff)
@@ -147,147 +270,250 @@ function _read_dynamic(br::_BitReader)
         elseif sym == 16
             pos == 1 && error("corrupt DEFLATE dynamic Huffman (repeat code with no previous length)")
             rep = _getbits(br, 2) + 3
-            pos + rep - 1 <= target ||
-                error("corrupt DEFLATE dynamic Huffman (repeat length exceeds table)")
+            pos + rep - 1 <= target || _inflate_repeat_error()
             prev = all_lengths[pos - 1]
             @inbounds for _ in 1:rep
                 all_lengths[pos] = prev
                 pos += 1
             end
-        elseif sym == 17
-            rep = _getbits(br, 3) + 3
-            pos + rep - 1 <= target ||
-                error("corrupt DEFLATE dynamic Huffman (repeat length exceeds table)")
-            @inbounds for _ in 1:rep
-                all_lengths[pos] = 0
-                pos += 1
-            end
         else
-            rep = _getbits(br, 7) + 11
-            pos + rep - 1 <= target ||
-                error("corrupt DEFLATE dynamic Huffman (repeat length exceeds table)")
+            rep = sym == 17 ? _getbits(br, 3) + 3 : _getbits(br, 7) + 11
+            pos + rep - 1 <= target || _inflate_repeat_error()
             @inbounds for _ in 1:rep
                 all_lengths[pos] = 0
                 pos += 1
             end
         end
     end
-    lit = _build_huff(@view all_lengths[1:hlit])
-    dist = _build_huff(@view all_lengths[hlit+1:hlit+hdist])
-    return (lit, dist)
+    _huff_check_complete(cl_huff.count, _huff_code_space_left(cl_huff.count), false)
+    all_lengths[257] != 0 ||
+        error("corrupt DEFLATE dynamic Huffman (missing end-of-block code)")
+    lit = _build_huff!(tables.lit, view(all_lengths, 1:hlit))
+    dist = _build_huff!(tables.dist, view(all_lengths, (hlit + 1):target))
+    return lit, dist
 end
 
-@inline function _inflate_push!(out::Vector{UInt8}, b::UInt8, max_output::Int)
-    max_output >= 0 && length(out) >= max_output &&
-        error("DEFLATE output exceeds expected size")
-    push!(out, b)
-    return nothing
+@noinline _inflate_output_limit() = error("DEFLATE output exceeds expected size")
+
+# Grow `out` so that it holds at least `need` bytes, geometrically and never
+# beyond a non-negative `limit`.
+@noinline function _inflate_grow!(out::Vector{UInt8}, need::Int, limit::Int)
+    limit >= 0 && need > limit && _inflate_output_limit()
+    current = length(out)
+    target = max(need, current > typemax(Int) ÷ 2 ? typemax(Int) : 2 * current,
+                 _INFLATE_MIN_SIZEHINT)
+    limit >= 0 && (target = min(target, limit))
+    resize!(out, target)
+    return out
 end
 
-@inline function _inflate_reserve!(out::Vector{UInt8}, n::Int, max_output::Int)
-    max_output >= 0 && length(out) + n > max_output &&
-        error("DEFLATE output exceeds expected size")
-    return nothing
-end
+@noinline _inflate_bad_code() = error("invalid Huffman code")
+@noinline _inflate_bad_litlen(sym::Int) =
+    error("invalid DEFLATE literal/length symbol $sym")
+@noinline _inflate_bad_distance(sym::Int) =
+    error("invalid DEFLATE distance symbol $sym")
+@noinline _inflate_far_distance() =
+    error("DEFLATE back-reference distance exceeds output (corrupt stream)")
 
-function _inflate_block!(out::Vector{UInt8}, br::_BitReader, lit, dist,
-                         max_output::Int)
-    while true
-        sym = _decode_sym(br, lit)
+# Decode one Huffman-coded block into `out[olen+1:end]`; returns the new
+# output length. Bit-reader state lives in locals for the duration of the block.
+function _inflate_codes!(out::Vector{UInt8}, olen::Int, br::_BitReader,
+                         lit::_Huff, dist::_Huff, limit::Int)
+    data = br.data
+    stop = lastindex(data)
+    pos = br.pos
+    bitbuf = br.bitbuf
+    bitcnt = br.bitcnt
+    @inbounds while true
+        # 48 bits cover the longest length/distance pair (15+5+15+13).
+        bitcnt < 48 && ((pos, bitbuf, bitcnt) = _inflate_refill(data, pos, stop, bitbuf, bitcnt))
+        sym, len = _huff_decode(lit, bitbuf)
+        len == 0 && _inflate_bad_code()
+        len > bitcnt && _inflate_truncated()
+        bitbuf >>= len
+        bitcnt -= len
         if sym < 256
-            _inflate_push!(out, UInt8(sym), max_output)
+            olen == length(out) && _inflate_grow!(out, olen + 1, limit)
+            olen += 1
+            out[olen] = sym % UInt8
         elseif sym == 256
             break
         else
-            257 <= sym <= 285 ||
-                error("invalid DEFLATE literal/length symbol $sym")
+            sym <= 285 || _inflate_bad_litlen(sym)
             li = sym - 256
-            len = _LEN_BASE[li] + _getbits(br, _LEN_EXTRA[li])
-            dsym = _decode_sym(br, dist)
-            0 <= dsym <= 29 ||
-                error("invalid DEFLATE distance symbol $dsym")
-            d = _DIST_BASE[dsym + 1] + _getbits(br, _DIST_EXTRA[dsym + 1])
-            start = length(out) - d
-            start >= 0 || error("DEFLATE back-reference distance exceeds output (corrupt stream)")
-            _inflate_reserve!(out, len, max_output)
-            for k in 1:len
-                push!(out, out[start + k])
+            eb = _LEN_EXTRA[li]
+            eb > bitcnt && _inflate_truncated()
+            n = _LEN_BASE[li] + Int(bitbuf & ((UInt64(1) << eb) - UInt64(1)))
+            bitbuf >>= eb
+            bitcnt -= eb
+            dsym, dlen = _huff_decode(dist, bitbuf)
+            dlen == 0 && _inflate_bad_code()
+            dlen > bitcnt && _inflate_truncated()
+            bitbuf >>= dlen
+            bitcnt -= dlen
+            dsym <= 29 || _inflate_bad_distance(dsym)
+            de = _DIST_EXTRA[dsym + 1]
+            de > bitcnt && _inflate_truncated()
+            d = _DIST_BASE[dsym + 1] + Int(bitbuf & ((UInt64(1) << de) - UInt64(1)))
+            bitbuf >>= de
+            bitcnt -= de
+            d <= olen || _inflate_far_distance()
+            olen + n > length(out) && _inflate_grow!(out, olen + n, limit)
+            src = olen - d
+            if d == 1
+                b = out[olen]
+                for k in 1:n
+                    out[olen + k] = b
+                end
+            else
+                for k in 1:n                      # byte order handles overlap
+                    out[olen + k] = out[src + k]
+                end
             end
+            olen += n
         end
     end
+    br.pos = pos
+    br.bitbuf = bitbuf
+    br.bitcnt = bitcnt
+    return olen
 end
 
-"""Inflate a raw DEFLATE stream (no zlib header) to bytes."""
+# Append one Huffman-coded block to `out` (test/suite.jl drives the decoder
+# with hand-built tables through this entry point).
+function _inflate_block!(out::Vector{UInt8}, br::_BitReader, lit::_Huff, dist::_Huff,
+                         max_output::Int)
+    olen = _inflate_codes!(out, length(out), br, lit, dist, max_output)
+    resize!(out, olen)
+    return out
+end
+
+function _inflate_stored!(out::Vector{UInt8}, olen::Int, br::_BitReader, limit::Int)
+    _bitreader_align!(br)
+    data = br.data
+    p = br.pos
+    p + 3 <= lastindex(data) || error("DEFLATE stored block is truncated")
+    len = Int(data[p]) | (Int(data[p + 1]) << 8)
+    nlen = Int(data[p + 2]) | (Int(data[p + 3]) << 8)
+    nlen == (len ⊻ 0xffff) || error("DEFLATE stored block length check failed")
+    p += 4
+    p + len - 1 <= lastindex(data) || error("DEFLATE stored block is truncated")
+    olen + len > length(out) && _inflate_grow!(out, olen + len, limit)
+    copyto!(out, olen + 1, data, p, len)
+    br.pos = p + len
+    return olen + len
+end
+
+# Preallocation for a bounded stream. `max_output` can be attacker-controlled
+# through image dimensions, so do not reserve far more than the compressed
+# size before the stream has proven it can produce that much output.
 @inline function _inflate_sizehint(input_len::Int, limit::Int)
     limit < 0 && return 0
-    # Bound preallocation by compressed size. `max_output` can be attacker-controlled
-    # through image dimensions; do not reserve an implausibly large buffer before the
-    # stream has proven it can produce that much output.
     doubled = input_len > typemax(Int) ÷ 2 ? typemax(Int) : 2 * input_len
     return min(limit, max(_INFLATE_MIN_SIZEHINT, doubled))
 end
 
-function inflate(data::AbstractVector{UInt8}; max_output::Union{Nothing,Int}=nothing)
+# Decode the DEFLATE stream at the reader's position through its final block.
+# Dynamic blocks rebuild their tables in `tables`; a caller decoding many
+# streams (EXR blocks) passes one to reuse, otherwise it is made on demand.
+function _inflate_stream!(br::_BitReader, max_output::Union{Nothing,Int},
+                          tables::Union{Nothing,_InflateTables}=nothing)
     max_output === nothing || max_output >= 0 ||
         throw(ArgumentError("max_output must be non-negative"))
     limit = max_output === nothing ? -1 : max_output
-    br = _BitReader(data)
-    out = UInt8[]
-    hint = _inflate_sizehint(length(data), limit)
-    hint > 0 && sizehint!(out, hint)
+    out = Vector{UInt8}(undef, _inflate_sizehint(length(br.data), limit))
+    olen = 0
     while true
-        bfinal = _getbit(br); btype = _getbits(br, 2)
+        bfinal = _getbits(br, 1)
+        btype = _getbits(br, 2)
         if btype == 0
-            br.bitcnt = 0                       # align to byte boundary
-            br.pos + 3 <= length(br.data) || error("DEFLATE stored block is truncated")
-            len = Int(br.data[br.pos]) | (Int(br.data[br.pos + 1]) << 8)
-            nlen = Int(br.data[br.pos + 2]) | (Int(br.data[br.pos + 3]) << 8)
-            nlen == (len ⊻ 0xffff) || error("DEFLATE stored block length check failed")
-            br.pos += 4                         # skip LEN(2) + NLEN(2)
-            br.pos + len - 1 <= length(br.data) || error("DEFLATE stored block is truncated")
-            _inflate_reserve!(out, len, limit)
-            for _ in 1:len
-                push!(out, br.data[br.pos]); br.pos += 1
-            end
+            olen = _inflate_stored!(out, olen, br, limit)
         elseif btype == 1
-            lit, dist = _fixed_huffs(); _inflate_block!(out, br, lit, dist, limit)
+            olen = _inflate_codes!(out, olen, br, _FIXED_LITLEN_HUFF,
+                                   _FIXED_DIST_HUFF, limit)
         elseif btype == 2
-            lit, dist = _read_dynamic(br); _inflate_block!(out, br, lit, dist, limit)
+            tables === nothing && (tables = _InflateTables())
+            lit, dist = _read_dynamic!(tables, br)
+            olen = _inflate_codes!(out, olen, br, lit, dist, limit)
         else
             error("invalid DEFLATE block type 3")
         end
         bfinal == 1 && break
     end
-    return out
+    return resize!(out, olen)
 end
 
-function zlib_inflate(data::AbstractVector{UInt8}; max_output::Union{Nothing,Int}=nothing)
+"""
+    inflate(data; max_output=nothing) -> Vector{UInt8}
+
+Decompress a raw DEFLATE stream (RFC 1951, no zlib header). Decoding stops
+after the final block; bytes after it are ignored. Malformed streams, including
+Huffman code sets that are over-subscribed or incomplete, raise an error. A
+non-negative `max_output` bounds the decompressed size: a stream that would
+produce more bytes raises an error.
+"""
+inflate(data::AbstractVector{UInt8}; max_output::Union{Nothing,Int}=nothing) =
+    _inflate_stream!(_BitReader(data), max_output)
+
+# zlib Adler-32 (RFC 1950 §8.2). 5552 is the largest n for which the sums of n
+# bytes cannot overflow 32 bits before reduction (zlib's NMAX).
+function _zlib_adler32(data::AbstractVector{UInt8})
+    a = UInt32(1)
+    b = UInt32(0)
+    i = firstindex(data)
+    stop = lastindex(data)
+    @inbounds while i <= stop
+        chunk_stop = min(stop, i + 5551)
+        while i <= chunk_stop
+            a += data[i]
+            b += a
+            i += 1
+        end
+        a %= UInt32(65521)
+        b %= UInt32(65521)
+    end
+    return (b << 16) | a
+end
+
+"""
+    zlib_inflate(data; max_output=nothing) -> Vector{UInt8}
+
+Decompress a zlib stream (RFC 1950): validate the two-byte header, inflate the
+DEFLATE payload, and verify the Adler-32 checksum that immediately follows it.
+Preset dictionaries, a bad header, a checksum mismatch, and bytes after the
+checksum raise an error. `max_output` behaves as for [`inflate`](@ref).
+"""
+zlib_inflate(data::AbstractVector{UInt8}; max_output::Union{Nothing,Int}=nothing) =
+    _zlib_inflate(data, max_output, nothing)
+
+function _zlib_inflate(data::AbstractVector{UInt8}, max_output::Union{Nothing,Int},
+                       tables::Union{Nothing,_InflateTables})
     length(data) >= 6 || error("zlib stream is truncated")
-    cmf = data[1]
-    flg = data[2]
+    first = firstindex(data)
+    cmf = data[first]
+    flg = data[first + 1]
     (cmf & 0x0f) == 0x08 || error("zlib stream uses unsupported compression method")
     (cmf >> 4) <= 0x07 || error("zlib stream uses an invalid window size")
     ((UInt16(cmf) << 8) | UInt16(flg)) % 31 == 0 ||
         error("zlib stream has an invalid header check")
     (flg & 0x20) == 0x00 || error("zlib streams with preset dictionaries are not supported")
 
-    out = inflate(@view data[3:end - 4]; max_output=max_output)
-    expected = (UInt32(data[end - 3]) << 24) | (UInt32(data[end - 2]) << 16) |
-               (UInt32(data[end - 1]) << 8) | UInt32(data[end])
-    actual = _adler32(out)
-    actual == expected || error("zlib Adler-32 checksum mismatch")
+    br = _BitReader(data)
+    br.pos = first + 2
+    out = _inflate_stream!(br, max_output, tables)
+    _bitreader_align!(br)
+    p = br.pos
+    p + 3 <= lastindex(data) || error("zlib Adler-32 checksum is truncated")
+    expected = (UInt32(data[p]) << 24) | (UInt32(data[p + 1]) << 16) |
+               (UInt32(data[p + 2]) << 8) | UInt32(data[p + 3])
+    _zlib_adler32(out) == expected || error("zlib Adler-32 checksum mismatch")
+    p + 3 == lastindex(data) || error("zlib stream has trailing data after its checksum")
     return out
 end
 
 # ========================== PNG decode ==========================
 
 @inline _rd_be32(b, i) = (Int(b[i]) << 24) | (Int(b[i+1]) << 16) | (Int(b[i+2]) << 8) | Int(b[i+3])
-
-@inline function _paeth(a, b, c)
-    p = a + b - c
-    pa = abs(p - a); pb = abs(p - b); pc = abs(p - c)
-    return pa <= pb && pa <= pc ? a : (pb <= pc ? b : c)
-end
 
 const _PNG_SIGNATURE = UInt8[137,80,78,71,13,10,26,10]
 function _is_png_bytes(bytes::AbstractVector{UInt8})
@@ -327,11 +553,49 @@ end
 @inline _png_chunk_is_critical(bytes::AbstractVector{UInt8}, start::Int) =
     @inbounds (bytes[start] & 0x20) == 0
 
+# CRC-32 (PNG Annex D, polynomial 0xedb88320) eight bytes per step
+# ("slicing-by-8"): column k+1 advances a byte through k further zero bytes.
+const _CRC32_SLICE8 = let
+    table = Matrix{UInt32}(undef, 256, 8)
+    for n in 0:255
+        c = UInt32(n)
+        for _ in 1:8
+            c = (c & 0x00000001) != 0 ? 0xedb88320 ⊻ (c >> 1) : c >> 1
+        end
+        table[n + 1, 1] = c
+    end
+    for k in 2:8, n in 1:256
+        prev = table[n, k - 1]
+        table[n, k] = (prev >> 8) ⊻ table[(prev & 0xff) + 1, 1]
+    end
+    table
+end
+
+function _crc32_update_range(crc::UInt32, data::AbstractVector{UInt8},
+                             first::Int, last::Int)
+    checkbounds(data, first:last)
+    t = _CRC32_SLICE8
+    i = first
+    @inbounds while i + 7 <= last
+        lo = crc ⊻ (UInt32(data[i]) | (UInt32(data[i + 1]) << 8) |
+                    (UInt32(data[i + 2]) << 16) | (UInt32(data[i + 3]) << 24))
+        crc = t[(lo & 0xff) + 1, 8] ⊻ t[((lo >> 8) & 0xff) + 1, 7] ⊻
+              t[((lo >> 16) & 0xff) + 1, 6] ⊻ t[(lo >> 24) + 1, 5] ⊻
+              t[Int(data[i + 4]) + 1, 4] ⊻ t[Int(data[i + 5]) + 1, 3] ⊻
+              t[Int(data[i + 6]) + 1, 2] ⊻ t[Int(data[i + 7]) + 1, 1]
+        i += 8
+    end
+    @inbounds while i <= last
+        crc = t[((crc ⊻ data[i]) & 0xff) + 1, 1] ⊻ (crc >> 8)
+        i += 1
+    end
+    return crc
+end
+
 function _png_crc_matches(bytes::AbstractVector{UInt8}, ctype_start::Int,
                           data_start::Int, data_stop::Int, expected::UInt32)
-    c = _crc32_update(UInt32(0xffffffff), @view bytes[ctype_start:ctype_start + 3])
-    data_start <= data_stop &&
-        (c = _crc32_update(c, @view bytes[data_start:data_stop]))
+    c = _crc32_update_range(UInt32(0xffffffff), bytes, ctype_start, ctype_start + 3)
+    c = _crc32_update_range(c, bytes, data_start, data_stop)
     return _crc32_finish(c) == expected
 end
 
@@ -348,55 +612,123 @@ const _PNG_ADAM7_PASSES = (
 @inline _png_pass_size(n::Int, start::Int, step::Int) =
     n <= start ? 0 : ((n - start + step - 1) ÷ step)
 
-function _png_unfilter_scanline!(cur::Vector{UInt8}, prev::Vector{UInt8},
-                                 bpp::Int, ftype::UInt8)
-    stride = length(cur)
-    length(prev) == stride || error("PNG previous scanline length mismatch")
-    @inbounds for i in 1:stride
-        a = i > bpp ? cur[i-bpp] : 0x00
-        b = prev[i]
-        c = i > bpp ? prev[i-bpp] : 0x00
-        x = cur[i]
-        cur[i] = if ftype == 0; x
-                 elseif ftype == 1; x + a
-                 elseif ftype == 2; x + b
-                 elseif ftype == 3; x + UInt8((Int(a) + Int(b)) ÷ 2)
-                 elseif ftype == 4; x + UInt8(_paeth(Int(a), Int(b), Int(c)))
-                 else error("bad PNG filter $ftype") end
+# Undo the filter of one `stride`-byte scanline in place (PNG §9.2). The row's
+# bytes start at `raw[p]`; `q` is the start of the previous row of the same
+# pass, or 0 for a pass's first row, whose previous row is all zeros.
+function _png_unfilter_row!(raw::Vector{UInt8}, p::Int, q::Int, stride::Int,
+                            bpp::Int, ftype::UInt8)
+    last = p + stride - 1
+    @inbounds if ftype == 0x00
+        return raw
+    elseif ftype == 0x01 || (ftype == 0x04 && q == 0)
+        # Sub; Paeth with a zero previous row predicts the left byte.
+        for i in (p + bpp):last
+            raw[i] += raw[i - bpp]
+        end
+    elseif ftype == 0x02
+        q == 0 && return raw
+        for i in 0:(stride - 1)
+            raw[p + i] += raw[q + i]
+        end
+    elseif ftype == 0x03
+        if q == 0
+            for i in (p + bpp):last
+                raw[i] += raw[i - bpp] >> 1
+            end
+        else
+            for i in 0:(min(bpp, stride) - 1)
+                raw[p + i] += raw[q + i] >> 1
+            end
+            for i in bpp:(stride - 1)
+                raw[p + i] += ((UInt16(raw[p + i - bpp]) + UInt16(raw[q + i])) >> 1) % UInt8
+            end
+        end
+    elseif ftype == 0x04
+        # Paeth with a zero left byte predicts the byte above.
+        for i in 0:(min(bpp, stride) - 1)
+            raw[p + i] += raw[q + i]
+        end
+        for i in bpp:(stride - 1)
+            raw[p + i] += _paeth(raw[p + i - bpp], raw[q + i], raw[q + i - bpp])
+        end
+    else
+        error("bad PNG filter $ftype")
     end
-    return cur
+    return raw
 end
 
-@inline function _png_channel_value(cur::Vector{UInt8}, base::Int,
-                                   bps::Int, norm::Float64)
-    return bps == 2 ? ((Int(cur[base]) << 8) | Int(cur[base + 1])) / norm :
-                      cur[base] / norm
+# Paeth predictor (PNG §9.4) with p = a + b - c, so |p - a| = |b - c|,
+# |p - b| = |a - c| and |p - c| = |a + b - 2c|; selects avoid branches.
+@inline function _paeth(a::UInt8, b::UInt8, c::UInt8)
+    ia = Int(a); ib = Int(b); ic = Int(c)
+    pa = abs(ib - ic); pb = abs(ia - ic); pc = abs(ia + ib - 2ic)
+    return ifelse((pa <= pb) & (pa <= pc), a, ifelse(pb <= pc, b, c))
 end
 
-@inline function _png_sample_integer(cur::Vector{UInt8}, base::Int, bps::Int)
-    return bps == 2 ? (Int(cur[base]) << 8) | Int(cur[base + 1]) :
-                      Int(cur[base])
+# Unfilter `rows` scanlines of `stride` bytes stored from `raw[start]` (each
+# preceded by its filter-type byte); returns the index after the last one.
+function _png_unfilter_pass!(raw::Vector{UInt8}, start::Int, rows::Int,
+                             stride::Int, bpp::Int)
+    start + rows * (stride + 1) - 1 <= length(raw) ||
+        error("PNG image data is truncated")
+    p = start
+    q = 0
+    for _ in 1:rows
+        ftype = @inbounds raw[p]
+        _png_unfilter_row!(raw, p + 1, q, stride, bpp, ftype)
+        q = p + 1
+        p += stride + 1
+    end
+    return p
+end
+
+# Scanlines are unfiltered in place and then stored a band of rows at a time,
+# column by column, because the H×W×C output is column-major.
+const _PNG_BAND_ROWS = 16
+
+@inline _png_sample_integer(raw::Vector{UInt8}, i::Int, bps::Int) =
+    @inbounds bps == 2 ? (Int(raw[i]) << 8) | Int(raw[i + 1]) : Int(raw[i])
+
+# Store an unfiltered 8/16-bit pass whose rows start at `raw[start]` into
+# rows y0+1, y0+1+ystep, ... and columns x0+1, x0+1+xstep, ... of `img`.
+function _png_store_pass!(img::Array{Float64,3}, raw::Vector{UInt8}, start::Int,
+                          rows::Int, cols::Int, stride::Int, x0::Int, y0::Int,
+                          xstep::Int, ystep::Int, channels::Int, bps::Int, bpp::Int,
+                          norm::Float64, transparent_samples)
+    start + rows * (stride + 1) - 1 <= length(raw) ||
+        error("PNG image data is truncated")
+    (cols - 1) * bpp + bpp <= stride || error("PNG scanline is shorter than its pixels")
+    for r0 in 1:_PNG_BAND_ROWS:rows
+        r1 = min(rows, r0 + _PNG_BAND_ROWS - 1)
+        @inbounds for pc in 1:cols
+            col = x0 + (pc - 1) * xstep + 1
+            for pr in r0:r1
+                row = y0 + (pr - 1) * ystep + 1
+                base = start + (pr - 1) * (stride + 1) + 1 + (pc - 1) * bpp
+                _png_store_pixel!(img, row, col, raw, base, channels, bps, norm,
+                                  transparent_samples)
+            end
+        end
+    end
+    return img
 end
 
 @inline function _png_store_pixel!(img::Array{Float64,3}, row::Int, col::Int,
-                                   cur::Vector{UInt8}, pixel_base::Int,
-                                   channels::Int, bps::Int, norm::Float64,
-                                   ::Nothing)
+                                   raw::Vector{UInt8}, base::Int, channels::Int,
+                                   bps::Int, norm::Float64, ::Nothing)
     @inbounds for channel in 1:channels
-        base = pixel_base + (channel - 1) * bps + 1
-        img[row, col, channel] = _png_channel_value(cur, base, bps, norm)
+        img[row, col, channel] =
+            _png_sample_integer(raw, base + (channel - 1) * bps, bps) / norm
     end
     return nothing
 end
 
 @inline function _png_store_pixel!(img::Array{Float64,3}, row::Int, col::Int,
-                                   cur::Vector{UInt8}, pixel_base::Int,
-                                   channels::Int, bps::Int, norm::Float64,
-                                   transparent_samples::Tuple)
+                                   raw::Vector{UInt8}, base::Int, channels::Int,
+                                   bps::Int, norm::Float64, transparent_samples::Tuple)
     transparent = true
     @inbounds for channel in 1:channels
-        base = pixel_base + (channel - 1) * bps + 1
-        sample = _png_sample_integer(cur, base, bps)
+        sample = _png_sample_integer(raw, base + (channel - 1) * bps, bps)
         img[row, col, channel] = sample / norm
         transparent &= sample == transparent_samples[channel]
     end
@@ -404,166 +736,105 @@ end
     return nothing
 end
 
-function _png_store_scanline!(img::Array{Float64,3}, row::Int, cur::Vector{UInt8},
-                              W::Int, channels::Int, bps::Int, bpp::Int,
-                              norm::Float64, transparent_samples=nothing)
-    @inbounds for col in 1:W
-        _png_store_pixel!(img, row, col, cur, (col - 1) * bpp,
-                          channels, bps, norm, transparent_samples)
-    end
-    return img
-end
-
-function _png_decode_noninterlaced!(img::Array{Float64,3}, raw::Vector{UInt8},
-                                    W::Int, H::Int, channels::Int, bps::Int,
-                                    bpp::Int, norm::Float64,
-                                    transparent_samples=nothing)
-    stride = W * bpp
-    prev = zeros(UInt8, stride)
-    cur = Vector{UInt8}(undef, stride)
-    p = 1
-    for row in 1:H
-        p <= length(raw) || error("PNG image data is truncated")
-        ftype = raw[p]; p += 1
-        p + stride - 1 <= length(raw) || error("PNG image data is truncated")
-        copyto!(cur, 1, raw, p, stride); p += stride
-        _png_unfilter_scanline!(cur, prev, bpp, ftype)
-        _png_store_scanline!(img, row, cur, W, channels, bps, bpp, norm,
-                             transparent_samples)
-        cur, prev = prev, cur
-    end
-    return img
-end
-
-function _png_decode_adam7!(img::Array{Float64,3}, raw::Vector{UInt8},
-                            W::Int, H::Int, channels::Int, bps::Int,
-                            bpp::Int, norm::Float64,
-                            transparent_samples=nothing)
-    p = 1
-    @inbounds for (x0, y0, xstep, ystep) in _PNG_ADAM7_PASSES
-        pass_w = _png_pass_size(W, x0, xstep)
-        pass_h = _png_pass_size(H, y0, ystep)
-        (pass_w == 0 || pass_h == 0) && continue
-        stride = pass_w * bpp
-        prev = zeros(UInt8, stride)
-        cur = Vector{UInt8}(undef, stride)
-        for prow in 0:(pass_h - 1)
-            p <= length(raw) || error("PNG image data is truncated")
-            ftype = raw[p]; p += 1
-            p + stride - 1 <= length(raw) || error("PNG image data is truncated")
-            copyto!(cur, 1, raw, p, stride); p += stride
-            _png_unfilter_scanline!(cur, prev, bpp, ftype)
-            row = y0 + prow * ystep + 1
-            for pcol in 0:(pass_w - 1)
-                col = x0 + pcol * xstep + 1
-                _png_store_pixel!(img, row, col, cur, pcol * bpp,
-                                  channels, bps, norm, transparent_samples)
-            end
-            cur, prev = prev, cur
-        end
-    end
-    return img
-end
-
-@inline function _png_packed_index(cur::Vector{UInt8}, pcol::Int, bitdepth::Int)
-    if bitdepth == 8
-        return Int(cur[pcol + 1])
+# Sample `pcol` (0-based) of a packed 1/2/4/8-bit row whose bytes start at `p`.
+@inline function _png_packed_index(raw::Vector{UInt8}, p::Int, pcol::Int, bitdepth::Int)
+    @inbounds if bitdepth == 8
+        return Int(raw[p + pcol])
     elseif bitdepth == 4
-        byte = cur[(pcol ÷ 2) + 1]
+        byte = raw[p + (pcol >> 1)]
         return iseven(pcol) ? Int(byte >> 4) : Int(byte & 0x0f)
     elseif bitdepth == 2
-        byte = cur[(pcol ÷ 4) + 1]
-        shift = 6 - 2 * (pcol % 4)
-        return Int((byte >> shift) & 0x03)
+        byte = raw[p + (pcol >> 2)]
+        return Int((byte >> (6 - 2 * (pcol & 3))) & 0x03)
     else # bitdepth == 1
-        byte = cur[(pcol ÷ 8) + 1]
-        shift = 7 - (pcol % 8)
-        return Int((byte >> shift) & 0x01)
+        byte = raw[p + (pcol >> 3)]
+        return Int((byte >> (7 - (pcol & 7))) & 0x01)
     end
 end
 
-function _png_store_palette_pixel!(img::Array{Float64,3}, row::Int, col::Int,
-                                   idx::Int, palette::Vector{UInt8},
-                                   trns::Vector{UInt8}, channels::Int)
-    entry = 3idx + 1
-    entry + 2 <= length(palette) || error("PNG palette index $idx is out of range")
-    img[row, col, 1] = palette[entry] / 255
-    img[row, col, 2] = palette[entry + 1] / 255
-    img[row, col, 3] = palette[entry + 2] / 255
-    if channels == 4
-        alpha = idx + 1 <= length(trns) ? trns[idx + 1] : UInt8(255)
-        img[row, col, 4] = alpha / 255
+# Packed-sample conversion: a palette with optional tRNS alphas, or a 1/2/4-bit
+# grayscale level with an optional tRNS gray level.
+struct _PngPaletteLUT
+    rgba::Matrix{Float64}         # 4 x entries: palette RGB / 255 and alpha / 255
+    entries::Int
+    alpha::Bool
+end
+
+function _PngPaletteLUT(palette::Vector{UInt8}, trns::Vector{UInt8})
+    entries = length(palette) ÷ 3
+    rgba = Matrix{Float64}(undef, 4, entries)
+    for i in 1:entries
+        rgba[1, i] = palette[3i - 2] / 255
+        rgba[2, i] = palette[3i - 1] / 255
+        rgba[3, i] = palette[3i] / 255
+        rgba[4, i] = (i <= length(trns) ? trns[i] : UInt8(255)) / 255
     end
-    return img
+    return _PngPaletteLUT(rgba, entries, !isempty(trns))
 end
 
-@inline function _png_store_packed_pixel!(img, row, col, sample,
-                                          palette::Vector{UInt8}, transparency::Vector{UInt8},
-                                          channels::Int, maximum_sample::Float64)
-    return _png_store_palette_pixel!(img,row,col,sample,palette,transparency,channels)
-end
+@noinline _png_palette_range_error(idx::Int) =
+    error("PNG palette index $idx is out of range")
 
-@inline function _png_store_packed_pixel!(img, row, col, sample,
-                                          ::Nothing, transparency,
-                                          channels::Int, maximum_sample::Float64)
-    img[row,col,1] = sample/maximum_sample
-    if transparency !== nothing
-        img[row,col,2] = sample == transparency[1] ? 0.0 : 1.0
+@inline function _png_store_packed_pixel!(img, row, col, sample::Int,
+                                          lut::_PngPaletteLUT, ::Float64)
+    sample < lut.entries || _png_palette_range_error(sample)
+    @inbounds begin
+        img[row, col, 1] = lut.rgba[1, sample + 1]
+        img[row, col, 2] = lut.rgba[2, sample + 1]
+        img[row, col, 3] = lut.rgba[3, sample + 1]
+        lut.alpha && (img[row, col, 4] = lut.rgba[4, sample + 1])
     end
     return nothing
 end
 
-function _png_decode_packed_noninterlaced!(img::Array{Float64,3}, raw::Vector{UInt8},
-                                            W::Int, H::Int, bitdepth::Int,
-                                            palette,
-                                            transparency, channels::Int)
-    maximum_sample = Float64((1<<bitdepth)-1)
-    stride = cld(W * bitdepth, 8)
-    prev = zeros(UInt8, stride)
-    cur = Vector{UInt8}(undef, stride)
-    p = 1
-    for row in 1:H
-        p <= length(raw) || error("PNG image data is truncated")
-        ftype = raw[p]; p += 1
-        p + stride - 1 <= length(raw) || error("PNG image data is truncated")
-        copyto!(cur, 1, raw, p, stride); p += stride
-        _png_unfilter_scanline!(cur, prev, 1, ftype)
-        for pcol in 0:(W - 1)
-            idx = _png_packed_index(cur, pcol, bitdepth)
-            _png_store_packed_pixel!(img, row, pcol + 1, idx, palette, transparency, channels, maximum_sample)
+@inline function _png_store_packed_pixel!(img, row, col, sample::Int,
+                                          transparency::Union{Nothing,Tuple},
+                                          maximum_sample::Float64)
+    @inbounds img[row, col, 1] = sample / maximum_sample
+    if transparency !== nothing
+        @inbounds img[row, col, 2] = sample == transparency[1] ? 0.0 : 1.0
+    end
+    return nothing
+end
+
+# Store an unfiltered packed (1/2/4/8-bit palette or 1/2/4-bit gray) pass.
+function _png_store_packed_pass!(img::Array{Float64,3}, raw::Vector{UInt8}, start::Int,
+                                 rows::Int, cols::Int, stride::Int, x0::Int, y0::Int,
+                                 xstep::Int, ystep::Int, bitdepth::Int, conversion)
+    start + rows * (stride + 1) - 1 <= length(raw) ||
+        error("PNG image data is truncated")
+    cld(cols * bitdepth, 8) <= stride || error("PNG scanline is shorter than its pixels")
+    maximum_sample = Float64((1 << bitdepth) - 1)
+    for r0 in 1:_PNG_BAND_ROWS:rows
+        r1 = min(rows, r0 + _PNG_BAND_ROWS - 1)
+        for pc in 1:cols
+            col = x0 + (pc - 1) * xstep + 1
+            for pr in r0:r1
+                row = y0 + (pr - 1) * ystep + 1
+                p = start + (pr - 1) * (stride + 1) + 1
+                sample = _png_packed_index(raw, p, pc - 1, bitdepth)
+                _png_store_packed_pixel!(img, row, col, sample, conversion, maximum_sample)
+            end
         end
-        cur, prev = prev, cur
     end
     return img
 end
 
-function _png_decode_packed_adam7!(img::Array{Float64,3}, raw::Vector{UInt8},
-                                    W::Int, H::Int, bitdepth::Int,
-                                    palette,
-                                    transparency, channels::Int)
-    maximum_sample = Float64((1<<bitdepth)-1)
+# Unfilter and store every pass: the whole image (interlace 0) or the seven
+# Adam7 passes, skipping empty ones (PNG §8.2).
+function _png_decode_passes!(img::Array{Float64,3}, raw::Vector{UInt8}, W::Int, H::Int,
+                             interlace, bits_per_pixel::Int, store!)
+    bpp = max(1, bits_per_pixel >> 3)
     p = 1
-    @inbounds for (x0, y0, xstep, ystep) in _PNG_ADAM7_PASSES
+    passes = interlace == 0 ? ((0, 0, 1, 1),) : _PNG_ADAM7_PASSES
+    for (x0, y0, xstep, ystep) in passes
         pass_w = _png_pass_size(W, x0, xstep)
         pass_h = _png_pass_size(H, y0, ystep)
         (pass_w == 0 || pass_h == 0) && continue
-        stride = cld(pass_w * bitdepth, 8)
-        prev = zeros(UInt8, stride)
-        cur = Vector{UInt8}(undef, stride)
-        for prow in 0:(pass_h - 1)
-            p <= length(raw) || error("PNG image data is truncated")
-            ftype = raw[p]; p += 1
-            p + stride - 1 <= length(raw) || error("PNG image data is truncated")
-            copyto!(cur, 1, raw, p, stride); p += stride
-            _png_unfilter_scanline!(cur, prev, 1, ftype)
-            row = y0 + prow * ystep + 1
-            for pcol in 0:(pass_w - 1)
-                col = x0 + pcol * xstep + 1
-                idx = _png_packed_index(cur, pcol, bitdepth)
-                _png_store_packed_pixel!(img, row, col, idx, palette, transparency, channels, maximum_sample)
-            end
-            cur, prev = prev, cur
-        end
+        stride = cld(pass_w * bits_per_pixel, 8)
+        next = _png_unfilter_pass!(raw, p, pass_h, stride, bpp)
+        store!(img, raw, p, pass_h, pass_w, stride, x0, y0, xstep, ystep)
+        p = next
     end
     return img
 end
@@ -648,13 +919,6 @@ function _png_transparent_samples(trns::Vector{UInt8}, seen_trns::Bool,
     return nothing
 end
 
-"""
-    load_png(path) -> Array{Float64,3}
-
-Decode PNG grayscale at 1/2/4/8/16 bits, indexed color at 1/2/4/8 bits, and
-RGB or explicit alpha formats at 8/16 bits into an H×W×C array in [0,1].
-Supports full INFLATE, all five filters, Adam7 interlacing, and tRNS transparency.
-"""
 function _decode_png(bytes::AbstractVector{UInt8})
     _is_png_bytes(bytes) || error("not a PNG file")
     pos = 9; W = 0; H = 0; bitdepth = 8; colortype = 2; interlace = 0
@@ -777,9 +1041,12 @@ function _decode_png(bytes::AbstractVector{UInt8})
         idat_payload = _png_idat_payload(bytes,idat,idat_start,idat_len)
         raw = _png_inflate_exact_scanlines(idat_payload,expected)
         img = Array{Float64}(undef,H,W,channels)
-        return interlace == 0 ?
-               _png_decode_packed_noninterlaced!(img,raw,W,H,packed_depth,pixel_palette,transparency,channels) :
-               _png_decode_packed_adam7!(img,raw,W,H,packed_depth,pixel_palette,transparency,channels)
+        conversion = pixel_palette === nothing ? transparency :
+                     _PngPaletteLUT(pixel_palette, transparency)
+        return _png_decode_passes!(img, raw, W, H, interlace, packed_depth,
+            (img, raw, p, rows, cols, stride, x0, y0, xstep, ystep) ->
+                _png_store_packed_pass!(img, raw, p, rows, cols, stride, x0, y0,
+                                        xstep, ystep, packed_depth, conversion))
     end
     (bitdepth == 8 || bitdepth == 16) ||
         error("unsupported PNG bit depth $bitdepth for color type $colortype")
@@ -796,13 +1063,19 @@ function _decode_png(bytes::AbstractVector{UInt8})
     output_channels = channels + (transparent_samples === nothing ? 0 : 1)
     img = Array{Float64}(undef, H, W, output_channels)
     norm = bitdepth == 16 ? 65535.0 : 255.0
-    return interlace == 0 ?
-           _png_decode_noninterlaced!(img, raw, W, H, channels, bps, bpp, norm,
-                                      transparent_samples) :
-           _png_decode_adam7!(img, raw, W, H, channels, bps, bpp, norm,
-                              transparent_samples)
+    return _png_decode_passes!(img, raw, W, H, interlace, Int(bitdepth) * channels,
+        (img, raw, p, rows, cols, stride, x0, y0, xstep, ystep) ->
+            _png_store_pass!(img, raw, p, rows, cols, stride, x0, y0, xstep, ystep,
+                             channels, bps, bpp, norm, transparent_samples))
 end
 
+"""
+    load_png(path) -> Array{Float64,3}
+
+Decode PNG grayscale at 1/2/4/8/16 bits, indexed color at 1/2/4/8 bits, and
+RGB or explicit alpha formats at 8/16 bits into an H×W×C array in [0,1].
+Supports full INFLATE, all five filters, Adam7 interlacing, and tRNS transparency.
+"""
 function load_png(path::String)
     _decode_png(read(path))
 end
@@ -957,23 +1230,30 @@ function _decode_ktx2(bytes::AbstractVector{UInt8})
     flip_x = orient !== nothing && codeunit(orient, 1) == UInt8('l')
     flip_y = orient !== nothing && codeunit(orient, 2) == UInt8('u')
 
+    # The level data (in bounds, checked above) is row-major; the H×W×C image
+    # is column-major, so rows are stored a band at a time, column by column.
     img = Array{Float64}(undef, pixelHeight, pixelWidth, channels)
-    @inbounds for y in 1:pixelHeight
-        srow = flip_y ? (pixelHeight - y + 1) : y
-        rowbase = byteOffset + (srow - 1) * pixelWidth * pixel_bytes   # 0-based
+    row_bytes = pixelWidth * pixel_bytes
+    @inbounds for y0 in 1:_KTX2_BAND_ROWS:pixelHeight
+        y1 = min(pixelHeight, y0 + _KTX2_BAND_ROWS - 1)
         for x in 1:pixelWidth
             scol = flip_x ? (pixelWidth - x + 1) : x
-            px = rowbase + (scol - 1) * pixel_bytes                    # 0-based pixel start
-            for c in 1:channels
-                b1 = px + (c - 1) * cbytes + 1                         # 1-based component byte
-                img[y, x, c] = kind === :unorm8 ? bytes[b1] / 255.0 :
-                               kind === :sfloat16 ? _half_to_float(_rd_le16(bytes, b1)) :
-                               Float64(_rd_f32(bytes, b1))
+            for y in y0:y1
+                srow = flip_y ? (pixelHeight - y + 1) : y
+                px = byteOffset + (srow - 1) * row_bytes + (scol - 1) * pixel_bytes  # 0-based
+                for c in 1:channels
+                    b1 = px + (c - 1) * cbytes + 1                     # 1-based component byte
+                    img[y, x, c] = kind === :unorm8 ? bytes[b1] / 255.0 :
+                                   kind === :sfloat16 ? _half_to_float(_rd_le16(bytes, b1)) :
+                                   Float64(_rd_f32(bytes, b1))
+                end
             end
         end
     end
     return img
 end
+
+const _KTX2_BAND_ROWS = 16
 
 """
     load_ktx2(path) -> Array{Float64,3}
@@ -1275,55 +1555,59 @@ function _rgbe_parse_resolution(line::AbstractString)
     return (height=n1, width=n2, y_sign=a1.sign, x_sign=a2.sign)
 end
 
-@inline _rgbe_value(c::UInt8, e::UInt8) =
-    e == 0x00 ? 0.0 : ldexp(Float64(c), Int(e) - 136)
+# RGBE -> linear (Greg Ward's rgbe.c `rgbe2float`): mantissa * 2^(e - 136),
+# with e == 0 meaning black. Scales are powers of two, so multiplying by the
+# tabulated scale is exact.
+const _RGBE_SCALE = ntuple(i -> i == 1 ? 0.0 : ldexp(1.0, i - 1 - 136), 256)
+const _RGBE_BAND_ROWS = 16
 
-function _rgbe_flat_scanline(bytes::Vector{UInt8}, pos::Int, width::Int)
-    needed = _checked_mul_int(4, width, "RGBE scanline data")
-    pos + needed - 1 <= length(bytes) || error("RGBE flat scanline is truncated")
-    channels = Matrix{UInt8}(undef, 4, width)
-    @inbounds for x in 1:width
-        base = pos + 4 * (x - 1)
-        channels[1, x] = bytes[base]
-        channels[2, x] = bytes[base + 1]
-        channels[3, x] = bytes[base + 2]
-        channels[4, x] = bytes[base + 3]
-    end
-    return channels, pos + needed
-end
+# Whether pixel data begins with a new-style RLE scanline header: two 2-bytes
+# then a width whose top bit is clear (rgbe.c RGBE_ReadPixels_RLE). Otherwise
+# the image is stored flat, as rgbe.c and three.js HDRLoader decide from the
+# first scanline for the whole image.
+@inline _rgbe_has_rle_header(bytes::Vector{UInt8}, pos::Int) =
+    pos + 3 <= length(bytes) && bytes[pos] == 0x02 && bytes[pos + 1] == 0x02 &&
+    (bytes[pos + 2] & 0x80) == 0x00
 
-function _rgbe_flat_scanline_end(bytes::Vector{UInt8}, pos::Int, width::Int)
-    needed = _checked_mul_int(4, width, "RGBE scanline data")
-    pos + needed - 1 <= length(bytes) || error("RGBE flat scanline is truncated")
-    return pos + needed
-end
-
-function _rgbe_rle_scanline_end(bytes::Vector{UInt8}, pos::Int, width::Int)
-    pos + 3 <= length(bytes) || error("RGBE RLE scanline header is truncated")
-    bytes[pos] == 0x02 && bytes[pos + 1] == 0x02 ||
-        return _rgbe_flat_scanline_end(bytes, pos, width)
-    (bytes[pos + 2] & 0x80) == 0x00 ||
-        error("unsupported old-style RGBE run-length encoding")
+# Decode (when `buf !== nothing`) or only validate one RLE scanline starting at
+# `pos`; returns the position after it. `buf` receives the 4 x width
+# component planes.
+function _rgbe_rle_scanline!(buf::Union{Nothing,AbstractMatrix{UInt8}}, bytes::Vector{UInt8},
+                             pos::Int, width::Int)
+    n = length(bytes)
+    pos + 3 <= n || error("RGBE RLE scanline header is truncated")
+    (bytes[pos] == 0x02 && bytes[pos + 1] == 0x02 && (bytes[pos + 2] & 0x80) == 0x00) ||
+        error("RGBE RLE image has a scanline without an RLE header")
     encoded_width = (Int(bytes[pos + 2]) << 8) | Int(bytes[pos + 3])
     encoded_width == width ||
         error("RGBE RLE scanline width $encoded_width does not match header width $width")
     pos += 4
-    @inbounds for _ in 1:4
+    @inbounds for c in 1:4
         x = 1
         while x <= width
-            pos <= length(bytes) || error("RGBE RLE scanline is truncated")
+            pos <= n || error("RGBE RLE scanline is truncated")
             count = Int(bytes[pos])
             pos += 1
             if count > 128
                 run = count - 128
-                run > 0 || error("RGBE RLE run length must be positive")
                 x + run - 1 <= width || error("RGBE RLE run exceeds scanline width")
-                pos <= length(bytes) || error("RGBE RLE run value is truncated")
+                pos <= n || error("RGBE RLE run value is truncated")
+                if buf !== nothing
+                    value = bytes[pos]
+                    for i in x:(x + run - 1)
+                        buf[c, i] = value
+                    end
+                end
                 pos += 1
                 x += run
             elseif count > 0
                 x + count - 1 <= width || error("RGBE RLE literal exceeds scanline width")
-                pos + count - 1 <= length(bytes) || error("RGBE RLE literal is truncated")
+                pos + count - 1 <= n || error("RGBE RLE literal is truncated")
+                if buf !== nothing
+                    for i in 0:(count - 1)
+                        buf[c, x + i] = bytes[pos + i]
+                    end
+                end
                 pos += count
                 x += count
             else
@@ -1334,64 +1618,19 @@ function _rgbe_rle_scanline_end(bytes::Vector{UInt8}, pos::Int, width::Int)
     return pos
 end
 
-function _rgbe_validate_scanlines(bytes::Vector{UInt8}, pos::Int, width::Int,
-                                  height::Int, use_rle::Bool)
-    p = pos
-    for _ in 1:height
-        p = use_rle ? _rgbe_rle_scanline_end(bytes, p, width) :
-                      _rgbe_flat_scanline_end(bytes, p, width)
-    end
-    return p
-end
-
-function _rgbe_rle_scanline(bytes::Vector{UInt8}, pos::Int, width::Int)
-    pos + 3 <= length(bytes) || error("RGBE RLE scanline header is truncated")
-    bytes[pos] == 0x02 && bytes[pos + 1] == 0x02 ||
-        return _rgbe_flat_scanline(bytes, pos, width)
-    (bytes[pos + 2] & 0x80) == 0x00 ||
-        error("unsupported old-style RGBE run-length encoding")
-    encoded_width = (Int(bytes[pos + 2]) << 8) | Int(bytes[pos + 3])
-    encoded_width == width ||
-        error("RGBE RLE scanline width $encoded_width does not match header width $width")
-    pos += 4
-    channels = Matrix{UInt8}(undef, 4, width)
-    @inbounds for c in 1:4
-        x = 1
-        while x <= width
-            pos <= length(bytes) || error("RGBE RLE scanline is truncated")
-            count = Int(bytes[pos])
-            pos += 1
-            if count > 128
-                run = count - 128
-                run > 0 || error("RGBE RLE run length must be positive")
-                x + run - 1 <= width || error("RGBE RLE run exceeds scanline width")
-                pos <= length(bytes) || error("RGBE RLE run value is truncated")
-                value = bytes[pos]
-                pos += 1
-                for i in x:(x + run - 1)
-                    channels[c, i] = value
-                end
-                x += run
-            elseif count > 0
-                x + count - 1 <= width || error("RGBE RLE literal exceeds scanline width")
-                pos + count - 1 <= length(bytes) || error("RGBE RLE literal is truncated")
-                for i in x:(x + count - 1)
-                    channels[c, i] = bytes[pos]
-                    pos += 1
-                end
-                x += count
-            else
-                error("RGBE RLE packet length must be positive")
-            end
-        end
-    end
-    return channels, pos
+# rgbe.c / three.js HDRLoader (`/^#\?(\S+)/`): the magic token is "#?" plus a
+# program name. HDRLoader reads header bytes as Latin-1 characters, so the
+# byte after "#?" must not be one that JavaScript's \s matches (tab, line
+# feed, vertical tab, form feed, carriage return, space, no-break space).
+function _rgbe_magic_ok(line::String)
+    ncodeunits(line) >= 3 && startswith(line, "#?") || return false
+    b = codeunit(line, 3)
+    return !(0x09 <= b <= 0x0d || b == 0x20 || b == 0xa0)
 end
 
 function _decode_rgbe(bytes::Vector{UInt8})
     line, pos = _rgbe_read_line(bytes, 1)
-    (startswith(line, "#?RADIANCE") || startswith(line, "#?RGBE")) ||
-        error("not a Radiance RGBE/HDR file")
+    _rgbe_magic_ok(line) || error("not a Radiance RGBE/HDR file")
     have_format = false
     resolution = nothing
     while pos <= length(bytes)
@@ -1413,19 +1652,46 @@ function _decode_rgbe(bytes::Vector{UInt8})
 
     height = resolution.height
     width = resolution.width
-    use_rle = 8 <= width <= 0x7fff
-    _rgbe_validate_scanlines(bytes, pos, width, height, use_rle)
+    use_rle = 8 <= width <= 0x7fff && _rgbe_has_rle_header(bytes, pos)
+    # Validate every scanline before allocating the image, so a small file
+    # cannot claim a huge resolution.
+    if use_rle
+        p = pos
+        for _ in 1:height
+            p = _rgbe_rle_scanline!(nothing, bytes, p, width)
+        end
+    else
+        needed = _checked_mul_int(_checked_mul_int(4, width, "RGBE scanline data"),
+                                  height, "RGBE scanline data")
+        needed <= length(bytes) - pos + 1 || error("RGBE flat scanline is truncated")
+    end
     img = Array{Float64}(undef, height, width, 3)
-    @inbounds for sy in 1:height
-        channels, pos = use_rle ? _rgbe_rle_scanline(bytes, pos, width) :
-                                  _rgbe_flat_scanline(bytes, pos, width)
-        row = resolution.y_sign == '-' ? sy : height - sy + 1
-        for sx in 1:width
-            col = resolution.x_sign == '+' ? sx : width - sx + 1
-            e = channels[4, sx]
-            img[row, col, 1] = _rgbe_value(channels[1, sx], e)
-            img[row, col, 2] = _rgbe_value(channels[2, sx], e)
-            img[row, col, 3] = _rgbe_value(channels[3, sx], e)
+    # Decode a band of scanlines, then store it column by column: the image
+    # is column-major, so writing whole rows would stride through memory.
+    band = min(height, _RGBE_BAND_ROWS)
+    buf = Array{UInt8}(undef, 4, width, band)
+    flip_x = resolution.x_sign != '+'
+    flip_y = resolution.y_sign != '-'
+    for sy0 in 1:band:height
+        rows = min(band, height - sy0 + 1)
+        for k in 1:rows
+            if use_rle
+                pos = _rgbe_rle_scanline!(view(buf, :, :, k), bytes, pos, width)
+            else
+                copyto!(buf, 4 * width * (k - 1) + 1, bytes, pos, 4 * width)
+                pos += 4 * width
+            end
+        end
+        @inbounds for sx in 1:width
+            col = flip_x ? width - sx + 1 : sx
+            for k in 1:rows
+                sy = sy0 + k - 1
+                row = flip_y ? height - sy + 1 : sy
+                scale = _RGBE_SCALE[Int(buf[4, sx, k]) + 1]
+                img[row, col, 1] = Float64(buf[1, sx, k]) * scale
+                img[row, col, 2] = Float64(buf[2, sx, k]) * scale
+                img[row, col, 3] = Float64(buf[3, sx, k]) * scale
+            end
         end
     end
     return img
@@ -1469,12 +1735,15 @@ end
     s = (h >> 15) & 0x0001
     e = (h >> 10) & 0x001f
     m = h & 0x03ff
-    if e == 0x0000
-        val = m == 0x0000 ? 0.0 : ldexp(Float64(m), -24)        # subnormal: m * 2^-24
-    elseif e == 0x001f
-        val = m == 0x0000 ? Inf : NaN
+    if 0x0000 < e < 0x001f
+        # Normal: (1 + m/2^10) * 2^(e-15) is exact in binary64, so build its
+        # bits directly (exponent bias 1023 - 15 = 1008, mantissa 52 - 10 bits).
+        return reinterpret(Float64, (UInt64(s) << 63) | (UInt64(e + 0x03f0) << 52) |
+                                    (UInt64(m) << 42))
+    elseif e == 0x0000
+        val = Float64(m) * 0x1p-24                              # subnormal: m * 2^-24, exact
     else
-        val = ldexp(Float64(Int(m) + 1024), Int(e) - 25)        # (1024+m) * 2^(e-25)
+        val = m == 0x0000 ? Inf : NaN
     end
     return s == 0x0001 ? -val : val
 end
@@ -1900,7 +2169,7 @@ function _piz_getcode!(po::Integer, rlc::Integer, r::_PizBR, out::Vector{T},
         end
         r.lc -= 8
         cs = Int((r.c >> r.lc) & 0xff)
-        (ooff[] + cs > oend) && return false
+        (ooff[] + cs > oend) && _piz_overrun()
         # Prior value (0-based ooff-1 -> Julia ooff). When nothing is written yet
         # (a run as the first symbol, only on malformed data) three.js reads
         # undefined -> 0; mirror that instead of indexing out[0].
@@ -1911,10 +2180,13 @@ function _piz_getcode!(po::Integer, rlc::Integer, r::_PizBR, out::Vector{T},
     elseif ooff[] < oend
         out[ooff[] + 1] = po; ooff[] += 1
     else
-        return false
+        _piz_overrun()
     end
     return true
 end
+
+@noinline _piz_overrun() =
+    error("EXR PIZ Huffman data decodes past the end of the block")
 
 function _piz_hufdecode!(enc::Vector{Int}, dec::Vector{_PizHDec},
                          long_codes::Vector{T}, r::_PizBR, ni::Int,
@@ -2048,7 +2320,9 @@ function _exr_piz_decode(blockdata::AbstractVector{UInt8}, nlines::Int, channels
     lut = _piz_workspace_buffer!(workspace.lut, _PIZ_USHORT_RANGE, 0x0000)
     maxValue = _piz_reverse_lut!(bitmap, lut)
     nComp = _piz_ru32le(r)                  # Huffman payload length field
-
+    # OpenEXR PizCompressor::uncompress rejects a length beyond the block.
+    nComp <= length(r.data) - r.off ||
+        error("EXR PIZ Huffman data length $nComp exceeds the block")
     initial = r.off
     im = _piz_ru32le(r); iM = _piz_ru32le(r); r.off += 4
     nBits = _piz_ru32le(r); r.off += 4
@@ -2059,9 +2333,18 @@ function _exr_piz_decode(blockdata::AbstractVector{UInt8}, nlines::Int, channels
     empty!(long_codes)
     prefix_counts = _piz_workspace_buffer!(workspace.prefix_counts, _PIZ_HUF_DECSIZE, 0)
     _piz_unpack_enc_table!(r, im, iM, freq)
+    # The code table and the nBits of coded data must lie inside the
+    # Huffman payload (three.js hufUncompress, OpenEXR hufUncompress).
+    consumed = r.off - initial
+    consumed <= nComp || error("EXR PIZ Huffman code table exceeds its data")
+    nBits <= 8 * (nComp - consumed) ||
+        error("EXR PIZ Huffman bit count $nBits exceeds its data")
     _piz_build_dec_table!(freq, im, iM, hdec, long_codes, prefix_counts)
     ooff = Ref(0)
     _piz_hufdecode!(freq, hdec, long_codes, r, nBits, iM, outend, outbuf, ooff)
+    # OpenEXR hufDecode: the coded data must produce exactly the block's values.
+    ooff[] == outend ||
+        error("EXR PIZ Huffman data decoded to $(ooff[]) values, expected $outend")
 
     for (ci, t) in enumerate(types)
         for jj in 0:(t - 1)
@@ -2113,7 +2396,8 @@ end
 # Decompress one EXR block (scanline group or tile) of `nlines` x `width` pixels.
 function _exr_decode_block(blockbytes::AbstractVector{UInt8}, nlines::Int, width::Int,
                           compression::Int, channels, plinear,
-                          piz_workspace::Union{Nothing,_ExrPizWorkspace}=nothing)
+                          piz_workspace::Union{Nothing,_ExrPizWorkspace}=nothing,
+                          inflate_tables::Union{Nothing,_InflateTables}=nothing)
     bytes_per_pixel = 0
     for (_, pt) in channels
         bytes_per_pixel = _checked_add_int(
@@ -2139,15 +2423,15 @@ function _exr_decode_block(blockbytes::AbstractVector{UInt8}, nlines::Int, width
         dsize >= 2 || error("EXR PXR24 block is truncated (too short for a zlib stream)")
         expected = _exr_pxr24_inflated_size(
             nlines, width, channels)
-        inflated = zlib_inflate(
-            blockbytes; max_output=_inflate_limit_for_exact(expected))
+        inflated = _zlib_inflate(
+            blockbytes, _inflate_limit_for_exact(expected), inflate_tables)
         length(inflated) == expected ||
             error("EXR PXR24 block inflated to $(length(inflated)) bytes, expected $expected")
         _exr_pxr24_decode(inflated, nlines, channels, width)
     else                                                  # ZIP / ZIPS
         dsize >= 2 || error("EXR ZIP block is truncated (too short for a zlib stream)")
-        inflated = zlib_inflate(
-            blockbytes; max_output=_inflate_limit_for_exact(uncompressed))
+        inflated = _zlib_inflate(
+            blockbytes, _inflate_limit_for_exact(uncompressed), inflate_tables)
         length(inflated) == uncompressed ||
             error("EXR ZIP block inflated to $(length(inflated)) bytes, expected $uncompressed")
         _exr_deinterleave(_exr_unpredict!(inflated))
@@ -2158,31 +2442,39 @@ function _exr_decode_block(blockbytes::AbstractVector{UInt8}, nlines::Int, width
 end
 
 # Place a decoded block's pixels into the output image at (startX, startY).
-# `raw` is laid out per line, then per channel, then `cols` samples.
-function _exr_place_block!(img, raw::AbstractVector{UInt8}, startX::Int, startY::Int,
-                          cols::Int, lines::Int, channels, is_y::Bool)
-    rp = 1
-    for ln in 0:(lines - 1)
-        yrow = startY + ln + 1
-        for (cname, pt) in channels
-            csz = _exr_chan_size(pt)
-            targets = is_y ? (cname == "Y" ? (1, 2, 3) : ()) :
-                      cname == "R" ? (1,) : cname == "G" ? (2,) :
-                      cname == "B" ? (3,) : ()
-            if !isempty(targets)
-                @inbounds for x in 1:cols
-                    base = rp + (x - 1) * csz
-                    v = pt == 1 ? Float64(_half_to_float(_rd_le16(raw, base))) :
-                        pt == 2 ? Float64(_rd_f32(raw, base)) :
-                                  Float64(_rd_le32(raw, base))      # UINT
-                    for t in targets
-                        img[yrow, startX + x, t] = v
-                    end
+# `raw` is laid out per line, then per channel, then `cols` samples; it holds
+# at least `lines` full lines (checked by `_exr_decode_block`). Each channel
+# is written column by column to follow the column-major image.
+function _exr_place_block!(img::Array{Float64,3}, raw::AbstractVector{UInt8},
+                           startX::Int, startY::Int, cols::Int, lines::Int,
+                           channels, is_y::Bool)
+    line_bytes = 0
+    for (_, pt) in channels
+        line_bytes += cols * _exr_chan_size(pt)
+    end
+    checkbounds(raw, 1:(lines * line_bytes))
+    checkbounds(img, (startY + 1):(startY + lines), (startX + 1):(startX + cols), 1:3)
+    channel_offset = 0
+    for (cname, pt) in channels
+        csz = _exr_chan_size(pt)
+        # Output planes this channel fills: Y feeds R, G and B.
+        t1, t2 = is_y ? (cname == "Y" ? (1, 3) : (1, 0)) :
+                 cname == "R" ? (1, 1) : cname == "G" ? (2, 2) :
+                 cname == "B" ? (3, 3) : (1, 0)
+        if t1 <= t2
+            @inbounds for x in 1:cols, ln in 0:(lines - 1)
+                base = 1 + ln * line_bytes + channel_offset + (x - 1) * csz
+                v = pt == 1 ? Float64(_half_to_float(_rd_le16(raw, base))) :
+                    pt == 2 ? Float64(_rd_f32(raw, base)) :
+                              Float64(_rd_le32(raw, base))      # UINT
+                for t in t1:t2
+                    img[startY + ln + 1, startX + x, t] = v
                 end
             end
-            rp += cols * csz
         end
+        channel_offset += cols * csz
     end
+    return img
 end
 
 function _decode_exr(bytes::Vector{UInt8})
@@ -2284,6 +2576,8 @@ function _decode_exr(bytes::Vector{UInt8})
 
     img = zeros(Float64, height, width, 3)
     piz_workspace = compression == 4 ? _ExrPizWorkspace() : nothing
+    # ZIP/ZIPS/PXR24 blocks are separate zlib streams that share one set of tables.
+    inflate_tables = compression in (2, 3, 5) ? _InflateTables() : nothing
     if tiled
         # ONE_LEVEL (0) and MIPMAP_LEVELS (1): the offset table is level-0-first,
         # so reading the level-0 tile count decodes the full-resolution image.
@@ -2317,7 +2611,8 @@ function _decode_exr(bytes::Vector{UInt8})
             cols = min(tile_x, width - startX)
             lines = min(tile_y, height - startY)
             raw = _exr_decode_block(@view(bytes[bp:(bp + dsize - 1)]), lines, cols,
-                                    compression, channels, plinear, piz_workspace)
+                                    compression, channels, plinear, piz_workspace,
+                                    inflate_tables)
             _exr_place_block!(img, raw, startX, startY, cols, lines, channels, is_y)
         end
         all(seen_tiles) || error("EXR level-0 tile coverage is incomplete")
@@ -2343,7 +2638,8 @@ function _decode_exr(bytes::Vector{UInt8})
             seen_blocks[block_index] = true
             nlines = min(lines_per_block, height - row_offset)
             raw = _exr_decode_block(@view(bytes[bp:(bp + dsize - 1)]), nlines, width,
-                                    compression, channels, plinear, piz_workspace)
+                                    compression, channels, plinear, piz_workspace,
+                                    inflate_tables)
             _exr_place_block!(img, raw, 0, y0 - ymin, width, nlines, channels, is_y)
         end
         all(seen_blocks) || error("EXR scanline block coverage is incomplete")
@@ -2398,23 +2694,11 @@ function _mtl_texture_path(tokens::Vector{SubString{String}})
     return ""
 end
 
-function _mtl_require_values(tokens, count::Int, label::String)
-    length(tokens) >= count + 1 ||
-        error("MTL $label requires $count $(count == 1 ? "value" : "values")")
-end
-
 function _mtl_parse_float(tok, label::String)
     value = tryparse(Float64, tok)
     value === nothing && error("MTL $label must be a number")
     isfinite(value) || error("MTL $label must be finite")
     return value
-end
-
-function _mtl_parse_color(tokens, label::String)
-    _mtl_require_values(tokens, 3, label)
-    return Color3(_mtl_parse_float(tokens[2], "$label red"),
-                  _mtl_parse_float(tokens[3], "$label green"),
-                  _mtl_parse_float(tokens[4], "$label blue"))
 end
 
 @noinline function _mtl_require_values_error(count::Int, label::String)
@@ -2438,19 +2722,9 @@ function _mtl_parse_color_tokens(parts, state, label::String,
                   _mtl_parse_float(b_state[1], blue_label))
 end
 
-_mtl_parse_color_tokens(parts, state, label::String) =
-    _mtl_parse_color_tokens(parts, state, label, string(label, " red"),
-                            string(label, " green"), string(label, " blue"))
-
 function _mtl_parse_scalar_token(parts, state, label::String)
     value_state = _mtl_required_token(parts, state, 1, label)
     return _mtl_parse_float(value_state[1], label)
-end
-
-@inline function _mtl_required_arg(parts, state, message::String)
-    token_state = iterate(parts, state)
-    token_state === nothing && error(message)
-    return token_state
 end
 
 function _mtl_key_is(tag::AbstractString, key::String)
@@ -2487,13 +2761,36 @@ function _mtl_texture_option(tokens, option::String, default::Float64, label::St
     return Vec2(u, v === nothing ? default : v)
 end
 
+# MTLLoader keeps the last value of each keyword (`info[key] = value`) and
+# applies the keywords in the order they were first seen (MTLLoader.js:150,
+# 478-500): `d n` sets the opacity only when n < 1, `Tr n` only when n > 0 (to
+# 1 - n), and either one makes the material transparent. So `Tr 0` beside
+# `d 0.5` keeps 0.5, and `d 0.5` followed by `d 1` leaves the material opaque.
+function _mtl_opacity(has_dissolve::Bool, dissolve::Float64, has_transmission::Bool,
+                      transmission::Float64, transmission_first::Bool)
+    opacity = 1.0
+    translucent = false
+    for step in (transmission_first ? (:tr, :d) : (:d, :tr))
+        if step === :d && has_dissolve && dissolve < 1.0
+            opacity = dissolve
+            translucent = true
+        elseif step === :tr && has_transmission && transmission > 0.0
+            opacity = 1.0 - transmission
+            translucent = true
+        end
+    end
+    return opacity, translucent
+end
+
 """
     load_mtl(path) -> Dict{String, MeshPhongMaterial}
 
 Parse a Wavefront .mtl file like three.js `MTLLoader`: keywords are
 case-insensitive and `newmtl` names are the rest of the line. Reads `Kd`
 (diffuse), `Ks` (specular), `Ns` (shininess), `Ke` (emissive), `d`/`Tr`
-(opacity), and the texture maps `map_Kd` (`map`), `map_Ks` (`specular_map`),
+(opacity: as in MTLLoader, the last `d` and the last `Tr` of a material are
+applied in the order their keywords first appear, and only `d` below 1 or `Tr`
+above 0 sets the opacity, to `d` or `1 - Tr`), and the texture maps `map_Kd` (`map`), `map_Ks` (`specular_map`),
 `map_Ke` (`emissive_map`), `norm` (`normal_map`), and `map_d` (`alpha_map`,
 which also makes the material transparent). The first map of each kind wins;
 texture `-s` and `-o` options set the texture `repeat` and `offset`. Other
@@ -2505,14 +2802,18 @@ function load_mtl(path::String)
     default_specular = MeshPhongMaterial().specular
     name = ""
     kd = Color3(1.0,1.0,1.0); ks = default_specular; ke = Color3(0.0,0.0,0.0)
-    ns = 30.0; d = 1.0
+    ns = 30.0
+    dissolve = 1.0; has_dissolve = false
+    transmission = 0.0; has_transmission = false; transmission_first = false
     diffuse_map = specular_map = emissive_map = normal_map = alpha_map = nothing
     dir = dirname(path)
     function flush!()
         isempty(name) && return
+        opacity, translucent = _mtl_opacity(has_dissolve, dissolve, has_transmission,
+                                            transmission, transmission_first)
         mats[name] = MeshPhongMaterial(color=kd, specular=ks, emissive=ke, shininess=ns,
-                                       opacity=d,
-                                       transparent=(d < 1.0 || alpha_map !== nothing),
+                                       opacity=opacity,
+                                       transparent=(translucent || alpha_map !== nothing),
                                        map=diffuse_map, specular_map=specular_map,
                                        emissive_map=emissive_map, normal_map=normal_map,
                                        alpha_map=alpha_map)
@@ -2530,7 +2831,9 @@ function load_mtl(path::String)
             name = String(_mtl_rest_of_line(line, tag))
             isempty(name) && error("MTL newmtl requires a material name")
             kd = Color3(1.0,1.0,1.0); ks = default_specular
-            ke = Color3(0.0,0.0,0.0); ns = 30.0; d = 1.0
+            ke = Color3(0.0,0.0,0.0); ns = 30.0
+            dissolve = 1.0; has_dissolve = false
+            transmission = 0.0; has_transmission = false; transmission_first = false
             diffuse_map = specular_map = emissive_map = normal_map = alpha_map = nothing
         elseif _mtl_key_is(tag, "kd")
             kd = _mtl_parse_color_tokens(parts, tag_state[2],
@@ -2544,9 +2847,12 @@ function load_mtl(path::String)
         elseif _mtl_key_is(tag, "ns")
             ns = _mtl_parse_scalar_token(parts, tag_state[2], "Ns")
         elseif _mtl_key_is(tag, "d")
-            d = _mtl_parse_scalar_token(parts, tag_state[2], "d")
+            dissolve = _mtl_parse_scalar_token(parts, tag_state[2], "d")
+            has_dissolve = true
         elseif _mtl_key_is(tag, "tr")
-            d = 1.0 - _mtl_parse_scalar_token(parts, tag_state[2], "Tr")
+            transmission = _mtl_parse_scalar_token(parts, tag_state[2], "Tr")
+            has_dissolve || (transmission_first = true)
+            has_transmission = true
         elseif _mtl_key_is(tag, "map_kd")
             diffuse_map === nothing &&
                 (diffuse_map = _mtl_texture(dir, line, "map_Kd", :srgb))
@@ -2701,29 +3007,22 @@ function load_obj_groups(path::String)
 end
 
 # ========================== Minimal JSON parser ==========================
-# Supports objects, arrays, strings, numbers, true/false/null — enough for glTF.
-
-mutable struct _JSONParser
-    s::String
-    i::Int
-end
+# RFC 8259 JSON with ECMAScript JSON.parse results: numbers are Float64
+# (correctly rounded, underflow to ±0), objects are Dict{String,Any} keeping the
+# last duplicate key, arrays are Vector{Any}, null is `nothing`. Unlike
+# JSON.parse, numbers that round to ±Inf and unpaired \u surrogates (which
+# UTF-8 cannot hold) are errors. Containers are tracked on an explicit stack,
+# so nesting depth is limited only by memory.
 
 mutable struct _JSONByteParser{B<:AbstractVector{UInt8}}
     s::B
     i::Int
 end
 
-function _json_parse(s::String)
-    p = _JSONParser(s, 1)
-    _json_ws(p)
-    p.i <= ncodeunits(p.s) || error("empty JSON input")
-    v = _json_value(p)
-    _json_ws(p)
-    p.i > ncodeunits(p.s) || error("unexpected trailing JSON content")
-    return v
-end
+_json_parse(s::String) = _json_parse(codeunits(s))
 
 function _json_parse(bytes::AbstractVector{UInt8})
+    Base.require_one_based_indexing(bytes)
     p = _JSONByteParser(bytes, 1)
     _jsonb_ws(p)
     p.i <= length(p.s) || error("empty JSON input")
@@ -2731,27 +3030,6 @@ function _json_parse(bytes::AbstractVector{UInt8})
     _jsonb_ws(p)
     p.i > length(p.s) || error("unexpected trailing JSON content")
     return v
-end
-
-@inline function _json_ws(p)
-    n = ncodeunits(p.s)
-    while p.i <= n && (p.s[p.i] in (' ', '\t', '\n', '\r'))
-        p.i += 1
-    end
-end
-
-function _json_current(p, context::String)
-    p.i <= ncodeunits(p.s) || error("unexpected end of JSON $context")
-    return p.s[p.i]
-end
-
-function _json_literal(p, literal::String, value)
-    n = ncodeunits(p.s)
-    last = p.i + ncodeunits(literal) - 1
-    last <= n && p.s[p.i:last] == literal ||
-        error("invalid JSON literal at byte $(p.i)")
-    p.i = last + 1
-    return value
 end
 
 @inline function _jsonb_ws(p)
@@ -2780,59 +3058,91 @@ function _jsonb_literal(p, literal::String, value)
     return value
 end
 
-function _jsonb_value(p)
-    c = _jsonb_current(p, "value")
-    if c == UInt8('{'); return _jsonb_object(p)
-    elseif c == UInt8('['); return _jsonb_array(p)
-    elseif c == UInt8('"'); return _jsonb_string(p)
-    elseif c == UInt8('t'); return _jsonb_literal(p, "true", true)
-    elseif c == UInt8('f'); return _jsonb_literal(p, "false", false)
-    elseif c == UInt8('n'); return _jsonb_literal(p, "null", nothing)
-    else; return _jsonb_number(p)
-    end
+# Read `"key" :` of an object entry, leaving `p` at the entry's value.
+function _jsonb_key(p)
+    _jsonb_ws(p)
+    _jsonb_current(p, "object key") == UInt8('"') ||
+        error("JSON object key must be a string")
+    key = _jsonb_string(p)
+    _jsonb_ws(p)
+    _jsonb_current(p, "object entry") == UInt8(':') ||
+        error("JSON object entry is missing ':'")
+    p.i += 1
+    return key
 end
 
-function _jsonb_object(p)
-    d = Dict{String, Any}(); p.i += 1; _jsonb_ws(p)
-    _jsonb_current(p, "object") == UInt8('}') && (p.i += 1; return d)
+# Parse one value. Open arrays and objects wait on `stack`; each open object
+# has the key of the value being parsed for it on `keys`.
+function _jsonb_value(p)
+    stack = Any[]
+    keys = String[]
     while true
         _jsonb_ws(p)
-        _jsonb_current(p, "object key") == UInt8('"') ||
-            error("JSON object key must be a string")
-        key = _jsonb_string(p); _jsonb_ws(p)
-        _jsonb_current(p, "object entry") == UInt8(':') ||
-            error("JSON object entry is missing ':'")
-        p.i += 1
-        _jsonb_ws(p); d[key] = _jsonb_value(p); _jsonb_ws(p)
-        c = _jsonb_current(p, "object entry")
-        if c == UInt8(',')
+        c = _jsonb_current(p, "value")
+        if c == UInt8('{')
             p.i += 1
-        elseif c == UInt8('}')
+            _jsonb_ws(p)
+            if _jsonb_current(p, "object") != UInt8('}')
+                push!(stack, Dict{String,Any}())
+                push!(keys, _jsonb_key(p))
+                continue
+            end
             p.i += 1
-            break
+            v = Dict{String,Any}()
+        elseif c == UInt8('[')
+            p.i += 1
+            _jsonb_ws(p)
+            if _jsonb_current(p, "array") != UInt8(']')
+                push!(stack, Any[])
+                continue
+            end
+            p.i += 1
+            v = Any[]
+        elseif c == UInt8('"')
+            v = _jsonb_string(p)
+        elseif c == UInt8('t')
+            v = _jsonb_literal(p, "true", true)
+        elseif c == UInt8('f')
+            v = _jsonb_literal(p, "false", false)
+        elseif c == UInt8('n')
+            v = _jsonb_literal(p, "null", nothing)
         else
-            error("JSON object entry must end with ',' or '}'")
+            v = _jsonb_number(p)
+        end
+        # Give `v` to the innermost open container; a closing bracket makes
+        # that container the next value to hand outwards.
+        while true
+            isempty(stack) && return v
+            top = stack[end]
+            _jsonb_ws(p)
+            if top isa Dict{String,Any}
+                top[pop!(keys)] = v
+                c = _jsonb_current(p, "object entry")
+                if c == UInt8(',')
+                    p.i += 1
+                    push!(keys, _jsonb_key(p))
+                    break
+                elseif c == UInt8('}')
+                    p.i += 1
+                    v = pop!(stack)
+                else
+                    error("JSON object entry must end with ',' or '}'")
+                end
+            else
+                push!(top::Vector{Any}, v)
+                c = _jsonb_current(p, "array entry")
+                if c == UInt8(',')
+                    p.i += 1
+                    break
+                elseif c == UInt8(']')
+                    p.i += 1
+                    v = pop!(stack)
+                else
+                    error("JSON array entry must end with ',' or ']'")
+                end
+            end
         end
     end
-    return d
-end
-
-function _jsonb_array(p)
-    a = Any[]; p.i += 1; _jsonb_ws(p)
-    _jsonb_current(p, "array") == UInt8(']') && (p.i += 1; return a)
-    while true
-        _jsonb_ws(p); push!(a, _jsonb_value(p)); _jsonb_ws(p)
-        c = _jsonb_current(p, "array entry")
-        if c == UInt8(',')
-            p.i += 1
-        elseif c == UInt8(']')
-            p.i += 1
-            break
-        else
-            error("JSON array entry must end with ',' or ']'")
-        end
-    end
-    return a
 end
 
 function _jsonb_hex_value(c::UInt8)
@@ -2853,26 +3163,46 @@ function _jsonb_hex4!(p)
     return v
 end
 
+function _jsonb_utf8_string(bytes::Vector{UInt8})
+    s = String(bytes)
+    isvalid(s) || error("invalid UTF-8 in JSON string")
+    return s
+end
+
 function _jsonb_string(p)
-    p.i += 1
+    s = p.s
+    n = length(s)
+    start = p.i + 1
+    i = start
+    # Fast path: no escapes, so the string is the bytes up to the closing quote.
+    @inbounds while i <= n
+        c = s[i]
+        if c == UInt8('"')
+            p.i = i + 1
+            return _jsonb_utf8_string(s[start:(i - 1)])
+        end
+        c == UInt8('\\') && break
+        c >= 0x20 || error("JSON string contains an unescaped control character")
+        i += 1
+    end
+    i <= n || error("unterminated JSON string")
     io = IOBuffer()
-    n = length(p.s)
+    write(io, @view s[start:(i - 1)])
+    p.i = i
     while p.i <= n
-        c = p.s[p.i]
+        c = s[p.i]
         if c == UInt8('"')
             p.i += 1
-            s = String(take!(io))
-            isvalid(s) || error("invalid UTF-8 in JSON string")
-            return s
+            return _jsonb_utf8_string(take!(io))
         elseif c == UInt8('\\')
             p.i += 1
             p.i <= n || error("unterminated JSON escape")
-            e = p.s[p.i]
+            e = s[p.i]
             if e == UInt8('u')
                 p.i += 1
                 cp = _jsonb_hex4!(p)
                 if 0xD800 <= cp <= 0xDBFF
-                    (p.i + 1 <= n && p.s[p.i] == UInt8('\\') && p.s[p.i + 1] == UInt8('u')) ||
+                    (p.i + 1 <= n && s[p.i] == UInt8('\\') && s[p.i + 1] == UInt8('u')) ||
                         error("JSON unicode high surrogate without low surrogate")
                     p.i += 2
                     lo = _jsonb_hex4!(p)
@@ -2915,190 +3245,105 @@ end
 
 @inline _jsonb_digit(c::UInt8) = UInt8('0') <= c <= UInt8('9')
 
+@inline _jsonb_number_char(c::UInt8) =
+    _jsonb_digit(c) || c == UInt8('-') || c == UInt8('+') || c == UInt8('.') ||
+    c == UInt8('e') || c == UInt8('E')
+
+# Name the number-like text at `start` (at most 40 bytes) in the error.
+@noinline function _jsonb_bad_number(s, start::Int)
+    stop = start
+    while stop <= length(s) && stop - start < 40 && _jsonb_number_char(s[stop])
+        stop += 1
+    end
+    stop == start && error("invalid JSON value at byte $start")
+    error("invalid JSON number $(String(s[start:(stop - 1)])) at byte $start")
+end
+
+# Powers of ten that Float64 holds exactly (5^22 < 2^53).
+const _JSON_POW10 = (1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11,
+                     1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22)
+
 function _jsonb_number(p)
+    s = p.s
+    n = length(s)
     start = p.i
-    n = length(p.s)
-    p.i <= n || error("invalid JSON value at byte $start")
-    c = p.s[p.i]
-    c == UInt8('-') && (p.i += 1)
-    p.i <= n || error("invalid JSON number at byte $start")
-    c = p.s[p.i]
+    i = start
+    negative = i <= n && s[i] == UInt8('-')
+    negative && (i += 1)
+    i <= n || _jsonb_bad_number(s, start)
+    # The value is m * 10^scale with m holding at most 19 significant digits
+    # (m < 10^19 < 2^64); `dropped` marks nonzero digits beyond the 19th.
+    m = UInt64(0)
+    ndigits = 0
+    scale = 0
+    dropped = false
+    c = s[i]
     if c == UInt8('0')
-        p.i += 1
+        i += 1
     elseif UInt8('1') <= c <= UInt8('9')
-        while p.i <= n && _jsonb_digit(p.s[p.i])
-            p.i += 1
+        while i <= n && _jsonb_digit(s[i])
+            if ndigits < 19
+                m = 10m + (s[i] - UInt8('0'))
+                ndigits += 1
+            else
+                scale += 1
+                dropped |= s[i] != UInt8('0')
+            end
+            i += 1
         end
     else
-        error("invalid JSON value at byte $start")
+        _jsonb_bad_number(s, start)
     end
-    if p.i <= n && p.s[p.i] == UInt8('.')
-        p.i += 1
-        frac_start = p.i
-        while p.i <= n && _jsonb_digit(p.s[p.i])
-            p.i += 1
-        end
-        p.i > frac_start || error("invalid JSON number at byte $start")
-    end
-    if p.i <= n && (p.s[p.i] == UInt8('e') || p.s[p.i] == UInt8('E'))
-        p.i += 1
-        if p.i <= n && (p.s[p.i] == UInt8('+') || p.s[p.i] == UInt8('-'))
-            p.i += 1
-        end
-        exp_start = p.i
-        while p.i <= n && _jsonb_digit(p.s[p.i])
-            p.i += 1
-        end
-        p.i > exp_start || error("invalid JSON number at byte $start")
-    end
-    raw = @view p.s[start:(p.i - 1)]
-    value = tryparse(Float64, String(raw))
-    value === nothing && error("invalid JSON number at byte $start")
-    isfinite(value) || error("JSON number at byte $start must be finite")
-    return value
-end
-
-function _json_value(p)
-    c = _json_current(p, "value")
-    if c == '{'; return _json_object(p)
-    elseif c == '['; return _json_array(p)
-    elseif c == '"'; return _json_string(p)
-    elseif c == 't'; return _json_literal(p, "true", true)
-    elseif c == 'f'; return _json_literal(p, "false", false)
-    elseif c == 'n'; return _json_literal(p, "null", nothing)
-    else; return _json_number(p)
-    end
-end
-
-function _json_object(p)
-    d = Dict{String, Any}(); p.i += 1; _json_ws(p)
-    _json_current(p, "object") == '}' && (p.i += 1; return d)
-    while true
-        _json_ws(p)
-        _json_current(p, "object key") == '"' ||
-            error("JSON object key must be a string")
-        key = _json_string(p); _json_ws(p)
-        _json_current(p, "object entry") == ':' ||
-            error("JSON object entry is missing ':'")
-        p.i += 1
-        _json_ws(p); d[key] = _json_value(p); _json_ws(p)
-        c = _json_current(p, "object entry")
-        if c == ','
-            p.i += 1
-        elseif c == '}'
-            p.i += 1
-            break
-        else
-            error("JSON object entry must end with ',' or '}'")
-        end
-    end
-    return d
-end
-
-function _json_array(p)
-    a = Any[]; p.i += 1; _json_ws(p)
-    _json_current(p, "array") == ']' && (p.i += 1; return a)
-    while true
-        _json_ws(p); push!(a, _json_value(p)); _json_ws(p)
-        c = _json_current(p, "array entry")
-        if c == ','
-            p.i += 1
-        elseif c == ']'
-            p.i += 1
-            break
-        else
-            error("JSON array entry must end with ',' or ']'")
-        end
-    end
-    return a
-end
-
-function _json_hex_value(c)
-    '0' <= c <= '9' && return Int(c - '0')
-    'a' <= c <= 'f' && return Int(c - 'a') + 10
-    'A' <= c <= 'F' && return Int(c - 'A') + 10
-    error("invalid JSON unicode escape")
-end
-
-function _json_hex4!(p)
-    n = ncodeunits(p.s)
-    p.i + 3 <= n || error("incomplete JSON unicode escape")
-    v = 0
-    for _ in 1:4
-        v = (v << 4) | _json_hex_value(p.s[p.i])
-        p.i += 1
-    end
-    return v
-end
-
-function _json_string(p)
-    p.i += 1; io = IOBuffer()
-    n = ncodeunits(p.s)
-    while p.i <= n && p.s[p.i] != '"'
-        c = p.s[p.i]
-        if c == '\\'
-            p.i += 1
-            p.i <= n || error("unterminated JSON escape")
-            e = p.s[p.i]
-            if e == 'u'
-                p.i += 1
-                cp = _json_hex4!(p)
-                if 0xD800 <= cp <= 0xDBFF
-                    (p.i + 1 <= n && p.s[p.i] == '\\' && p.s[p.i + 1] == 'u') ||
-                        error("JSON unicode high surrogate without low surrogate")
-                    p.i += 2
-                    lo = _json_hex4!(p)
-                    0xDC00 <= lo <= 0xDFFF ||
-                        error("JSON unicode high surrogate without low surrogate")
-                    cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00)
-                elseif 0xDC00 <= cp <= 0xDFFF
-                    error("JSON unicode low surrogate without high surrogate")
-                end
-                print(io, Char(cp))
-                continue
-            elseif e == '"'
-                print(io, '"')
-            elseif e == '\\'
-                print(io, '\\')
-            elseif e == '/'
-                print(io, '/')
-            elseif e == 'b'
-                print(io, '\b')
-            elseif e == 'f'
-                print(io, '\f')
-            elseif e == 'n'
-                print(io, '\n')
-            elseif e == 'r'
-                print(io, '\r')
-            elseif e == 't'
-                print(io, '\t')
+    if i <= n && s[i] == UInt8('.')
+        i += 1
+        frac_start = i
+        while i <= n && _jsonb_digit(s[i])
+            d = s[i] - UInt8('0')
+            if m == 0 && d == 0
+                scale -= 1
+            elseif ndigits < 19
+                m = 10m + d
+                ndigits += 1
+                scale -= 1
             else
-                error("unsupported JSON escape: \\$e")
+                dropped |= d != 0
             end
-            p.i += 1
-        else
-            c >= '\x20' ||
-                error("JSON string contains an unescaped control character")
-            print(io, c)
-            p.i = nextind(p.s, p.i)             # skip full (possibly multibyte) char
+            i += 1
         end
+        i > frac_start || _jsonb_bad_number(s, start)
     end
-    p.i <= n || error("unterminated JSON string")
-    p.i += 1
-    return String(take!(io))
-end
-
-function _json_number(p)
-    start = p.i; n = ncodeunits(p.s)
-    while p.i <= n && (p.s[p.i] in ('-','+','.','e','E','0','1','2','3','4','5','6','7','8','9'))
-        p.i += 1
+    if i <= n && (s[i] == UInt8('e') || s[i] == UInt8('E'))
+        i += 1
+        exp_negative = i <= n && s[i] == UInt8('-')
+        (i <= n && (s[i] == UInt8('+') || s[i] == UInt8('-'))) && (i += 1)
+        exp_start = i
+        e = 0
+        while i <= n && _jsonb_digit(s[i])
+            # Saturate far beyond the Float64 range so huge exponents cannot overflow.
+            e = min(10e + Int(s[i] - UInt8('0')), 1_000_000)
+            i += 1
+        end
+        i > exp_start || _jsonb_bad_number(s, start)
+        scale += exp_negative ? -e : e
     end
-    p.i > start || error("invalid JSON value at byte $start")
-    raw = p.s[start:p.i-1]
-    occursin(r"^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][-+]?[0-9]+)?$", raw) ||
-        error("invalid JSON number $raw")
+    # JSON.parse rejects "01", "1.2.3" and "1-2": the number must end here.
+    i <= n && _jsonb_number_char(s[i]) && _jsonb_bad_number(s, start)
+    p.i = i
+    # Clinger's fast path: m and 10^|scale| are exact, so one IEEE multiply
+    # or divide gives the correctly rounded value.
+    if !dropped && m <= UInt64(1) << 53 && -22 <= scale <= 22
+        x = Float64(m)
+        x = scale >= 0 ? x * _JSON_POW10[scale + 1] : x / _JSON_POW10[1 - scale]
+        return negative ? -x : x
+    end
+    raw = String(s[start:(i - 1)])
     value = tryparse(Float64, raw)
-    value === nothing && error("invalid JSON number $raw")
+    if value === nothing
+        # tryparse returns nothing only when the correctly rounded value is
+        # ±0 (underflow, which JSON.parse returns) or ±Inf (overflow).
+        abs(parse(BigFloat, raw)) < 1 || error("JSON number $raw must be finite")
+        value = negative ? -0.0 : 0.0
+    end
     isfinite(value) || error("JSON number $raw must be finite")
     return value
 end
