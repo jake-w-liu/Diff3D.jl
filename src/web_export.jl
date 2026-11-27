@@ -1457,7 +1457,7 @@ function _web_shadow_json(scene::Scene, light::Union{DirectionalLight,PointLight
     end
     shadow_mode === :static || return "null"
     pcf = _web_shadow_pcf_radius(light, 1)
-    sm = compute_shadow_map(scene, light; resolution=WEB_SHADOW_RESOLUTION,
+    sm = _compute_single_shadow_map(scene, light; resolution=WEB_SHADOW_RESOLUTION,
                             bias=_light_shadow_bias(light, 3e-3), pcf_radius=pcf,
                             clipping_planes=clipping_planes)
     W = size(sm.depth, 2)

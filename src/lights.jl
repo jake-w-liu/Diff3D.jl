@@ -136,24 +136,45 @@ function _ies_profile_from_owned(a::Vector{Float64}, c::Vector{Float64})
     return IESProfile(a, c, Val(:owned))
 end
 
+# Plain real angles are evaluated in Float64. Other `Real` subtypes (ForwardDiff
+# duals, reverse-mode `ADVar`) stay in their own type so derivatives with respect
+# to the angle flow through the interpolation instead of being truncated by a
+# `Float64` conversion.
+@inline _ies_angle(x::Union{AbstractFloat,Integer,Rational,AbstractIrrational}) =
+    Float64(x)
+@inline _ies_angle(x::Real) = x
+
+# Tabulated constants returned for a differentiable angle keep the angle's type
+# (with a zero derivative) so callers receive one scalar type on every branch.
+@inline _ies_value(::Float64, value::Float64) = value
+@inline _ies_value(θ, value::Float64) = value + zero(θ)
+
 """
-    ies_candela(profile, angle_deg) -> Float64
+    ies_candela(profile, angle_deg)
 
 Linearly interpolate the candela value at a vertical angle (degrees), clamping
-to the tabulated endpoints outside `[angles[1], angles[end]]`.
+to the tabulated endpoints outside `[angles[1], angles[end]]`. Plain real angles
+return a `Float64`; differentiable angle types (ForwardDiff duals, `ADVar`)
+return a differentiable value carrying the derivative of the interpolation (zero
+on the clamped ranges, including the endpoints themselves).
 """
 function ies_candela(profile::IESProfile, angle_deg::Real)
     a = getfield(profile, :angles)
     c = getfield(profile, :candela)
     n = length(a)
-    n == 1 && return c[1]
-    θ = Float64(angle_deg)
-    θ <= a[1] && return c[1]
-    θ >= a[n] && return c[n]
-    isnan(θ) && return c[n]
+    θ = _ies_angle(angle_deg)
+    # Branch on the primal angle, as reverse-mode `ADVar` comparisons do. Dual
+    # comparisons also weigh the partials, so an angle sitting exactly on an
+    # endpoint would take the interpolating branch, which turns the infinite
+    # partial `acosd` produces for an on-axis shading point into Inf/NaN.
+    θp = _primal_value(θ)
+    n == 1 && return _ies_value(θ, c[1])
+    θp <= a[1] && return _ies_value(θ, c[1])
+    θp >= a[n] && return _ies_value(θ, c[n])
+    isnan(θp) && return _ies_value(θ, c[n])
     # Angles are strictly ascending; binary search keeps per-shading IES lookups
     # logarithmic for dense measured profiles.
-    i = searchsortedfirst(a, θ)
+    i = searchsortedfirst(a, θp)
     @inbounds begin
         t = (θ - a[i-1]) / (a[i] - a[i-1])
         return c[i-1] + (c[i] - c[i-1]) * t
@@ -161,36 +182,19 @@ function ies_candela(profile::IESProfile, angle_deg::Real)
 end
 
 """
-    ies_intensity(profile, angle_deg) -> Float64
+    ies_intensity(profile, angle_deg)
 
 Normalized luminous-intensity multiplier in `[0,1]` (candela divided by the
 profile peak) at a vertical angle in degrees. Used to modulate a light's
-intensity by its measured photometric distribution.
+intensity by its measured photometric distribution. The result type follows
+[`ies_candela`](@ref).
 """
 function ies_intensity(profile::IESProfile, angle_deg::Real)
     max_candela = getfield(profile, :max_candela)
-    max_candela <= 0 && return 0.0
+    max_candela <= 0 && return _ies_value(_ies_angle(angle_deg), 0.0)
     return ies_candela(profile, angle_deg) / max_candela
 end
 
-"""
-    parse_ies(text) -> IESProfile
-
-Parse an IESNA LM-63 photometric data file (the `.ies` format emitted by lamp
-manufacturers and supported by three.js' IESLoader). The parser reads the
-`TILT=` line, the two numeric control lines, then the vertical-angle vector and
-the candela values, supporting the common single-horizontal-plane (rotationally
-symmetric) case. Multi-plane files are collapsed to their first horizontal
-plane. Keyword/label lines beginning with `[` are ignored.
-
-The numeric layout after `TILT=NONE` is:
-
-    <num_lamps> <lumens_per_lamp> <candela_multiplier> <num_vertical> <num_horizontal>
-    <ballast_factor> <future_use> <input_watts>
-    <vertical_angles...>      (num_vertical values)
-    <horizontal_angles...>    (num_horizontal values)
-    <candela values...>       (num_vertical × num_horizontal, plane-major)
-"""
 function _ies_parse_numeric_token(tok::AbstractString, line_no::Int)
     value = tryparse(Float64, tok)
     value === nothing &&
@@ -200,11 +204,17 @@ function _ies_parse_numeric_token(tok::AbstractString, line_no::Int)
     return value
 end
 
-function _ies_positive_integer_count(value::Real, label::String)
+# Every listed value occupies at least one code unit of the text, so a count
+# larger than the text cannot be satisfied; rejecting it up front keeps a
+# malformed header from requesting an unbounded buffer.
+function _ies_positive_integer_count(value::Real, label::String, text_units::Int)
     f = Float64(value)
-    (f >= 1.0 && f == floor(f) && f <= Float64(typemax(Int))) ||
+    (f >= 1.0 && f == floor(f) && f < 0x1p63) ||
         throw(ArgumentError("parse_ies: $label count must be a positive integer"))
-    return Int(f)
+    count = Int(f)
+    count <= text_units ||
+        throw(ArgumentError("parse_ies: $label count $count exceeds the photometric data"))
+    return count
 end
 
 function _ies_line_bounds(s::String, i::Int)
@@ -309,16 +319,8 @@ function _ies_find_payload_start(s::String)
         trimmed_first, trimmed_last = _ies_trim_bounds(s, first, last)
         if trimmed_first <= trimmed_last && _ies_line_contains_tilt(s, trimmed_first, trimmed_last)
             tilt_line = uppercase(String(SubString(s, trimmed_first, trimmed_last)))
-            payload_i = next_i
-            payload_line_no = line_no + 1
-            if endswith(tilt_line, "INCLUDE") || occursin("TILT=INCLUDE", tilt_line)
-                for _ in 1:4
-                    payload_i > n && break
-                    _, _, payload_i = _ies_line_bounds(s, payload_i)
-                    payload_line_no += 1
-                end
-            end
-            return payload_i, payload_line_no
+            include_tilt = endswith(tilt_line, "INCLUDE") || occursin("TILT=INCLUDE", tilt_line)
+            return next_i, line_no + 1, include_tilt
         end
         i = next_i
         line_no += 1
@@ -326,10 +328,55 @@ function _ies_find_payload_start(s::String)
     throw(ArgumentError("parse_ies: no TILT= line found"))
 end
 
+# `TILT=INCLUDE` embeds the lamp-tilt table before the control block: the
+# lamp-to-luminaire geometry code, the angle count N, then N tilt angles and N
+# multiplying factors. Like three.js IESLoader (`readTilt`), the table is read by
+# value count rather than by line, since LM-63 lets each vector wrap across lines.
+# The factors are not applied (three.js ignores them as well).
+function _ies_skip_tilt_data!(scanner::_IESNumericScanner)
+    _ies_next_number!(scanner) === nothing &&
+        throw(ArgumentError("parse_ies: truncated TILT=INCLUDE data"))
+    count = _ies_next_number!(scanner)
+    count === nothing && throw(ArgumentError("parse_ies: truncated TILT=INCLUDE data"))
+    # Below 2^62 so that the 2N values to skip still fit in Int.
+    (count >= 0.0 && count == floor(count) && count < 0x1p62) ||
+        throw(ArgumentError("parse_ies: tilt-angle count must be a non-negative integer"))
+    for _ in 1:(2 * Int(count))
+        _ies_next_number!(scanner) === nothing &&
+            throw(ArgumentError("parse_ies: truncated TILT=INCLUDE data"))
+    end
+    return nothing
+end
+
+"""
+    parse_ies(text) -> IESProfile
+
+Parse an IESNA LM-63 photometric data file (the `.ies` format emitted by lamp
+manufacturers and supported by three.js' IESLoader). The parser reads the
+`TILT=` line, any `TILT=INCLUDE` tilt table (skipped, as in three.js), the
+13-value control block, then the vertical-angle vector and the candela values,
+supporting the common single-horizontal-plane (rotationally symmetric) case.
+Multi-plane files are collapsed to their first horizontal plane. Keyword/label
+lines beginning with `[` are ignored. Values may be separated by whitespace or
+commas and may wrap across lines.
+
+The numeric layout after the `TILT=` data is:
+
+    <num_lamps> <lumens_per_lamp> <candela_multiplier> <num_vertical> <num_horizontal>
+        <photometric_type> <units_type> <width> <length> <height>
+    <ballast_factor> <future_use> <input_watts>
+    <vertical_angles...>      (num_vertical values)
+    <horizontal_angles...>    (num_horizontal values)
+    <candela values...>       (num_vertical × num_horizontal, plane-major)
+
+Candela values are scaled by `candela_multiplier` when it is positive; a
+non-positive multiplier leaves them unscaled.
+"""
 function parse_ies(text::AbstractString)
     s = text isa String ? text : String(text)
-    payload_start, payload_line_no = _ies_find_payload_start(s)
+    payload_start, payload_line_no, include_tilt = _ies_find_payload_start(s)
     scanner = _ies_numeric_scanner(s, payload_start, payload_line_no)
+    include_tilt && _ies_skip_tilt_data!(scanner)
     control = Vector{Float64}(undef, 13)
     for i in 1:13
         value = _ies_next_number!(scanner)
@@ -346,8 +393,8 @@ function parse_ies(text::AbstractString)
     #  11: ballast_factor    12: future_use       13: input_watts
     # The vertical-angle vector starts at token 14.
     cand_mult = control[3]
-    num_vert = _ies_positive_integer_count(control[4], "vertical-angle")
-    num_horiz = _ies_positive_integer_count(control[5], "horizontal-angle")
+    num_vert = _ies_positive_integer_count(control[4], "vertical-angle", ncodeunits(s))
+    num_horiz = _ies_positive_integer_count(control[5], "horizontal-angle", ncodeunits(s))
     vangles = Vector{Float64}(undef, num_vert)
     for i in 1:num_vert
         value = _ies_next_number!(scanner)
