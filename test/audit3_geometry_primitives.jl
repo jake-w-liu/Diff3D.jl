@@ -400,3 +400,28 @@ end
     @test any(>(0.5), posed[:, :, 1])
     @test isapprox(posed, clean; atol=1e-9)
 end
+
+@testset "audit3 morph bounding box grows target by target in index order" begin
+    # BufferGeometry.js:676-689 expands the box by (box.min + target.min) and
+    # then (box.max + target.max) for each target in morphAttributes.position
+    # order. A target whose deltas do not contain zero can move both corners,
+    # so the order matters. three.js r186 in node on the same Float64 data:
+    # box (-21, -22.5, -12)-(21, 17.5, 16), sphere center (0, -2.5, 2),
+    # radius 17.233687939614086.
+    g = BufferGeometry([0, 0, 0, 1, 0, 0, 0, 1, 0.0], Float64[], Float64[], Int[], 3, 0)
+    for k in 0:5
+        s = iseven(k) ? 1.0 : -1.0
+        set_attribute!(g, Symbol("morphPosition", k),
+                       reduce(vcat, [[s * (3 + k + 0.5i), s * (2k + 1 + 0.25i), -s * (k + 2)]
+                                     for i in 0:2]), 3)
+    end
+    box = compute_bounding_box(g)
+    @test box.min == Vec3(-21.0, -22.5, -12.0)
+    @test box.max == Vec3(21.0, 17.5, 16.0)
+    sphere = compute_bounding_sphere(g)
+    @test sphere.center == Vec3(0.0, -2.5, 2.0)
+    @test sphere.radius ≈ 17.233687939614086 rtol=1e-15
+    # Names no morph influence can reach (leading zeros) are not targets.
+    set_attribute!(g, :morphPosition06, fill(1000.0, 9), 3)
+    @test compute_bounding_box(g) == box
+end

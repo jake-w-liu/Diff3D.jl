@@ -861,23 +861,49 @@ end
 
 const _MORPH_POSITION_PREFIX = "morphPosition"
 
-# Whether `name` is a `morphPosition<k>` target. The interned symbol's bytes are
-# read in place so bounding volumes on the render path stay allocation-free; a
-# shorter name stops at its NUL terminator, which never matches the prefix.
-function _is_morph_position_name(name::Symbol)
+# Zero-based target index `k` of a `morphPosition<k>` name, spelled as
+# `_morph_position_symbol` spells it (no leading zeros), else -1. Only those
+# names can be reached by a morph influence. The interned symbol's bytes are
+# read in place so bounding volumes stay allocation-free; a shorter name stops
+# at its NUL terminator, which never matches the prefix.
+function _morph_position_index(name::Symbol)
     ptr = Base.unsafe_convert(Ptr{UInt8}, name)
     prefix_length = ncodeunits(_MORPH_POSITION_PREFIX)
     for i in 1:prefix_length
-        unsafe_load(ptr, i) == codeunit(_MORPH_POSITION_PREFIX, i) || return false
+        unsafe_load(ptr, i) == codeunit(_MORPH_POSITION_PREFIX, i) || return -1
     end
     i = prefix_length + 1
-    unsafe_load(ptr, i) == 0x00 && return false
+    first_digit = unsafe_load(ptr, i)
+    UInt8('0') <= first_digit <= UInt8('9') || return -1
+    first_digit == UInt8('0') && return unsafe_load(ptr, i + 1) == 0x00 ? 0 : -1
+    k = 0
     while true
         c = unsafe_load(ptr, i)
-        c == 0x00 && return true
-        UInt8('0') <= c <= UInt8('9') || return false
+        c == 0x00 && return k
+        UInt8('0') <= c <= UInt8('9') || return -1
+        digit = Int(c - UInt8('0'))
+        # No influence vector can reach an index beyond typemax(Int).
+        k <= (typemax(Int) - digit) ÷ 10 || return -1
+        k = 10k + digit
         i += 1
     end
+end
+
+# The morph position target with the smallest index above `after`, as
+# `(index, name)`, or `(-1, name)` when none is left. three.js grows the
+# bounding box target by target in `morphAttributes.position` order, and each
+# step can depend on the previous ones, so targets are visited by index.
+function _next_morph_position_target(g::BufferGeometry, after::Int)
+    best = -1
+    best_name = :morphPosition
+    for name in keys(g.attributes)
+        k = _morph_position_index(name)
+        if k > after && (best < 0 || k < best)
+            best = k
+            best_name = name
+        end
+    end
+    return best, best_name
 end
 
 function _morph_delta_bounds(attr::BufferAttribute, name::Symbol, n_vertices::Int)
@@ -918,9 +944,13 @@ function _compute_bounding_box_validated(g::BufferGeometry)
     box = _position_bounding_box(g)
     # BufferGeometry.js:671-695 with morphTargetsRelative: Diff3D morph
     # position targets are deltas, so each one grows the box by the extent of
-    # its deltas.
-    for (name, attr) in g.attributes
-        _is_morph_position_name(name) || continue
+    # its deltas. Visited in index order because a target whose delta extent
+    # does not contain zero can move both box corners.
+    k = -1
+    while true
+        k, name = _next_morph_position_target(g, k)
+        k < 0 && break
+        attr = g.attributes[name]
         # Assert per branch so the concrete result is never boxed.
         delta_box = attr isa BufferAttribute{Float64} ?
             _morph_delta_bounds(attr, name, g.n_vertices)::Box3{Float64} :
@@ -989,7 +1019,7 @@ function _bounding_sphere_validated(g::BufferGeometry, include_morph_targets::Bo
     include_morph_targets || return BoundingSphere(center, radius)
     # BufferGeometry.js:747-773 (box) and 790-816 (radius)
     for (name, attr) in g.attributes
-        _is_morph_position_name(name) || continue
+        _morph_position_index(name) >= 0 || continue
         radius = attr isa BufferAttribute{Float64} ?
             _morph_bounding_radius(radius, center, g, attr, name)::Float64 :
             _morph_bounding_radius(radius, center, g, attr, name)::Float64
