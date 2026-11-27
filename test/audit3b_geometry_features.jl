@@ -171,3 +171,111 @@ end
     @test_throws ArgumentError Diff3D.apply_matrix4!(
         g, Mat4((1.0, 0.0, 0.0, 0.5, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0)))
 end
+
+@testset "to_non_indexed, normalize_normals!, set_from_points!, delete_attribute!" begin
+    # BufferGeometry.js toNonIndexed: attributes gathered through the index,
+    # groups copied. node prints these for PlaneGeometry() with group (3, 3, 1).
+    plane = PlaneGeometry()
+    add_group!(plane, 2, 1, 1)
+    set_attribute!(plane, :morphPosition0, collect(1.0:12.0), 3)
+    flat = Diff3D.to_non_indexed(plane)
+    @test flat.positions == [-0.5, 0.5, 0.0, -0.5, -0.5, 0.0, 0.5, 0.5, 0.0,
+                             -0.5, -0.5, 0.0, 0.5, -0.5, 0.0, 0.5, 0.5, 0.0]
+    @test flat.uvs == [0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0]
+    @test flat.indices == 1:6 && flat.n_vertices == 6 && flat.n_faces == 2
+    @test flat.groups == [(2, 1, 1)]
+    # The plane index is (1, 3, 2), (3, 4, 2), so vertex rows gather as such.
+    @test get_attribute(flat, :morphPosition0).data ==
+          [1.0, 2, 3, 7, 8, 9, 4, 5, 6, 7, 8, 9, 10, 11, 12, 4, 5, 6]
+    line = BufferGeometry(zeros(6), Float64[], Float64[], Int[], 2, 0)
+    @test Diff3D.to_non_indexed(line) === line    # three.js returns `this`
+    short = BufferGeometry(zeros(9), zeros(3), Float64[], [1, 2, 3], 3, 1)
+    @test_throws ArgumentError Diff3D.to_non_indexed(short)
+
+    # Vector3.normalize divides by `length() || 1`; node prints [0.6, 0.8, 0]
+    # and zero for a zero normal. Diff3D also keeps the direction of a normal
+    # whose squared length underflows (three.js leaves it unnormalized).
+    nn = BufferGeometry(zeros(9), [3.0, 4.0, 0.0, 0.0, 0.0, 0.0, 1e-200, 1e-200, 0.0],
+                        Float64[], [1, 2, 3], 3, 1)
+    Diff3D.normalize_normals!(nn)
+    @test nn.normals[1:6] == [0.6000000000000001, 0.8, 0.0, 0.0, 0.0, 0.0]
+    @test nn.normals[7:9] ≈ [sqrt(0.5), sqrt(0.5), 0.0] atol=1e-15
+    @test_throws ArgumentError Diff3D.normalize_normals!(BufferGeometry(zeros(3), Float64[], Float64[], Int[], 1, 0))
+
+    # BufferGeometry.js setFromPoints: Vector2 points get z = 0.
+    pts = Diff3D.set_from_points!(BufferGeometry(), [Vec2(1.0, 2.0), Vec2(3.0, 4.0)])
+    @test pts.positions == [1.0, 2.0, 0.0, 3.0, 4.0, 0.0] && pts.n_vertices == 2
+    Diff3D.set_from_points!(pts, [Vec3(5.0, 6.0, 7.0)])
+    @test pts.positions == [5.0, 6.0, 7.0, 3.0, 4.0, 0.0]
+    @test_throws ArgumentError Diff3D.set_from_points!(pts, fill(Vec3(0.0, 0.0, 0.0), 3))
+
+    g = PlaneGeometry()
+    set_attribute!(g, :color, ones(12), 3)
+    @test Diff3D.delete_attribute!(g, :color) === g && !has_attribute(g, :color)
+    @test isempty(Diff3D.delete_attribute!(g, :normal).normals)
+    @test isempty(Diff3D.delete_attribute!(g, :uv).uvs)
+    @test Diff3D.delete_attribute!(g, :missing) === g
+    @test_throws ArgumentError Diff3D.delete_attribute!(g, :position)
+
+    # Float64 positions/normals/UVs and Int indices: 4 * (12 + 12 + 8) + 8 * 6.
+    @test Diff3D.estimate_bytes_used(PlaneGeometry()) == 8 * 32 + 8 * 6
+end
+
+@testset "to_creased_normals matches BufferGeometryUtils.toCreasedNormals" begin
+    # node prints these normals for an open three-sided CylinderGeometry: at
+    # 0.5 rad every side is flat, at 2.5 rad the sides are smoothed.
+    prism = CylinderGeometry(radius_top=1.0, radius_bottom=1.0, height=1.0,
+                             radial_segments=3, open_ended=true)
+    flat_sides = [0.8660254037844386, 0.0, 0.5000000000000001, 3.8459253727671286e-16, 0.0, -1.0,
+                  -0.8660254037844389, 0.0, 0.4999999999999998]
+    creased = Diff3D.to_creased_normals(prism; crease_angle=0.5)
+    @test creased.n_vertices == 18
+    @test _approx(creased.normals, vcat((repeat(flat_sides[3k-2:3k], 6) for k in 1:3)...))
+    smooth = Diff3D.to_creased_normals(prism; crease_angle=2.5)
+    @test _approx(smooth.normals,
+                  [-0.5000000000000001, 0.0, 0.8660254037844385, 0.5, 0.0, 0.8660254037844388,
+                   1.0, 0.0, 1.281975124255709e-16, 0.5, 0.0, 0.8660254037844388,
+                   0.5000000000000002, 0.0, -0.8660254037844384, 1.0, 0.0, 1.281975124255709e-16,
+                   1.0, 0.0, 1.281975124255709e-16, 0.5000000000000002, 0.0, -0.8660254037844384,
+                   -0.49999999999999967, 0.0, -0.866025403784439, 0.5000000000000002, 0.0,
+                   -0.8660254037844384, -1.0, 0.0, -3.8459253727671286e-16, -0.49999999999999967,
+                   0.0, -0.866025403784439, -0.49999999999999967, 0.0, -0.866025403784439,
+                   -1.0, 0.0, -3.8459253727671286e-16, -0.5000000000000001, 0.0,
+                   0.8660254037844385, -1.0, 0.0, -3.8459253727671286e-16, 0.5, 0.0,
+                   0.8660254037844388, -0.5000000000000001, 0.0, 0.8660254037844385])
+    @test prism.n_vertices == 8          # the input is not modified
+    @test Diff3D.to_creased_normals(BufferGeometry()).n_vertices == 0
+end
+
+@testset "merge_groups! and to_triangles_draw_mode! match BufferGeometryUtils" begin
+    # three.js groups (6,6,2), (0,6,1), (12,6,1), (3,3,2) on PlaneGeometry(1,1,3,1)
+    # are faces (3,2,2), (1,2,1), (5,2,1), (2,1,2). node prints the index
+    # [0,4,1,4,5,1,2,6,3,6,7,3,4,5,1,1,5,2,5,6,2] and groups (0,12,1), (12,9,2).
+    plane = PlaneGeometry(width_segments=3)
+    for group in ((3, 2, 2), (1, 2, 1), (5, 2, 1), (2, 1, 2))
+        add_group!(plane, group...)
+    end
+    @test Diff3D.merge_groups!(plane) === plane
+    @test plane.indices == [0, 4, 1, 4, 5, 1, 2, 6, 3, 6, 7, 3, 4, 5, 1, 1, 5, 2, 5, 6, 2] .+ 1
+    @test plane.n_faces == 7
+    @test plane.groups == [(1, 4, 1), (5, 3, 2)]
+    untouched = PlaneGeometry()
+    @test Diff3D.merge_groups!(untouched).indices == PlaneGeometry().indices
+    # node prints strip [0,2,1,5,1,2,1,5,4,3,4,5] and fan [0,2,1,0,1,5,0,5,4,0,4,3]
+    # for the order [0,2,1,5,4,3].
+    for (mode, expected) in ((:triangle_strip, [0, 2, 1, 5, 1, 2, 1, 5, 4, 3, 4, 5]),
+                             (:triangle_fan, [0, 2, 1, 0, 1, 5, 0, 5, 4, 0, 4, 3]))
+        g = BufferGeometry(zeros(18), Float64[], Float64[], [1, 3, 2, 6, 5, 4], 6, 0)
+        add_group!(g, 1, 1, 0)
+        @test Diff3D.to_triangles_draw_mode!(g, mode) === g
+        @test g.indices == expected .+ 1 && g.n_faces == 4 && isempty(g.groups)
+        unindexed = Diff3D.to_triangles_draw_mode!(
+            BufferGeometry(zeros(12), Float64[], Float64[], Int[], 4, 0), mode)
+        @test unindexed.n_faces == 2
+    end
+    tri = PlaneGeometry()
+    @test Diff3D.to_triangles_draw_mode!(tri, :triangles).indices == PlaneGeometry().indices
+    @test_throws ArgumentError Diff3D.to_triangles_draw_mode!(tri, :points)
+    @test_throws ArgumentError Diff3D.to_triangles_draw_mode!(
+        BufferGeometry(zeros(6), Float64[], Float64[], Int[], 2, 0), :triangle_strip)
+end
