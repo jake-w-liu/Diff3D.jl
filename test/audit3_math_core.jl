@@ -334,4 +334,38 @@ end
           Box3{Float64}
     @test Diff3D.box3_intersect(Box3(Vec3(0, 0, 0), Vec3(1, 1, 1)),
                                 Box3(Vec3(2, 2, 2), Vec3(3, 3, 3))) |> Diff3D.box3_is_empty
+    # three.js tests containment with >=/<= conjunctions, so NaN coordinates
+    # are outside. node: unit.containsPoint((NaN,0.5,0.5)) === false and
+    # unit.intersectsBox(nan_box) === nan_box.intersectsBox(unit) === false.
+    unit = Box3(Vec3(0.0, 0.0, 0.0), Vec3(1.0, 1.0, 1.0))
+    nan_box = Box3(Vec3(0.0, NaN, 0.0), Vec3(1.0, 1.0, 1.0))
+    @test !Diff3D.box3_contains_point(unit, Vec3(NaN, 0.5, 0.5))
+    @test Diff3D.box3_contains_point(unit, Vec3(0.5, 0.5, 0.5))
+    @test !Diff3D.box3_intersects_box(unit, nan_box)
+    @test !Diff3D.box3_intersects_box(nan_box, unit)
+    @test Diff3D.box3_intersects_box(unit, unit)
+    # Integer bounds near typemax: the exact center is typemax(Int) - 0.5,
+    # which rounds to 2^63 in Float64; an integer sum would wrap negative.
+    big_int = Box3(Vec3(typemax(Int) - 1, 0, 0), Vec3(typemax(Int), 0, 0))
+    @test (@inferred Diff3D.box3_center(big_int)) === Vec3(2.0^63, 0.0, 0.0)
+end
+
+@testset "audit3 math-core: rotate_towards keeps one result type" begin
+    # The angle == 0 branch returns `a` (three.js Quaternion.rotateTowards)
+    # in the element type the slerp branch produces.
+    # The identity has an exactly unit dot product with itself, so its angle
+    # is exactly zero and the early return is taken.
+    identity32 = Quaternion(0f0, 0f0, 0f0, 1f0)
+    @test Diff3D.quat_angle_to(identity32, identity32) == 0
+    @test (@inferred Diff3D.quat_rotate_towards(identity32, identity32, 0.3)) ===
+          Quaternion(0.0, 0.0, 0.0, 1.0)
+    @test (@inferred Diff3D.quat_rotate_towards(identity32, identity32, 0.3f0)) ===
+          identity32
+    b = Quaternion(-0.4193139346887673, 0.5241424183609591,
+                   0.10482848367219183, 0.7337993857053428)
+    step = ForwardDiff.Dual(0.3, 1.0)
+    @test (@inferred Diff3D.quat_rotate_towards(Quaternion(), Quaternion(), step)) ===
+          Quaternion(zero(step), zero(step), zero(step), one(step))
+    @test (@inferred Diff3D.quat_rotate_towards(Quaternion(), b, step)) isa
+          Quaternion{typeof(step)}
 end

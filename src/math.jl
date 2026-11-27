@@ -1145,10 +1145,11 @@ end
     euler_from_rotation_matrix(m, order=:XYZ)
 
 Intrinsic Euler angles, in the given order, of the pure rotation in the
-upper-left 3×3 block of `m` (three.js `Euler.setFromRotationMatrix`). Within
-about 1e-7 of gimbal lock three.js sets the third angle to zero; this function
-instead returns coupled angles that reproduce `m`, so the angles can differ
-there while describing the same rotation.
+upper-left 3×3 block of `m` (three.js `Euler.setFromRotationMatrix`). When the
+sine of the middle angle is within 1e-7 of ±1 (the middle angle within about
+4.5e-4 radians of ±π/2), three.js sets one of the other angles to zero, which
+only approximates `m`; this function instead returns coupled angles that
+reproduce `m`, so the angles differ from three.js in that band.
 """
 euler_from_rotation_matrix(m::Mat4, order::Symbol=:XYZ) =
     _rotation_matrix_to_euler(m, order)
@@ -1198,7 +1199,9 @@ box3_is_empty(box::Box3) =
     box.max.x < box.min.x || box.max.y < box.min.y || box.max.z < box.min.z
 
 # (a + b) / 2 as three.js computes it; halve first only when the sum overflows.
+# Integer bounds are summed as floats because an integer sum wraps silently.
 @inline function _box3_midpoint(a, b)
+    a isa Integer && return (float(a) + float(b)) / 2
     sum = a + b
     isfinite(_primal_value(sum)) && return sum / 2
     return a / 2 + b / 2
@@ -1208,6 +1211,8 @@ end
     box3_center(box)
 
 Center of `box`, or the origin for an empty box (three.js `Box3.getCenter`).
+Unlike three.js, a finite box whose `min + max` overflows still has a finite
+center.
 """
 function box3_center(box::Box3)
     if box3_is_empty(box)
@@ -1270,9 +1275,10 @@ end
 `Box3.containsPoint`).
 """
 box3_contains_point(box::Box3, p::Vec3) =
-    !(p.x < box.min.x || p.x > box.max.x ||
-      p.y < box.min.y || p.y > box.max.y ||
-      p.z < box.min.z || p.z > box.max.z)
+    # three.js's conjunction of >=/<= tests, so a NaN coordinate is outside.
+    p.x >= box.min.x && p.x <= box.max.x &&
+    p.y >= box.min.y && p.y <= box.max.y &&
+    p.z >= box.min.z && p.z <= box.max.z
 
 """
     box3_intersects_box(a, b)
@@ -1281,9 +1287,10 @@ box3_contains_point(box::Box3, p::Vec3) =
 `Box3.intersectsBox`).
 """
 box3_intersects_box(a::Box3, b::Box3) =
-    !(a.max.x < b.min.x || a.min.x > b.max.x ||
-      a.max.y < b.min.y || a.min.y > b.max.y ||
-      a.max.z < b.min.z || a.min.z > b.max.z)
+    # three.js's conjunction of >=/<= tests, so a NaN bound never overlaps.
+    b.max.x >= a.min.x && b.min.x <= a.max.x &&
+    b.max.y >= a.min.y && b.min.y <= a.max.y &&
+    b.max.z >= a.min.z && b.min.z <= a.max.z
 
 """
     box3_apply_matrix4(box, m)
@@ -1454,13 +1461,18 @@ end
 """
     quat_rotate_towards(a, b, step)
 
-Rotate unit quaternion `a` towards `b` by at most `step` radians, reaching `b`
-when the remaining angle is not larger than `step` (three.js
-`Quaternion.rotateTowards`).
+Rotate unit quaternion `a` towards `b` by at most `step` radians, reaching the
+rotation of `b` (as `b` or `-b`, along the shorter arc) when the remaining angle
+is not larger than `step` (three.js `Quaternion.rotateTowards`).
 """
 function quat_rotate_towards(a::Quaternion, b::Quaternion, step::Real)
     angle = quat_angle_to(a, b)
-    iszero(angle) && return a
+    if iszero(angle)
+        # three.js returns `a` unchanged; give it the element type of the
+        # slerp branch so the result type does not depend on the value.
+        R = promote_type(typeof(a.x), typeof(angle), typeof(step))
+        return convert(Quaternion{R}, a)
+    end
     return quat_slerp(a, b, min(one(angle), step / angle))
 end
 
