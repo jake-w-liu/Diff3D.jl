@@ -278,19 +278,33 @@ function Texture(data::Array{Float64,3}, wrap_s::Symbol, wrap_t::Symbol, filter:
             _TEXTURE_MATRIX_INVALID_KEY, _texture_tex_coord(tex_coord),
             _texture_max_anisotropy(max_anisotropy), false)
 end
-# three.js DataTexture and DepthTexture default to NearestFilter for both
-# magnification and minification (DataTexture.js, DepthTexture.js constructors).
-DataTexture(data::Array{Float64,3}; filter=:nearest, kwargs...) =
-    Texture(data; filter=filter, kwargs...)
+# three.js DataTexture and DepthTexture default magFilter and minFilter to
+# NearestFilter independently (DataTexture.js:32, DepthTexture.js:28), so an
+# explicit `mag_filter` keeps a nearest `min_filter`. `filter` is the base
+# (magnification) filter, as in the glTF loader, so it follows `mag_filter`.
+function _nearest_default_texture(data::Array{Float64,3}, filter, min_filter,
+                                   mag_filter, kwargs)
+    filter === nothing || return Texture(data; filter=filter, min_filter=min_filter,
+                                         mag_filter=mag_filter, kwargs...)
+    mag = mag_filter === nothing ? :nearest : mag_filter
+    return Texture(data; filter=mag, mag_filter=mag,
+                   min_filter=min_filter === nothing ? :nearest : min_filter,
+                   kwargs...)
+end
+DataTexture(data::Array{Float64,3}; filter=nothing, min_filter=nothing,
+            mag_filter=nothing, kwargs...) =
+    _nearest_default_texture(data, filter, min_filter, mag_filter, kwargs)
 CanvasTexture(data::Array{Float64,3}; kwargs...) = Texture(data; kwargs...)
 
 # Single-channel depth texture.
-DepthTexture(depth::Matrix{Float64}; filter=:nearest, kwargs...) =
-    Texture(reshape(depth, size(depth,1), size(depth,2), 1); filter=filter, kwargs...)
+DepthTexture(depth::Matrix{Float64}; filter=nothing, min_filter=nothing,
+             mag_filter=nothing, kwargs...) =
+    _nearest_default_texture(reshape(depth, size(depth, 1), size(depth, 2), 1),
+                             filter, min_filter, mag_filter, kwargs)
 
 # Wrap a 0-based integer pixel coordinate into [0, n-1] per the mode (n >= 1).
-# Samplers reduce UVs to [0, 1] first, so almost every index is already in
-# range; returning it directly skips the integer divisions of `mod`.
+# Samplers reduce UVs to [0, 1] (one [0, 2] period for mirrored nearest) first,
+# so most indices are already in range; returning them directly skips `mod`.
 @inline function _wrap_coord(i::Int, n::Int, mode::Symbol)
     if mode === :repeat
         return 0 <= i < n ? i : mod(i, n)
@@ -447,12 +461,32 @@ end
 end
 
 # NEAREST texel selection (GLES 3.0 §3.8.10, used by WebGL 2/three.js):
-# i = floor(u * W) and j = floor(v * H), with j counted from the bottom row
-# (three.js flipY image convention). Storage row 1 is the top row, so the
-# 0-based storage row is H - 1 - j. Out-of-range indices are wrapped by
-# `_wrap_coord`, whose clamp/mirror edges are symmetric under this reflection.
-@inline _nearest_texel_column(u, W::Int) = floor(Int, u * W)
-@inline _nearest_texel_row(v, H::Int) = H - 1 - floor(Int, v * H)
+# i = wrap(floor(s * W)) and j = wrap(floor(t * H)); the wrap applies to the
+# integer texel index. Mirrored repeat therefore reduces the coordinate only to
+# one full mirror period [0, 2]: folding it into [0, 1] first would move every
+# texel boundary of a reflected period to the neighbouring texel.
+@inline function _nearest_sampling_uv(x, mode::Symbol)
+    mode === :mirror || return _sampling_uv(x, mode)
+    x = _sanitize_uv(x)
+    return mod(x, one(x) + one(x))
+end
+
+# 0-based (column, storage row) of the NEAREST texel. A 2D texture is uploaded
+# bottom row first (three.js `flipY = true`; web export writes `flip_y=true`),
+# so t = v counts rows from the bottom and the storage row is H - 1 - j. Cube
+# faces are uploaded top row first (CubeTexture.js `flipY = false`; web export
+# writes faces with `flip_y=false`) and GL's face coordinate is t = 1 - v, so
+# j counts storage rows from the top. `_wrap_coord` handles out-of-range
+# indices; its repeat, clamp and mirror patterns commute with i -> H - 1 - i.
+@inline function _nearest_texel_indices(u, v, W::Int, H::Int, wrap_s::Symbol,
+                                        wrap_t::Symbol, rows_from_top::Bool)
+    su = _nearest_sampling_uv(u, wrap_s)
+    sv = _nearest_sampling_uv(v, wrap_t)
+    ix = floor(Int, su * W)
+    iy = rows_from_top ? floor(Int, (1 - sv) * H) : H - 1 - floor(Int, sv * H)
+    # Scalar type that linear filtering returns for the same coordinates.
+    return ix, iy, promote_type(typeof(su), typeof(sv), Float64)
+end
 
 # Nearest filtering returns stored constants. Give them the scalar type that
 # linear filtering returns for the same coordinate so a sampler call has one
@@ -482,21 +516,20 @@ end
 end
 
 function _sample_texture_data(data::Array{Float64,3}, wrap_s::Symbol, wrap_t::Symbol,
-                              filter::Symbol, u, v, label::String)
+                              filter::Symbol, u, v, label::String,
+                              rows_from_top::Bool=false)
     H, W, _ = _checked_texture_data_size(data, label)
     wrap_s = _texture_wrap_symbol(wrap_s)
     wrap_t = _texture_wrap_symbol(wrap_t)
     filter = _texture_filter_symbol(filter)
+    if filter === :nearest
+        ix, iy, T = _nearest_texel_indices(u, v, W, H, wrap_s, wrap_t, rows_from_top)
+        return _texture_filtered_color(_texel_data(data, wrap_s, wrap_t, ix, iy), T)
+    end
     u = _sampling_uv(u, wrap_s)
     v = _sampling_uv(v, wrap_t)
     fx = u * W - 0.5
     fy = (1 - v) * H - 0.5                       # flip v so v=0 maps to the bottom row
-    if filter === :nearest
-        return _texture_filtered_color(
-            _texel_data(data, wrap_s, wrap_t, _nearest_texel_column(u, W),
-                        _nearest_texel_row(v, H)),
-            promote_type(typeof(fx), typeof(fy)))
-    end
     x0 = floor(Int, fx); y0 = floor(Int, fy)
     tx = fx - x0; ty = fy - y0
     c00 = _texel_data(data, wrap_s, wrap_t, x0,   y0)
@@ -514,8 +547,8 @@ end
 Sample the texture at UV `(u,v)` after its UV transform (`tex.matrix`), with
 coordinates outside `[0,1]²` handled by the wrap modes. `v=0` is the bottom
 row. Filtering follows the WebGL rules: `:nearest` reads texel
-`(floor(u·W), floor(v·H))`, and `:bilinear` blends the four texels around
-`(u·W − ½, v·H − ½)`. Returns the raw stored values; see
+`(floor(u·W), floor(v·H))` with the wrap mode applied to that texel index, and
+`:bilinear` blends the four texels around `(u·W − ½, v·H − ½)`. Returns the raw stored values; see
 [`sample_texture_linear`](@ref) for color-space decoding.
 """
 function sample_texture(tex::Texture, u, v)
@@ -560,16 +593,15 @@ function _sample_texture_channel(tex::Texture, u, v, channel::Int, default,
     _texture_wrap_symbol(tex.wrap_t)
     filter = _texture_filter_symbol(tex.filter)
     u, v = texture_transform_uv(tex, u, v)
+    if filter === :nearest
+        ix, iy, T = _nearest_texel_indices(u, v, W, H, tex.wrap_s, tex.wrap_t, false)
+        return _texture_filtered_scalar(
+            transform(_texel_channel(tex, ix, iy, channel, default)), T)
+    end
     u = _sampling_uv(u, tex.wrap_s)
     v = _sampling_uv(v, tex.wrap_t)
     fx = u * W - 0.5
     fy = (1 - v) * H - 0.5
-    if filter === :nearest
-        return _texture_filtered_scalar(transform(
-            _texel_channel(tex, _nearest_texel_column(u, W),
-                           _nearest_texel_row(v, H), channel, default)),
-            promote_type(typeof(fx), typeof(fy)))
-    end
     x0 = floor(Int, fx); y0 = floor(Int, fy)
     tx = fx - x0; ty = fy - y0
     c00 = transform(_texel_channel(tex, x0,   y0,   channel, default))
@@ -721,20 +753,23 @@ end
 @inline _texture_mag_filter_texel_filter(filter::Symbol) =
     filter === :nearest ? :nearest : :bilinear
 
-function _sample_texture_lod_filtered(tex::Texture, u, v, lod::Int, filter::Symbol)
-    lod <= 0 && return _sample_texture_filtered(tex, u, v, filter)
-    isempty(tex.mipmaps) && return _sample_texture_filtered(tex, u, v, filter)
+function _sample_texture_lod_filtered(tex::Texture, u, v, lod::Int, filter::Symbol,
+                                      rows_from_top::Bool=false)
+    lod <= 0 && return _sample_texture_filtered(tex, u, v, filter, rows_from_top)
+    isempty(tex.mipmaps) &&
+        return _sample_texture_filtered(tex, u, v, filter, rows_from_top)
     lvl = tex.mipmaps[min(lod, length(tex.mipmaps))]
     tu, tv = _texture_sample_uv(tex, u, v)
     return _sample_texture_data(lvl, tex.wrap_s, tex.wrap_t, filter, tu, tv,
-                                "sample_texture_lod")
+                                "sample_texture_lod", rows_from_top)
 end
 
-function _sample_texture_filtered(tex::Texture, u, v, filter::Symbol)
+function _sample_texture_filtered(tex::Texture, u, v, filter::Symbol,
+                                  rows_from_top::Bool=false)
     _checked_texture_data_size(tex, "sample_texture")
     tu, tv = _texture_sample_uv(tex, u, v)
     return _sample_texture_data(tex.data, tex.wrap_s, tex.wrap_t, filter, tu, tv,
-                                "sample_texture")
+                                "sample_texture", rows_from_top)
 end
 
 """
@@ -933,10 +968,20 @@ function _cube_face_uv(dir::Vec3)
     end
 end
 
+# Face samples address storage rows from the top for NEAREST texel selection
+# (see `_nearest_texel_indices`); bilinear weights are unaffected.
+@inline _sample_cube_face(tex::Texture, u, v) =
+    _sample_texture_filtered(tex, u, v, tex.filter, true)
+
+function _sample_cube_face_lod(tex::Texture, u, v, lod::Int)
+    _checked_texture_data_size(tex, "sample_texture_lod")
+    return _sample_texture_lod_filtered(tex, u, v, lod, tex.filter, true)
+end
+
 """Sample a cube map along direction `dir` (three.js cube-map convention)."""
 function sample_cube(ct::CubeTexture, dir::Vec3)
     face, u, v = _cube_face_uv(dir)
-    return sample_texture(ct.faces[face], u, v)
+    return _sample_cube_face(ct.faces[face], u, v)
 end
 
 """
@@ -959,15 +1004,15 @@ function sample_cube_lod(ct::CubeTexture, dir::Vec3, lod)
     isfinite(lod_f) || throw(ArgumentError("cubemap lod must be finite"))
     face, u, v = _cube_face_uv(dir)
     tex = ct.faces[face]
-    isempty(tex.mipmaps) && return sample_texture(tex, u, v)
-    lod_f <= 0 && return sample_texture(tex, u, v)
+    isempty(tex.mipmaps) && return _sample_cube_face(tex, u, v)
+    lod_f <= 0 && return _sample_cube_face(tex, u, v)
     nlevels = length(tex.mipmaps)
     lod_clamped = clamp(lod_f, 0.0, Float64(nlevels))
     l0 = floor(Int, lod_clamped)
     frac = lod_clamped - l0
-    c0 = sample_texture_lod(tex, u, v, l0)
+    c0 = _sample_cube_face_lod(tex, u, v, l0)
     frac <= 0 && return c0
-    c1 = sample_texture_lod(tex, u, v, min(l0 + 1, nlevels))
+    c1 = _sample_cube_face_lod(tex, u, v, min(l0 + 1, nlevels))
     return _stable_color_lerp(c0, c1, frac)
 end
 
