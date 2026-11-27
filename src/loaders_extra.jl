@@ -11179,7 +11179,8 @@ end
 function _gltf_animation_clips(gltf, buffers, node_objects)
     haskey(gltf, "animations") || return AnimationClip[]
     clips = AnimationClip[]
-    node_object_set = IdSet{Any}(values(node_objects))
+    # Base.IdSet is unexported before Julia 1.11.
+    node_object_set = Base.IdSet{Any}(values(node_objects))
     for (ai, anim) in enumerate(gltf["animations"])
         samplers = anim["samplers"]
         channels = get(anim, "channels", Any[])
