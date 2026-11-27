@@ -537,3 +537,207 @@ end
     @test ascii.positions == [0.5, 0, 0, 1, 0, 0, 0, 1, 0]
     @test ascii.normals == repeat([0.0, 0, 1], 3)
 end
+
+# The scene the save_gltf tests write: a vertex-coloured, morphing quad under
+# a group, a translucent line, an unlit box and a hidden mesh.
+function _a3b_export_scene()
+    scene = Scene()
+    scene.name = "world"
+    geo = BufferGeometry([0.0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0],
+                         [0.0, 0, 1, 0, 0, 1, 0, 0, 2, 0, 0, 1],
+                         [0.0, 0, 1, 0, 0, 1, 1, 1], [1, 2, 3, 2, 4, 3], 4, 2)
+    set_attribute!(geo, :color, [1.0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 1, 1], 3)
+    set_attribute!(geo, :morphPosition0, [0.0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1], 3)
+    mat = MeshStandardMaterial(color=Color3(0.5, 0.25, 1.0), metalness=0.3, roughness=0.7,
+                               emissive=Color3(0.1, 0, 0), emissive_intensity=2.0,
+                               vertex_colors=true, side=:double)
+    quad = Mesh(geo, mat; name="quad", morph_target_influences=[0.25],
+                morph_target_names=["lift"])
+    quad.position = Vec3(1.0, 2.0, 3.0)
+    quad.rotation = Euler(0.1, 0.2, 0.3, :XYZ)
+    quad.scale = Vec3(2.0, 2.0, 2.0)
+    holder = Group(name="holder")
+    add!(holder, quad)
+    add!(scene, holder)
+    line = LineSegments(BufferGeometry([0.0, 0, 0, 0, 0, 1], Float64[], Float64[], Int[], 2, 0),
+                        LineBasicMaterial(color=Color3(0.0, 1, 0), opacity=0.5); name="seg")
+    add!(holder, line)
+    add!(scene, Mesh(BoxGeometry(), MeshBasicMaterial(color=Color3(0.2, 0.3, 0.4),
+                                                     transparent=true, opacity=0.5); name="box"))
+    hidden = Mesh(BoxGeometry(), MeshBasicMaterial(); name="hidden")
+    hidden.visible = false
+    add!(scene, hidden)
+    clip = AnimationClip("move", Diff3D.AbstractKeyframeTrack[
+        KeyframeTrack(holder, :position, [0.0, 1.0], [Vec3(0.0, 0, 0), Vec3(1.0, 0, 0)];
+                      interpolation=:linear),
+        QuaternionKeyframeTrack(quad, :rotation, [0.0, 2.0],
+                                [Quaternion(0.0, 0, 0, 1),
+                                 Quaternion(0.0, 0.7071067811865476, 0, 0.7071067811865476)]),
+        MorphWeightsKeyframeTrack(quad, :morph_target_influences, [0.0, 0.5], [[0.0], [1.0]];
+                                  interpolation=:step)])
+    return scene, clip
+end
+
+@testset "save_gltf writes glTF that load_gltf and GLTFLoader read back" begin
+    scene, clip = _a3b_export_scene()
+    dir = mktempdir()
+    for (file, load) in (("s.gltf", load_gltf_asset), ("s.glb", load_glb_asset))
+        path = joinpath(dir, file)
+        @test Diff3D.save_gltf(path, scene; animations=[clip]) == path
+        asset = load(path)
+        objs = _a3b_objects(asset.scene)
+        # Each mesh node loads as a Group holding its primitive; the hidden
+        # mesh is left out (GLTFExporter's default onlyVisible).
+        @test [o.name for o in objs if o isa Group] == ["holder", "quad", "seg", "box"]
+        quad_node = only(o for o in objs if o isa Group && o.name == "quad")
+        m = only(quad_node.children)
+        @test m.geometry.positions == [0.0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0]
+        @test m.geometry.normals == repeat([0.0, 0, 1], 4)  # normalised on export
+        @test m.geometry.uvs == [0.0, 0, 1, 0, 0, 1, 1, 1]
+        @test m.geometry.indices == [1, 2, 3, 2, 4, 3]
+        @test get_attribute(m.geometry, :color).data == [1.0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 1, 1]
+        @test get_attribute(m.geometry, :morphPosition0).data == repeat([0.0, 0, 1], 4)
+        @test m.morph_target_influences == [0.25] && m.morph_target_names == ["lift"]
+        @test m.material isa MeshStandardMaterial
+        @test m.material.color == Color3(0.5, 0.25, 1.0)
+        @test (m.material.metalness, m.material.roughness) == (0.3, 0.7)
+        @test m.material.emissive == Color3(0.1, 0.0, 0.0) && m.material.emissive_intensity == 2.0
+        @test m.material.vertex_colors && m.material.side === :double
+        @test quad_node.position == Vec3(1.0, 2.0, 3.0) && quad_node.scale == Vec3(2.0, 2.0, 2.0)
+        r = quad_node.rotation
+        @test isapprox([r.x, r.y, r.z], [0.1, 0.2, 0.3]; atol=1e-14)
+        line = only(o for o in objs if o isa LineSegments)
+        @test line.geometry.positions == [0.0, 0, 0, 0, 0, 1]
+        @test line.material.color == Color3(0.0, 1.0, 0.0) && line.material.opacity == 0.5
+        box = only(only(o for o in objs if o isa Group && o.name == "box").children)
+        @test box.material isa MeshBasicMaterial && box.material.transparent &&
+              box.material.opacity == 0.5
+        anim = only(asset.animations)
+        @test anim.name == "move" && anim.duration == 2.0
+        @test [typeof(t) for t in anim.tracks] ==
+              [KeyframeTrack, QuaternionKeyframeTrack, MorphWeightsKeyframeTrack]
+        @test anim.tracks[1].target.name == "holder" && anim.tracks[1].values[2] == Vec3(1.0, 0, 0)
+        @test anim.tracks[2].target === quad_node
+        @test anim.tracks[3].target === m && anim.tracks[3].interpolation === :step
+    end
+    # three.js r186 GLTFLoader.parse of both files (oracle): node "quad" with
+    # quaternion [0.06407134770607117, 0.09115754934299072, 0.1534393020242226,
+    # 0.981856172866081] (= Quaternion.setFromEuler(0.1, 0.2, 0.3, 'XYZ')),
+    # MeshStandardMaterial metalness 0.3, roughness 0.7, emissiveIntensity 2,
+    # side DoubleSide, vertexColors true, morphTargetInfluences [0.25];
+    # LineSegments LineBasicMaterial opacity 0.5 transparent; box
+    # MeshBasicMaterial (KHR_materials_unlit) opacity 0.5; tracks
+    # holder.position (linear), quad.quaternion (linear),
+    # quad.morphTargetInfluences (discrete).
+    text = read(joinpath(dir, "s.gltf"), String)
+    rotation = match(r"\"rotation\":\[([^\]]*)\]", text)
+    @test isapprox(parse.(Float64, split(rotation[1], ',')),
+                   [0.06407134770607115, 0.09115754934299071, 0.15343930202422257,
+                    0.9818561728660807]; atol=1e-15)
+    @test occursin("\"KHR_materials_emissive_strength\":{\"emissiveStrength\":2.0}", text)
+    @test occursin("\"KHR_materials_unlit\":{}", text)
+    # GLTFExporter.js:2972-2973: unlit materials carry roughness 0.9.
+    @test occursin("\"roughnessFactor\":0.9", text)
+    bytes = read(joinpath(dir, "s.glb"))
+    @test bytes[1:4] == b"glTF" && reinterpret(UInt32, bytes[9:12])[1] == length(bytes)
+    @test length(bytes) % 4 == 0
+
+    # Rotation orders other than XYZ, cubic splines and 32-bit indices.
+    n = 65538
+    big = BufferGeometry(repeat([0.0, 0, 0, 1, 0, 0, 0, 1, 0], n ÷ 3), Float64[], Float64[],
+                         collect(1:n), n, n ÷ 3)
+    obj = Mesh(big, MeshPhongMaterial(color=Color3(0.0, 0.5, 0.0)); name="big")
+    obj.rotation = Euler(0.1, 0.2, 0.3, :ZYX)
+    spline = AnimationClip("spline", Diff3D.AbstractKeyframeTrack[
+        CubicSplineKeyframeTrack(obj, :position, [0.0, 1.0], [Vec3(0.0, 0, 0), Vec3(1.0, 2, 3)],
+                                 [Vec3(0.0, 0, 0), Vec3(1.0, 0, 0)],
+                                 [Vec3(0.0, 1, 0), Vec3(0.0, 0, 0)])])
+    path = Diff3D.save_gltf(joinpath(dir, "big.glb"), obj; animations=[spline])
+    asset = load_glb_asset(path)
+    node = only(o for o in _a3b_objects(asset.scene) if o isa Group && o.name == "big")
+    loaded = only(node.children)
+    @test loaded.geometry.indices == 1:n
+    # GLTFExporter.js:1680-1684: Phong exports as metallic 0, roughness 1.
+    @test loaded.material isa MeshStandardMaterial
+    @test (loaded.material.metalness, loaded.material.roughness) == (0.0, 1.0)
+    @test loaded.material.color == Color3(0.0, 0.5, 0.0)
+    # three.js Quaternion.setFromEuler(0.1, 0.2, 0.3, 'ZYX') (oracle).
+    q = quat_from_euler(0.1, 0.2, 0.3; order=:ZYX)
+    @test isapprox([q.x, q.y, q.z, q.w],
+                   [0.03427079855048209, 0.10602051106179562, 0.1435721750273919,
+                    0.9833474432563557]; atol=1e-15)
+    rq = node.rotation
+    q2 = quat_from_euler(rq.x, rq.y, rq.z; order=rq.order)
+    @test isapprox(abs(q.x * q2.x + q.y * q2.y + q.z * q2.z + q.w * q2.w), 1.0; atol=1e-12)
+    track = only(only(asset.animations).tracks)
+    @test track isa CubicSplineKeyframeTrack && track.values == [Vec3(0.0, 0, 0), Vec3(1.0, 2, 3)]
+    @test track.in_tangents[2] == Vec3(1.0, 0, 0) && track.out_tangents[1] == Vec3(0.0, 1, 0)
+end
+
+@testset "save_gltf reports what it cannot export" begin
+    dir = mktempdir()
+    out = joinpath(dir, "x.gltf")
+    tri() = BufferGeometry([0.0, 0, 0, 1, 0, 0, 0, 1, 0], Float64[], Float64[], [1, 2, 3], 3, 1)
+    scene = Scene()
+    add!(scene, DirectionalLight())
+    @test_throws "save_gltf: DirectionalLight objects cannot be exported" Diff3D.save_gltf(out, scene)
+    @test_throws "save_gltf: PerspectiveCamera objects cannot be exported" Diff3D.save_gltf(
+        out, PerspectiveCamera())
+    tex = Texture(ones(2, 2, 3))
+    @test_throws "save_gltf: MeshStandardMaterial.map is set; textures cannot be exported" Diff3D.save_gltf(
+        out, Mesh(tri(), MeshStandardMaterial(map=tex)))
+    @test_throws "save_gltf: MeshPhysicalMaterial cannot be exported" Diff3D.save_gltf(
+        out, Mesh(tri(), MeshPhysicalMaterial()))
+    @test_throws "save_gltf: back-side materials cannot be exported" Diff3D.save_gltf(
+        out, Mesh(tri(), MeshStandardMaterial(side=:back)))
+    @test_throws "save_gltf: wireframe materials cannot be exported" Diff3D.save_gltf(
+        out, Mesh(tri(), MeshBasicMaterial(wireframe=true)))
+    g = tri()
+    set_attribute!(g, :weight, [1.0, 2.0, 3.0], 1)
+    @test_throws "save_gltf: geometry attribute :weight cannot be exported" Diff3D.save_gltf(
+        out, Mesh(g, MeshStandardMaterial()))
+    g = tri()
+    g.positions[2] = NaN
+    @test_throws "save_gltf: POSITION value NaN is not a finite 32-bit float" Diff3D.save_gltf(
+        out, Mesh(g, MeshStandardMaterial()))
+    g = tri()
+    g.positions[2] = 1e39
+    @test_throws "is not a finite 32-bit float" Diff3D.save_gltf(out, Mesh(g, MeshStandardMaterial()))
+    g = tri()
+    g.normals = [0.0, 0, 1, 0, 0, 0, 0, 0, 1]
+    @test_throws "save_gltf: geometry normal 2 is zero or not finite" Diff3D.save_gltf(
+        out, Mesh(g, MeshStandardMaterial()))
+    g = tri()
+    g.indices = [1, 2, 4]
+    @test_throws "save_gltf: geometry index 4 is out of bounds for 3 vertices" Diff3D.save_gltf(
+        out, Mesh(g, MeshStandardMaterial()))
+    m = Mesh(tri(), MeshStandardMaterial(); morph_target_influences=[0.5])
+    @test_throws "save_gltf: 1 morph influences for 0 morph targets" Diff3D.save_gltf(out, m)
+    m = Mesh(tri(), MeshStandardMaterial())
+    m.flat_shading = true
+    @test_throws "save_gltf: flat_shading=true cannot be exported" Diff3D.save_gltf(out, m)
+    m = Mesh(tri(), MeshStandardMaterial(); name="m")
+    other = Group()
+    @test_throws "save_gltf: animation \"a\" has no tracks" Diff3D.save_gltf(
+        out, m; animations=[AnimationClip("a", 1.0, Diff3D.AbstractKeyframeTrack[])])
+    @test_throws "save_gltf: animation \"b\" targets an object that is not exported" Diff3D.save_gltf(
+        out, m; animations=[AnimationClip("b", Diff3D.AbstractKeyframeTrack[
+            KeyframeTrack(other, :position, [0.0, 1.0], [Vec3(), Vec3(1.0, 0, 0)])])])
+    @test_throws "save_gltf: smooth (:cubic) KeyframeTracks cannot be exported" Diff3D.save_gltf(
+        out, m; animations=[AnimationClip("c", Diff3D.AbstractKeyframeTrack[
+            KeyframeTrack(m, :position, [0.0, 1.0], [Vec3(), Vec3(1.0, 0, 0)];
+                          interpolation=:cubic)])])
+    @test_throws "save_gltf: a morph weights track targets an object without morph targets" Diff3D.save_gltf(
+        out, m; animations=[AnimationClip("d", Diff3D.AbstractKeyframeTrack[
+            MorphWeightsKeyframeTrack(m, :morph_target_influences, [0.0, 1.0], [[0.0], [1.0]])])])
+    # Nothing is written when export fails.
+    @test !isfile(out)
+    # An empty scene is a valid document without buffers.
+    Diff3D.save_gltf(out, Scene())
+    @test isempty(load_gltf(out).children)
+    @test !occursin("buffers", read(out, String))
+    # Names are JSON-escaped.
+    q = Mesh(tri(), MeshStandardMaterial(); name="a\"b\\c\nd\u01")
+    Diff3D.save_gltf(out, q)
+    @test only(o for o in _a3b_objects(load_gltf(out)) if o isa Group).name == "a\"b\\c\nd\u01"
+end

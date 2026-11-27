@@ -11868,3 +11868,580 @@ function load_glb_asset(path::String)
     gltf, buffers, dir = _parse_glb(path)
     return _gltf_build_asset(gltf, buffers; dir=dir)
 end
+
+# ============================ glTF export ============================
+# A subset of three.js GLTFExporter (examples/jsm/exporters/GLTFExporter.js):
+# node hierarchy and transforms, triangle/line/point primitives with their
+# vertex attributes and morph targets, untextured materials, and transform
+# and morph-weight animations. Everything else is reported, not dropped.
+
+_gltfx_error(msg::AbstractString) = throw(ArgumentError("save_gltf: " * msg))
+
+mutable struct _GLTFExportWriter
+    bin::Vector{UInt8}
+    buffer_views::Vector{Any}
+    accessors::Vector{Any}
+    nodes::Vector{Any}
+    meshes::Vector{Any}
+    materials::Vector{Any}
+    material_index::Dict{Any,Int}
+    node_index::IdDict{Any,Int}
+    morph_counts::IdDict{Any,Int}
+    extensions_used::Vector{String}
+end
+
+_GLTFExportWriter() = _GLTFExportWriter(UInt8[], Any[], Any[], Any[], Any[], Any[],
+                                        Dict{Any,Int}(), IdDict{Any,Int}(),
+                                        IdDict{Any,Int}(), String[])
+
+function _gltfx_use_extension!(w::_GLTFExportWriter, name::String)
+    name in w.extensions_used || push!(w.extensions_used, name)
+    return w
+end
+
+function _gltfx_buffer_view!(w::_GLTFExportWriter, bytes::AbstractVector{UInt8}, target)
+    # Accessor offsets must be multiples of the component size (glTF 2.0
+    # §3.6.2.4); four bytes covers every type written here.
+    while length(w.bin) % 4 != 0
+        push!(w.bin, 0x00)
+    end
+    view = Dict{String,Any}("buffer" => 0, "byteOffset" => length(w.bin),
+                            "byteLength" => length(bytes))
+    target === nothing || (view["target"] = target)
+    append!(w.bin, bytes)
+    push!(w.buffer_views, view)
+    return length(w.buffer_views) - 1
+end
+
+const _GLTFX_TYPES = Dict(1 => "SCALAR", 2 => "VEC2", 3 => "VEC3", 4 => "VEC4")
+
+# A FLOAT accessor of `ncomp`-component items; min/max are written where glTF
+# requires them (POSITION, animation inputs).
+function _gltfx_float_accessor!(w::_GLTFExportWriter, data::AbstractVector{<:Real}, ncomp::Int,
+                                what::String; minmax::Bool=false, target=nothing)
+    isempty(data) && _gltfx_error("$what is empty")
+    length(data) % ncomp == 0 ||
+        _gltfx_error("$what has $(length(data)) values, not a multiple of $ncomp")
+    values = Vector{Float32}(undef, length(data))
+    for i in eachindex(data)
+        x = Float32(data[i])
+        isfinite(x) || _gltfx_error("$what value $(data[i]) is not a finite 32-bit float")
+        values[i] = x
+    end
+    acc = Dict{String,Any}("bufferView" => _gltfx_buffer_view!(w, reinterpret(UInt8, values), target),
+                           "componentType" => 5126, "count" => length(values) ÷ ncomp,
+                           "type" => _GLTFX_TYPES[ncomp])
+    if minmax
+        acc["min"] = [Float64(minimum(@view values[k:ncomp:end])) for k in 1:ncomp]
+        acc["max"] = [Float64(maximum(@view values[k:ncomp:end])) for k in 1:ncomp]
+    end
+    push!(w.accessors, acc)
+    return length(w.accessors) - 1
+end
+
+function _gltfx_index_accessor!(w::_GLTFExportWriter, indices::Vector{Int}, nverts::Int)
+    for i in indices
+        1 <= i <= nverts || _gltfx_error("geometry index $i is out of bounds for $nverts vertices")
+    end
+    # The largest value of the component type is reserved for primitive
+    # restart (glTF 2.0 §3.7.2.1), so 16-bit indices reach 65534.
+    if nverts <= 65535
+        bytes = reinterpret(UInt8, UInt16[i - 1 for i in indices])
+        ctype = 5123
+    else
+        nverts <= 4294967295 || _gltfx_error("geometry has too many vertices for 32-bit indices")
+        bytes = reinterpret(UInt8, UInt32[i - 1 for i in indices])
+        ctype = 5125
+    end
+    push!(w.accessors, Dict{String,Any}("bufferView" => _gltfx_buffer_view!(w, bytes, 34963),
+                                        "componentType" => ctype, "count" => length(indices),
+                                        "type" => "SCALAR"))
+    return length(w.accessors) - 1
+end
+
+function _gltfx_color(c, what::String)
+    for x in (c.r, c.g, c.b)
+        isfinite(x) || _gltfx_error("$what has a non-finite component")
+    end
+    return Float64[c.r, c.g, c.b]
+end
+
+function _gltfx_material_def(w::_GLTFExportWriter, mat)
+    T = typeof(mat)
+    for f in fieldnames(T)
+        name = String(f)
+        if (name == "map" || endswith(name, "_map") || name == "envmap") &&
+           getfield(mat, f) !== nothing
+            _gltfx_error("$(nameof(T)).$name is set; textures cannot be exported")
+        end
+    end
+    hasfield(T, :clipping_planes) && !isempty(mat.clipping_planes) &&
+        _gltfx_error("$(nameof(T)) clipping planes cannot be exported")
+    hasfield(T, :wireframe) && mat.wireframe &&
+        _gltfx_error("wireframe materials cannot be exported")
+    side = hasfield(T, :side) ? mat.side : :front
+    side === :back &&
+        _gltfx_error("back-side materials cannot be exported; glTF materials are single- or double-sided")
+    pbr = Dict{String,Any}()
+    def = Dict{String,Any}("pbrMetallicRoughness" => pbr)
+    if mat isa MeshStandardMaterial
+        pbr["metallicFactor"] = Float64(mat.metalness)
+        pbr["roughnessFactor"] = Float64(mat.roughness)
+    elseif mat isa MeshBasicMaterial
+        # GLTFExporter.js:2962-2973 (KHR_materials_unlit)
+        pbr["metallicFactor"] = 0.0
+        pbr["roughnessFactor"] = 0.9
+        def["extensions"] = Dict{String,Any}("KHR_materials_unlit" => Dict{String,Any}())
+        _gltfx_use_extension!(w, "KHR_materials_unlit")
+    elseif mat isa Union{MeshPhongMaterial, MeshLambertMaterial, LineBasicMaterial, PointsMaterial}
+        # GLTFExporter.js:1680-1684 for materials without metalness/roughness.
+        pbr["metallicFactor"] = 0.0
+        pbr["roughnessFactor"] = 1.0
+    else
+        _gltfx_error("$(nameof(T)) cannot be exported; use MeshStandardMaterial, MeshBasicMaterial, MeshPhongMaterial, MeshLambertMaterial, LineBasicMaterial or PointsMaterial")
+    end
+    opacity = Float64(mat.opacity)
+    0.0 <= opacity <= 1.0 || _gltfx_error("material opacity $opacity is outside [0, 1]")
+    # GLTFExporter.js:1666-1672
+    color = vcat(_gltfx_color(mat.color, "material colour"), opacity)
+    color == [1.0, 1.0, 1.0, 1.0] || (pbr["baseColorFactor"] = color)
+    if hasfield(T, :emissive)
+        emissive = _gltfx_color(mat.emissive, "material emissive")
+        any(!iszero, emissive) && (def["emissiveFactor"] = emissive)
+        strength = Float64(mat.emissive_intensity)
+        isfinite(strength) && strength >= 0 ||
+            _gltfx_error("material emissive_intensity $strength must be finite and non-negative")
+        if strength != 1.0
+            # GLTFExporter.js:3478-3486
+            ext = get!(() -> Dict{String,Any}(), def, "extensions")
+            ext["KHR_materials_emissive_strength"] = Dict{String,Any}("emissiveStrength" => strength)
+            _gltfx_use_extension!(w, "KHR_materials_emissive_strength")
+        end
+    end
+    # GLTFExporter.js:1810-1826. LineBasicMaterial has no transparent flag and
+    # blends whenever its opacity is below one.
+    transparent = hasfield(T, :transparent) ? mat.transparent : opacity < 1.0
+    alpha_test = hasfield(T, :alpha_test) ? Float64(mat.alpha_test) : 0.0
+    if transparent
+        def["alphaMode"] = "BLEND"
+    elseif alpha_test > 0.0
+        def["alphaMode"] = "MASK"
+        def["alphaCutoff"] = alpha_test
+    end
+    side === :double && (def["doubleSided"] = true)
+    return def
+end
+
+function _gltfx_material!(w::_GLTFExportWriter, mat)
+    mat isa AbstractMaterial || _gltfx_error("objects need a single material, not $(typeof(mat))")
+    idx = get(w.material_index, mat, nothing)
+    idx === nothing || return idx
+    push!(w.materials, _gltfx_material_def(w, mat))
+    idx = length(w.materials) - 1
+    w.material_index[mat] = idx
+    return idx
+end
+
+# glTF normals are unit length (glTF 2.0 §3.7.2.1); GLTFExporter.js:1932-1938
+# normalises them the same way.
+function _gltfx_unit_normals(normals::Vector{Float64})
+    out = similar(normals)
+    for i in 1:3:length(normals)
+        x, y, z = normals[i], normals[i + 1], normals[i + 2]
+        len = sqrt(x * x + y * y + z * z)
+        isfinite(len) && len > 0 ||
+            _gltfx_error("geometry normal $((i + 2) ÷ 3) is zero or not finite")
+        out[i] = x / len; out[i + 1] = y / len; out[i + 2] = z / len
+    end
+    return out
+end
+
+const _GLTFX_MORPH_KINDS = (("morphPosition", "POSITION"), ("morphNormal", "NORMAL"),
+                            ("morphTangent", "TANGENT"))
+
+# (glTF target attribute, 0-based target) of a morph attribute name, or nothing.
+function _gltfx_morph_slot(name::Symbol)
+    s = String(name)
+    for (prefix, gltf_name) in _GLTFX_MORPH_KINDS
+        startswith(s, prefix) || continue
+        digits = SubString(s, length(prefix) + 1)
+        all(isdigit, digits) && !isempty(digits) || continue
+        k = tryparse(Int, digits)
+        k === nothing || return gltf_name, k
+    end
+    return nothing
+end
+
+const _GLTFX_PRIMITIVE_OBJECTS = Union{Mesh, LineSegments, LineLoop, LineObject, PointsObject}
+const _GLTFX_VERTEX_COLOR_MATERIALS = Union{MeshStandardMaterial, MeshBasicMaterial,
+                                            MeshPhongMaterial, MeshLambertMaterial}
+
+function _gltfx_mesh!(w::_GLTFExportWriter, obj)
+    geo = obj.geometry
+    geo isa BufferGeometry || _gltfx_error("$(obj.name) has no BufferGeometry")
+    isempty(geo.groups) || _gltfx_error("geometry groups (multi-material meshes) cannot be exported")
+    geo.draw_range === nothing || _gltfx_error("geometry draw ranges cannot be exported")
+    obj isa Mesh && obj.flat_shading === true &&
+        _gltfx_error("flat_shading=true cannot be exported; give the geometry face normals instead")
+    mode = obj isa Mesh ? 4 : obj isa LineSegments ? 1 : obj isa LineLoop ? 2 :
+           obj isa LineObject ? 3 : 0
+    mat = obj.material
+    n = geo.n_vertices
+    n > 0 && length(geo.positions) == 3n ||
+        _gltfx_error("geometry must have 3 position values for each of its $n vertices")
+    attrs = Dict{String,Any}()
+    attrs["POSITION"] = _gltfx_float_accessor!(w, geo.positions, 3, "POSITION";
+                                               minmax=true, target=34962)
+    if !isempty(geo.normals)
+        length(geo.normals) == 3n || _gltfx_error("geometry normals do not match its vertices")
+        attrs["NORMAL"] = _gltfx_float_accessor!(w, _gltfx_unit_normals(geo.normals), 3,
+                                                 "NORMAL"; target=34962)
+    end
+    if !isempty(geo.uvs)
+        length(geo.uvs) == 2n || _gltfx_error("geometry uvs do not match its vertices")
+        attrs["TEXCOORD_0"] = _gltfx_float_accessor!(w, geo.uvs, 2, "TEXCOORD_0"; target=34962)
+    end
+    targets = Dict{Int,Dict{String,Any}}()
+    for name in sort!(collect(keys(geo.attributes)))
+        attr = geo.attributes[name]
+        attr.item_size * n == length(attr.data) ||
+            _gltfx_error("geometry attribute :$name does not match its vertices")
+        slot = _gltfx_morph_slot(name)
+        if slot !== nothing
+            gltf_name, k = slot
+            attr.item_size == 3 || _gltfx_error("morph attribute :$name must have 3 components")
+            t = get!(() -> Dict{String,Any}(), targets, k)
+            t[gltf_name] = _gltfx_float_accessor!(w, attr.data, 3, "morph attribute :$name";
+                                                  minmax=gltf_name == "POSITION", target=34962)
+        elseif name === :color
+            attr.item_size in (3, 4) || _gltfx_error("colour attribute must have 3 or 4 components")
+            # glTF loaders turn COLOR_0 into vertex colours (Diff3D load_gltf
+            # and GLTFLoader.js assignFinalMaterial), so a mesh material that
+            # ignores the attribute keeps it out of the file.
+            mat isa _GLTFX_VERTEX_COLOR_MATERIALS && !mat.vertex_colors && continue
+            attrs["COLOR_0"] = _gltfx_float_accessor!(w, attr.data, attr.item_size, "COLOR_0";
+                                                      target=34962)
+        elseif name === :uv2
+            attr.item_size == 2 || _gltfx_error("uv2 attribute must have 2 components")
+            attrs["TEXCOORD_1"] = _gltfx_float_accessor!(w, attr.data, 2, "TEXCOORD_1";
+                                                         target=34962)
+        elseif name === :tangent
+            attr.item_size == 4 || _gltfx_error("tangent attribute must have 4 components")
+            attrs["TANGENT"] = _gltfx_float_accessor!(w, attr.data, 4, "TANGENT"; target=34962)
+        else
+            _gltfx_error("geometry attribute :$name cannot be exported")
+        end
+    end
+    prim = Dict{String,Any}("attributes" => attrs, "mode" => mode,
+                            "material" => _gltfx_material!(w, mat))
+    if !isempty(geo.indices)
+        mode == 4 && length(geo.indices) % 3 != 0 &&
+            _gltfx_error("triangle indices must come in threes")
+        prim["indices"] = _gltfx_index_accessor!(w, geo.indices, n)
+    elseif mode == 4
+        n % 3 == 0 || _gltfx_error("a non-indexed triangle geometry needs a multiple of 3 vertices")
+    end
+    mesh = Dict{String,Any}("primitives" => Any[prim])
+    ntargets = isempty(targets) ? 0 : maximum(keys(targets)) + 1
+    if ntargets > 0
+        for k in 0:(ntargets - 1)
+            haskey(targets, k) || _gltfx_error("morph target $k has no attributes")
+        end
+        prim["targets"] = Any[targets[k] for k in 0:(ntargets - 1)]
+    end
+    influences = obj.morph_target_influences
+    if !isempty(influences)
+        length(influences) == ntargets ||
+            _gltfx_error("$(length(influences)) morph influences for $ntargets morph targets")
+        all(isfinite, influences) || _gltfx_error("morph influences must be finite")
+        any(!iszero, influences) && (mesh["weights"] = Float64.(influences))
+    end
+    names = obj.morph_target_names
+    if !isempty(names)
+        length(names) == ntargets ||
+            _gltfx_error("$(length(names)) morph target names for $ntargets morph targets")
+        # GLTFExporter.js:2086-2090
+        mesh["extras"] = Dict{String,Any}("targetNames" => collect(String, names))
+    end
+    w.morph_counts[obj] = ntargets
+    push!(w.meshes, mesh)
+    return length(w.meshes) - 1
+end
+
+function _gltfx_node!(w::_GLTFExportWriter, obj)
+    obj isa Union{Group, Object3D, _GLTFX_PRIMITIVE_OBJECTS} ||
+        _gltfx_error("$(nameof(typeof(obj))) objects cannot be exported; it writes groups, meshes, lines and points")
+    _validate_object_transform(obj)
+    node = Dict{String,Any}()
+    push!(w.nodes, node)
+    idx = length(w.nodes) - 1
+    w.node_index[obj] = idx
+    isempty(obj.name) || (node["name"] = obj.name)
+    p, r, s = obj.position, obj.rotation, obj.scale
+    (p.x, p.y, p.z) == (0.0, 0.0, 0.0) || (node["translation"] = Float64[p.x, p.y, p.z])
+    if (r.x, r.y, r.z) != (0.0, 0.0, 0.0)
+        q = quat_normalize(quat_from_euler(r.x, r.y, r.z; order=r.order))
+        node["rotation"] = Float64[q.x, q.y, q.z, q.w]
+    end
+    (s.x, s.y, s.z) == (1.0, 1.0, 1.0) || (node["scale"] = Float64[s.x, s.y, s.z])
+    obj isa _GLTFX_PRIMITIVE_OBJECTS && (node["mesh"] = _gltfx_mesh!(w, obj))
+    children = Int[]
+    for child in get_children(obj)
+        # GLTFExporter's default onlyVisible: hidden objects are left out.
+        is_visible(child) || continue
+        push!(children, _gltfx_node!(w, child))
+    end
+    isempty(children) || (node["children"] = children)
+    return idx
+end
+
+function _gltfx_times(times::Vector{Float64})
+    for i in 2:length(times)
+        times[i] > times[i - 1] || _gltfx_error("animation times must be strictly increasing")
+    end
+    return times
+end
+
+_gltfx_quat(q) = (q.x, q.y, q.z, q.w)
+_gltfx_vec3(v) = (v.x, v.y, v.z)
+
+function _gltfx_flat(values, f)
+    out = Float64[]
+    for v in values
+        append!(out, f(v))
+    end
+    return out
+end
+
+# glTF CUBICSPLINE output: in-tangent, value, out-tangent per keyframe.
+function _gltfx_cubic(ins, vals, outs, f)
+    out = Float64[]
+    for k in eachindex(vals)
+        append!(out, f(ins[k])); append!(out, f(vals[k])); append!(out, f(outs[k]))
+    end
+    return out
+end
+
+function _gltfx_check_weights(values, count::Int)
+    for v in values
+        length(v) == count || _gltfx_error("morph weight keyframes need $count values each")
+    end
+    return nothing
+end
+
+# glTF animation path, sampler interpolation, output values and their
+# component count for one track.
+function _gltfx_track_output(w::_GLTFExportWriter, track)
+    if track isa KeyframeTrack
+        track.property in (:position, :scale) ||
+            _gltfx_error("KeyframeTrack property :$(track.property) cannot be exported")
+        track.interpolation === :cubic &&
+            _gltfx_error("smooth (:cubic) KeyframeTracks cannot be exported; glTF has LINEAR, STEP and CUBICSPLINE")
+        return track.property === :position ? "translation" : "scale",
+               track.interpolation === :step ? "STEP" : "LINEAR",
+               _gltfx_flat(track.values, _gltfx_vec3), 3
+    elseif track isa QuaternionKeyframeTrack
+        track.property in (:rotation, :quaternion) ||
+            _gltfx_error("QuaternionKeyframeTrack property :$(track.property) cannot be exported")
+        return "rotation", track.interpolation === :step ? "STEP" : "LINEAR",
+               _gltfx_flat(track.values, _gltfx_quat), 4
+    elseif track isa CubicSplineKeyframeTrack
+        track.property in (:position, :scale) ||
+            _gltfx_error("CubicSplineKeyframeTrack property :$(track.property) cannot be exported")
+        return track.property === :position ? "translation" : "scale", "CUBICSPLINE",
+               _gltfx_cubic(track.in_tangents, track.values, track.out_tangents, _gltfx_vec3), 3
+    elseif track isa CubicSplineQuaternionKeyframeTrack
+        track.property in (:rotation, :quaternion) ||
+            _gltfx_error("CubicSplineQuaternionKeyframeTrack property :$(track.property) cannot be exported")
+        return "rotation", "CUBICSPLINE",
+               _gltfx_cubic(track.in_tangents, track.values, track.out_tangents, _gltfx_quat), 4
+    elseif track isa Union{MorphWeightsKeyframeTrack, CubicSplineMorphWeightsKeyframeTrack}
+        count = get(w.morph_counts, track.target, 0)
+        count > 0 || _gltfx_error("a morph weights track targets an object without morph targets")
+        _gltfx_check_weights(track.values, count)
+        if track isa MorphWeightsKeyframeTrack
+            return "weights", track.interpolation === :step ? "STEP" : "LINEAR",
+                   _gltfx_flat(track.values, identity), 1
+        end
+        _gltfx_check_weights(track.in_tangents, count)
+        _gltfx_check_weights(track.out_tangents, count)
+        return "weights", "CUBICSPLINE",
+               _gltfx_cubic(track.in_tangents, track.values, track.out_tangents, identity), 1
+    end
+    _gltfx_error("$(nameof(typeof(track))) cannot be exported")
+end
+
+function _gltfx_animation(w::_GLTFExportWriter, clip::AnimationClip)
+    isempty(clip.tracks) && _gltfx_error("animation $(repr(clip.name)) has no tracks")
+    samplers = Any[]
+    channels = Any[]
+    for track in clip.tracks
+        node = get(w.node_index, track.target, nothing)
+        node === nothing &&
+            _gltfx_error("animation $(repr(clip.name)) targets an object that is not exported")
+        path, interpolation, output, ncomp = _gltfx_track_output(w, track)
+        input = _gltfx_float_accessor!(w, _gltfx_times(track.times), 1, "animation input";
+                                       minmax=true)
+        out = _gltfx_float_accessor!(w, output, ncomp, "animation output")
+        push!(samplers, Dict{String,Any}("input" => input, "output" => out,
+                                         "interpolation" => interpolation))
+        push!(channels, Dict{String,Any}("sampler" => length(samplers) - 1,
+                                         "target" => Dict{String,Any}("node" => node,
+                                                                      "path" => path)))
+    end
+    anim = Dict{String,Any}("samplers" => samplers, "channels" => channels)
+    isempty(clip.name) || (anim["name"] = clip.name)
+    return anim
+end
+
+function _gltfx_json(io::IO, x::AbstractString)
+    isvalid(x) || _gltfx_error("strings must be valid UTF-8")
+    print(io, '"')
+    for c in x
+        if c == '"'
+            print(io, "\\\"")
+        elseif c == '\\'
+            print(io, "\\\\")
+        elseif c < ' '
+            print(io, "\\u", string(UInt32(c); base=16, pad=4))
+        else
+            print(io, c)
+        end
+    end
+    print(io, '"')
+end
+_gltfx_json(io::IO, x::Bool) = print(io, x ? "true" : "false")
+_gltfx_json(io::IO, x::Integer) = print(io, x)
+function _gltfx_json(io::IO, x::AbstractFloat)
+    isfinite(x) || _gltfx_error("JSON numbers must be finite, got $x")
+    print(io, repr(Float64(x)))
+end
+function _gltfx_json(io::IO, x::AbstractVector)
+    print(io, '[')
+    for (i, v) in enumerate(x)
+        i > 1 && print(io, ',')
+        _gltfx_json(io, v)
+    end
+    print(io, ']')
+end
+function _gltfx_json(io::IO, x::AbstractDict)
+    print(io, '{')
+    for (i, k) in enumerate(sort!(collect(keys(x))))
+        i > 1 && print(io, ',')
+        _gltfx_json(io, k)
+        print(io, ':')
+        _gltfx_json(io, x[k])
+    end
+    print(io, '}')
+end
+
+const _GLTFX_BASE64 = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+function _gltfx_base64(bytes::Vector{UInt8})
+    out = Vector{UInt8}(undef, 4 * cld(length(bytes), 3))
+    j = 1
+    for i in 1:3:length(bytes)
+        has2 = i + 1 <= length(bytes)
+        has3 = i + 2 <= length(bytes)
+        v = (UInt32(bytes[i]) << 16) | (has2 ? UInt32(bytes[i + 1]) << 8 : UInt32(0)) |
+            (has3 ? UInt32(bytes[i + 2]) : UInt32(0))
+        out[j] = _GLTFX_BASE64[((v >> 18) & 0x3f) + 1]
+        out[j + 1] = _GLTFX_BASE64[((v >> 12) & 0x3f) + 1]
+        out[j + 2] = has2 ? _GLTFX_BASE64[((v >> 6) & 0x3f) + 1] : UInt8('=')
+        out[j + 3] = has3 ? _GLTFX_BASE64[(v & 0x3f) + 1] : UInt8('=')
+        j += 4
+    end
+    return String(out)
+end
+
+function _gltfx_document(root::AbstractObject3D, animations)
+    w = _GLTFExportWriter()
+    scene = Dict{String,Any}()
+    roots = Int[]
+    if root isa Scene
+        isempty(root.name) || (scene["name"] = root.name)
+        for child in get_children(root)
+            is_visible(child) || continue
+            push!(roots, _gltfx_node!(w, child))
+        end
+    else
+        push!(roots, _gltfx_node!(w, root))
+    end
+    isempty(roots) || (scene["nodes"] = roots)
+    anims = Any[_gltfx_animation(w, clip) for clip in animations]
+    doc = Dict{String,Any}("asset" => Dict{String,Any}("version" => "2.0",
+                                                         "generator" => "Diff3D.jl save_gltf"),
+                           "scene" => 0, "scenes" => Any[scene])
+    isempty(w.nodes) || (doc["nodes"] = w.nodes)
+    isempty(w.meshes) || (doc["meshes"] = w.meshes)
+    isempty(w.materials) || (doc["materials"] = w.materials)
+    isempty(anims) || (doc["animations"] = anims)
+    isempty(w.extensions_used) || (doc["extensionsUsed"] = w.extensions_used)
+    if !isempty(w.bin)
+        while length(w.bin) % 4 != 0
+            push!(w.bin, 0x00)
+        end
+        doc["accessors"] = w.accessors
+        doc["bufferViews"] = w.buffer_views
+        doc["buffers"] = Any[Dict{String,Any}("byteLength" => length(w.bin))]
+    end
+    return doc, w.bin
+end
+
+"""
+    save_gltf(path, object; animations=AnimationClip[], binary=endswith(lowercase(path), ".glb"))
+
+Write `object` as a glTF 2.0 file, like three.js `GLTFExporter.parse`. A
+[`Scene`](@ref) gives the glTF scene its visible children as root nodes; any
+other exportable object becomes the only root node. With `binary=true` the file
+is a `.glb` container; otherwise it is JSON with the buffer embedded as a
+base64 data URI. [`load_gltf_asset`](@ref) and [`load_glb_asset`](@ref) read
+the result back (with each mesh node loaded as a `Group` holding its primitive).
+
+Exported: `Group`, `Object3D`, [`Mesh`](@ref), [`LineSegments`](@ref),
+`LineObject`, `LineLoop` and [`PointsObject`](@ref) nodes with their names
+and transforms (hidden objects are left out, as with `GLTFExporter`'s default
+`onlyVisible`); positions, normals (normalised), uvs, `:uv2`, `:tangent`,
+`:color` (for a mesh only when its material uses vertex colours), indices, morph
+targets, morph influences and target names; untextured
+[`MeshStandardMaterial`](@ref), [`MeshBasicMaterial`](@ref) (as
+`KHR_materials_unlit`), Phong, Lambert, line and points materials (colour,
+opacity, alpha mode and cutoff, double side, emissive, with
+`KHR_materials_emissive_strength`); and [`AnimationClip`](@ref)s whose tracks are
+position, scale, rotation and morph-weight keyframes (linear, step or cubic
+spline). Line widths, point sizes and depth flags are not part of glTF and are
+not written.
+
+Anything else raises an `ArgumentError` instead of being dropped: cameras,
+lights, skinned and instanced meshes, sprites, textures, physical, toon and
+shader materials, back-side or wireframe materials, geometry groups, draw
+ranges, `flat_shading=true`, custom attributes, and other track kinds.
+"""
+function save_gltf(path::AbstractString, object::AbstractObject3D;
+                   animations::AbstractVector{AnimationClip}=AnimationClip[],
+                   binary::Bool=endswith(lowercase(path), ".glb"))
+    doc, bin = _gltfx_document(object, animations)
+    if binary
+        io = IOBuffer()
+        _gltfx_json(io, doc)
+        json = take!(io)
+        while length(json) % 4 != 0
+            push!(json, UInt8(' '))
+        end
+        total = 12 + 8 + length(json) + (isempty(bin) ? 0 : 8 + length(bin))
+        out = IOBuffer()
+        write(out, htol(UInt32(0x46546C67)), htol(UInt32(2)), htol(UInt32(total)))
+        write(out, htol(UInt32(length(json))), htol(UInt32(0x4E4F534A)), json)
+        isempty(bin) || write(out, htol(UInt32(length(bin))), htol(UInt32(0x004E4942)), bin)
+        write(path, take!(out))
+    else
+        if !isempty(bin)
+            doc["buffers"][1]["uri"] =
+                "data:application/octet-stream;base64," * _gltfx_base64(bin)
+        end
+        io = IOBuffer()
+        _gltfx_json(io, doc)
+        write(path, take!(io))
+    end
+    return path
+end
