@@ -10995,9 +10995,24 @@ function _gltf_animation_interpolation(value)
     throw(ArgumentError("unsupported glTF animation interpolation: $raw"))
 end
 
+# Objects driven by a glTF `weights` channel on one node: the node object
+# itself when it carries influences, and its primitive objects. Child nodes are
+# excluded; three.js GLTFLoader.js:4586-4607 likewise targets only the node and,
+# for a multi-primitive Group, its direct primitive meshes.
+function _gltf_morph_track_targets(obj, node_object_set)
+    targets = AbstractObject3D[]
+    hasproperty(obj, :morph_target_influences) && push!(targets, obj)
+    for child in get_children(obj)
+        child in node_object_set && continue
+        hasproperty(child, :morph_target_influences) && push!(targets, child)
+    end
+    return targets
+end
+
 function _gltf_animation_clips(gltf, buffers, node_objects)
     haskey(gltf, "animations") || return AnimationClip[]
     clips = AnimationClip[]
+    node_object_set = IdSet{Any}(values(node_objects))
     for (ai, anim) in enumerate(gltf["animations"])
         samplers = anim["samplers"]
         channels = get(anim, "channels", Any[])
@@ -11028,15 +11043,30 @@ function _gltf_animation_clips(gltf, buffers, node_objects)
             out, ncomp, count = _gltf_accessor(gltf, buffers, output_accessor)
             obj = node_objects[node_idx]
             if path == "weights"
+                morph_targets = _gltf_morph_track_targets(obj, node_object_set)
+                isempty(morph_targets) &&
+                    error("glTF weights animation targets node $node_idx, which has no morph-target primitives")
                 if interpolation === :cubicspline
                     ins, vals, outs = _gltf_cubic_weight_values(out, ncomp, tcount)
-                    push!(tracks, CubicSplineMorphWeightsKeyframeTrack(
-                        obj, :morph_target_influences, times, vals, ins, outs))
+                    for (slot, morph_target) in enumerate(morph_targets)
+                        push!(tracks, slot == 1 ?
+                              CubicSplineMorphWeightsKeyframeTrack(
+                                  morph_target, :morph_target_influences, times, vals, ins, outs) :
+                              CubicSplineMorphWeightsKeyframeTrack(
+                                  morph_target, :morph_target_influences, copy(times),
+                                  deepcopy(vals), deepcopy(ins), deepcopy(outs)))
+                    end
                     continue
                 end
                 vals = _gltf_weight_values(out, ncomp, tcount)
-                push!(tracks, MorphWeightsKeyframeTrack(obj, :morph_target_influences,
-                                                        times, vals; interpolation=interpolation))
+                for (slot, morph_target) in enumerate(morph_targets)
+                    push!(tracks, slot == 1 ?
+                          MorphWeightsKeyframeTrack(morph_target, :morph_target_influences,
+                                                    times, vals; interpolation=interpolation) :
+                          MorphWeightsKeyframeTrack(morph_target, :morph_target_influences,
+                                                    copy(times), deepcopy(vals);
+                                                    interpolation=interpolation))
+                end
                 continue
             end
             if interpolation === :cubicspline
