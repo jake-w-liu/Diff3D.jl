@@ -159,11 +159,72 @@ end
     rc = Raycaster(Vec3(0.1, 0.2, 5.0), Vec3(0.0, 0.0, -1.0))
     raycast(rc, mesh)
     if Base.JLOptions().opt_level > 0
-        # Only the returned single-hit vector is allocated; the per-vertex
-        # pruning codes live in the raycaster (8385 vertices would need 8 KB).
-        @test (@allocated raycast(rc, mesh)) < 4096
+        # Only the returned single-hit vector is allocated, at its exact size:
+        # the per-vertex pruning codes (8385 vertices would need 8 KB) and the
+        # hit scratch live in the raycaster. Growing a fresh vector by push!
+        # reserved several 256-byte Intersections (848 B on 1.13, 2240 B on
+        # 1.10, over the suite's 1024 B raycast budget).
+        @test (@allocated raycast(rc, mesh)) < 512
     end
     @test length(rc.vertex_codes) >= geometry.n_vertices
+    # The pruning is active: nearly every face of the sphere lies beside the ray.
+    codes = Diff3D._ray_lateral_codes!(rc, geometry, nothing, compute_world_matrix(mesh), 0.0)
+    rejected = count(f -> Diff3D._ray_lateral_rejects(codes, Diff3D.get_face(geometry, f)...),
+                     1:geometry.n_faces)
+    @test rejected > 0.95 * geometry.n_faces
+    # The scratch does not keep hit objects alive after the cast.
+    @test isempty(rc.hits)
+end
+
+@testset "Point and line pruning keeps hits at the pick radius" begin
+    # Points and segment endpoints sit exactly at (and just inside or outside)
+    # the threshold from the ray, after a rotated, mirrored, non-uniform world
+    # transform; the pre-filter must keep every hit of the exact test.
+    for magnitude in (1.0, 1.0e-120, 1.0e120), trial in 1:30
+        threshold = 0.25 * magnitude
+        offsets = (threshold, nextfloat(threshold), prevfloat(threshold), 0.5threshold, 3threshold)
+        positions = Float64[]
+        for (k, offset) in enumerate(offsets), sign in (-1.0, 1.0)
+            angle = 0.37 * trial + k
+            append!(positions, (sign * offset * cos(angle), sign * offset * sin(angle),
+                                (k - 3) * magnitude))
+        end
+        n = length(positions) ÷ 3
+        geometry = BufferGeometry(positions, Float64[], Float64[], Int[], n, 0)
+        parent = Group()
+        parent.rotation = Euler(0.2trial, -0.1trial, 0.05trial)
+        parent.scale = Vec3(-1.0, 1.0, 1.0)
+        objects = (PointsObject(geometry, PointsMaterial()),
+                   LineObject(geometry, LineBasicMaterial()),
+                   LineSegments(geometry, LineBasicMaterial()),
+                   LineLoop(geometry, LineBasicMaterial()))
+        for object in objects
+            add!(parent, object)
+        end
+        world = compute_world_matrix(parent)
+        origin = mat4_transform_point(world, Vec3(0.0, 0.0, 10magnitude))
+        target = mat4_transform_point(world, Vec3(0.0, 0.0, 0.0))
+        rc = Raycaster(origin, target - origin; point_threshold=threshold,
+                       line_threshold=threshold)
+        hits = raycast(rc, parent)
+        o, d = rc.ray.origin, rc.ray.direction
+        world_vertex(i) = mat4_transform_point(world, get_vertex(geometry, i))
+        expected = Tuple{Float64,Int,String}[]
+        for i in 1:n
+            t, distance = Diff3D._ray_point_distance(o, d, world_vertex(i))
+            distance < threshold && push!(expected, (t, i, "Points"))
+        end
+        segments = Dict("Line" => [(i, i + 1) for i in 1:n-1],
+                        "LineSegments" => [(i, i + 1) for i in 1:2:n-1],
+                        "LineLoop" => [[(i, i + 1) for i in 1:n-1]; (n, 1)])
+        for (name, pairs) in segments, (i, j) in pairs
+            t, distance, _ = Diff3D._ray_segment_distance(o, d, world_vertex(i), world_vertex(j))
+            distance <= threshold && push!(expected, (t, i, name))
+        end
+        actual = sort!([(hit.distance, hit.face_index, hit.object.name) for hit in hits])
+        @test actual == sort!(expected)
+        @test !isempty(actual)
+    end
 end
 
 @testset "Repeated raycasts with one raycaster agree" begin
@@ -266,4 +327,35 @@ audit3_close(a::Vec2, b) = maximum(abs, (a.x - b[1], a.y - b[2]))
         @test sprite_hit.distance ≈ distance rtol = 1e-12
         @test audit3_close(sprite_hit.uv, uv) < 1e-12
     end
+end
+
+@testset "Hit details stay finite at extreme magnitudes" begin
+    # Barycoords and face normals rescale by exact powers of two, so subnormal
+    # and near-overflow triangles still report the plain triangle's weights,
+    # uv and normal (three.js overflows or underflows to zero or NaN there).
+    for magnitude in (1.0e-310, 1.0e-320, 1.0e-300, 1.0e300)
+        geometry = BufferGeometry([0.0, 0, 0, magnitude, 0, 0, 0, magnitude, 0],
+                                  [0.0, 0, 1, 0, 0, 1, 0, 0, 1], [0.0, 0, 1, 0, 0, 1],
+                                  [1, 2, 3], 3, 1)
+        mesh = Mesh(geometry, MeshBasicMaterial(side=:double))
+        hit = only(raycast(Raycaster(Vec3(magnitude / 4, magnitude / 4, 1.0),
+                                     Vec3(0.0, 0.0, -1.0)), mesh))
+        @test audit3_close(hit.barycoord, (0.5, 0.25, 0.25)) < 1e-12
+        @test audit3_close(hit.uv, (0.25, 0.25)) < 1e-12
+        @test audit3_close(hit.face_normal, (0.0, 0.0, 1.0)) == 0.0
+        @test audit3_close(hit.normal, (0.0, 0.0, 1.0)) == 0.0
+    end
+    # A posed skin pulls its world face normal back through a huge mirrored
+    # matrix without overflowing.
+    geometry = BufferGeometry([0.0, 0, 0, 1, 0, 0, 0, 1, 0], [0.0, 0, 1, 0, 0, 1, 0, 0, 1],
+                              Float64[], [1, 2, 3], 3, 1)
+    bone = Bone()
+    skin = SkinnedMesh(geometry, MeshBasicMaterial(side=:double), Skeleton([bone]),
+                       fill((1, 1, 1, 1), 3), fill((1.0, 0.0, 0.0, 0.0), 3))
+    skin.scale = Vec3(1.0e300, -1.0e300, 1.0e300)
+    add!(skin, bone)
+    bind_skeleton!(skin, skin.skeleton)
+    hit = only(raycast(Raycaster(Vec3(0.25e300, -0.25e300, 1.0e300), Vec3(0.0, 0.0, -1.0)), skin))
+    @test audit3_close(hit.face_normal, (0.0, 0.0, 1.0)) == 0.0
+    @test audit3_close(hit.barycoord, (0.5, 0.25, 0.25)) < 1e-12
 end

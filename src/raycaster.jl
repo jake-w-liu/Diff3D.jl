@@ -22,7 +22,9 @@ A picking result, the counterpart of a three.js `Raycaster` intersection.
   interpolated at the hit; a sprite reports its quad `uv`.
 - `barycoord`: barycentric weights of the hit for `face`'s three vertices.
 - `distance_to_ray`: for points, the world-space distance from the vertex to
-  the ray.
+  the ray, in the same units as the world-space `point_threshold` (three.js
+  `distanceToRay` is measured in the object's local space, so the two differ
+  under a scaled world matrix).
 """
 struct Intersection
     distance::Float64
@@ -151,6 +153,7 @@ mutable struct Raycaster
     camera::Union{Nothing,AbstractCamera}
     vertex_codes::Vector{UInt8}             # lateral pre-filter scratch, one per vertex
     skinned_positions::Vector{Vec3{Float64}} # posed skin vertices, one per vertex
+    hits::Vector{Intersection}              # per-cast hit scratch; `raycast` returns a copy
 end
 
 Raycaster(ray,near,far,layers,point_threshold,line_threshold,
@@ -162,7 +165,7 @@ Raycaster(ray,near,far,layers,point_threshold,line_threshold,
           skinning_matrices,morph_positions,worlds,camera) =
     Raycaster(ray,near,far,layers,point_threshold,line_threshold,
               skinning_matrices,morph_positions,worlds,camera,
-              UInt8[],Vec3{Float64}[])
+              UInt8[],Vec3{Float64}[],Intersection[])
 
 function Raycaster(ray::Ray{Float64}, near::Float64, far::Float64,
                    layers::Layers, point_threshold::Float64,
@@ -484,6 +487,13 @@ end
     return side === :front ? :back : :front
 end
 
+# Exact power-of-two rescaling. `ldexp` on each component stays exact where a
+# multiplier ldexp(1.0, k) would overflow (k > 1023, i.e. subnormal inputs).
+@inline _hit_ldexp(v::Vec3{Float64}, k::Int) =
+    Vec3(ldexp(v.x, k), ldexp(v.y, k), ldexp(v.z, k))
+
+@inline _hit_max_abs(v::Vec3{Float64}) = max(abs(v.x), abs(v.y), abs(v.z))
+
 # three.js Triangle.getBarycoord: weights of `p` for (a, b, c), zero for a
 # degenerate triangle. Offsets are scaled by an exact power of two first so
 # extreme world coordinates neither overflow nor underflow the dot products.
@@ -492,12 +502,12 @@ function _hit_barycoord(p::Vec3{Float64}, a::Vec3{Float64}, b::Vec3{Float64},
     v0 = c - a
     v1 = b - a
     v2 = p - a
-    magnitude = max(abs(v0.x), abs(v0.y), abs(v0.z), abs(v1.x), abs(v1.y), abs(v1.z))
+    magnitude = max(_hit_max_abs(v0), _hit_max_abs(v1))
     (isfinite(magnitude) && magnitude > 0.0) || return Vec3(0.0, 0.0, 0.0)
-    scale = ldexp(1.0, -exponent(magnitude))
-    v0 = v0 * scale
-    v1 = v1 * scale
-    v2 = v2 * scale
+    k = -exponent(magnitude)
+    v0 = _hit_ldexp(v0, k)
+    v1 = _hit_ldexp(v1, k)
+    v2 = _hit_ldexp(v2, k)
     dot00 = dot(v0, v0)
     dot01 = dot(v0, v1)
     dot02 = dot(v0, v2)
@@ -542,14 +552,30 @@ end
         Float64(data[b1 + 3]) * w.x + Float64(data[b2 + 3]) * w.y + Float64(data[b3 + 3]) * w.z)
 end
 
+# (c - b) × (a - b) with the edges rescaled by a common power of two, so the
+# product neither overflows nor underflows at extreme coordinates. Only its
+# direction is used.
+@inline function _hit_scaled_face_cross(a::Vec3{Float64}, b::Vec3{Float64},
+                                        c::Vec3{Float64})
+    e1 = c - b
+    e2 = a - b
+    magnitude = max(_hit_max_abs(e1), _hit_max_abs(e2))
+    (isfinite(magnitude) && magnitude > 0.0) || return Vec3(0.0, 0.0, 0.0)
+    k = -exponent(magnitude)
+    return cross(_hit_ldexp(e1, k), _hit_ldexp(e2, k))
+end
+
 # three.js Triangle.getNormal: normalize((c - b) × (a - b)), zero if degenerate.
 @inline _hit_triangle_normal(a::Vec3{Float64}, b::Vec3{Float64}, c::Vec3{Float64}) =
-    _hit_unit(cross(c - b, a - b))
+    _hit_unit(_hit_scaled_face_cross(a, b, c))
 
+# Unit vector along `v`, zero for a zero or non-finite `v`. The exact
+# power-of-two prescale keeps tiny and huge vectors from under/overflowing.
 @inline function _hit_unit(v::Vec3{Float64})
-    length_squared = dot(v, v)
-    length_squared > 0.0 || return Vec3(0.0, 0.0, 0.0)
-    return isfinite(length_squared) ? v / sqrt(length_squared) : normalize(v)
+    magnitude = _hit_max_abs(v)
+    (isfinite(magnitude) && magnitude > 0.0) || return Vec3(0.0, 0.0, 0.0)
+    w = _hit_ldexp(v, -exponent(magnitude))
+    return w / sqrt(dot(w, w))
 end
 
 # Hit record for triangle `face` of `geo` (vertices i1, i2, i3), mirroring
@@ -576,7 +602,7 @@ function _triangle_intersection(obj, distance::Float64, rc::Raycaster,
           _hit_interpolate_attribute2(uv1_attribute, i1, i2, i3, weights)::Vec2{Float64}
     if local_triangle === nothing
         e = m.e
-        world_normal = cross(c - b, a - b)
+        world_normal = _hit_scaled_face_cross(a, b, c)
         pulled = Vec3(e[1] * world_normal.x + e[2] * world_normal.y + e[3] * world_normal.z,
                       e[5] * world_normal.x + e[6] * world_normal.y + e[7] * world_normal.z,
                       e[9] * world_normal.x + e[10] * world_normal.y + e[11] * world_normal.z)
@@ -1032,16 +1058,25 @@ visits the LOD's visible children, so that level can be reported twice.
 """
 function raycast(rc::Raycaster, root::AbstractObject3D; recursive::Bool=true)
     _validate_raycaster!(rc)
-    hits = Intersection[]
-    if recursive
-        _visible_in_tree(root) &&
-            _raycast_recursive!(hits, rc, root, compute_world_matrix(root),
-                                rc.worlds)
-    else
-        if _visible_in_tree(root) && _layers_test_object(root, rc.layers)
-            _raycast_object!(hits, rc, root, compute_world_matrix(root))
+    # Hits collect in the raycaster's scratch vector and are copied out at
+    # their exact count: an Intersection is 256 bytes, and growing a fresh
+    # vector by push! would reserve several of them even for a single hit.
+    hits = rc.hits
+    empty!(hits)
+    try
+        if recursive
+            _visible_in_tree(root) &&
+                _raycast_recursive!(hits, rc, root, compute_world_matrix(root),
+                                    rc.worlds)
+        else
+            if _visible_in_tree(root) && _layers_test_object(root, rc.layers)
+                _raycast_object!(hits, rc, root, compute_world_matrix(root))
+            end
         end
+        sort!(hits; lt=_intersection_distance_lt)
+        return copy(hits)
+    finally
+        # Drop the scratch references so hit objects are not kept alive.
+        empty!(hits)
     end
-    sort!(hits; lt=_intersection_distance_lt)
-    return hits
 end
