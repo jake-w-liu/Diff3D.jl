@@ -491,3 +491,349 @@ function collect_meshes(scene::AbstractObject3D)
     _fill_meshes!(meshes, scene, 1)
     return meshes
 end
+
+"""
+    traverse_visible(object, callback)
+
+Call `callback` on `object` and its descendants, skipping every invisible node
+together with its subtree (three.js `Object3D.traverseVisible`).
+"""
+function traverse_visible(obj::AbstractObject3D, callback)
+    is_visible(obj) || return nothing
+    callback(obj)
+    for child in get_children(obj)
+        traverse_visible(child, callback)
+    end
+    return nothing
+end
+
+"""
+    traverse_ancestors(object, callback)
+
+Call `callback` on the parent of `object`, then on its parent and so on up to
+the root; `object` itself is not visited (three.js
+`Object3D.traverseAncestors`).
+"""
+function traverse_ancestors(obj::AbstractObject3D, callback)
+    parent = get_parent(obj)
+    while parent !== nothing
+        callback(parent)
+        parent = get_parent(parent)
+    end
+    return nothing
+end
+
+"""
+    get_object_by_property(root, name::Symbol, value) -> object or nothing
+
+First node, in depth-first pre-order starting at `root` itself, whose
+property `name` is equal (`isequal`) to `value` (three.js
+`Object3D.getObjectByProperty`). Returns `nothing` when no node matches.
+"""
+function get_object_by_property(obj::AbstractObject3D, name::Symbol, value)
+    hasproperty(obj, name) && isequal(getproperty(obj, name), value) && return obj
+    for child in get_children(obj)
+        found = get_object_by_property(child, name, value)
+        found === nothing || return found
+    end
+    return nothing
+end
+
+"""
+    get_object_by_name(root, name) -> object or nothing
+
+First node named `name` in depth-first pre-order from `root` (three.js
+`Object3D.getObjectByName`).
+"""
+get_object_by_name(obj::AbstractObject3D, name::AbstractString) =
+    get_object_by_property(obj, :name, name)
+
+"""
+    get_object_by_id(root, id) -> object or nothing
+
+Node with object id `id` in the subtree of `root` (three.js
+`Object3D.getObjectById`).
+"""
+get_object_by_id(obj::AbstractObject3D, id::Integer) =
+    get_object_by_property(obj, :id, id)
+
+"""
+    remove_from_parent!(object) -> object
+
+Detach `object` from its parent, if it has one (three.js
+`Object3D.removeFromParent`).
+"""
+function remove_from_parent!(obj::AbstractObject3D)
+    parent = get_parent(obj)
+    parent === nothing || remove!(parent, obj)
+    return obj
+end
+
+"""
+    clear_children!(object) -> object
+
+Remove every child of `object` (three.js `Object3D.clear`).
+"""
+function clear_children!(obj::AbstractObject3D)
+    children = get_children(obj)
+    for child in children
+        set_parent!(child, nothing)
+    end
+    empty!(children)
+    return obj
+end
+
+# ------------------------- Transform helpers -------------------------
+# Diff3D stores an Euler rotation; three.js stores the equivalent quaternion
+# and re-derives the Euler angles with the same order after each change.
+
+@inline function _object_quaternion(obj::AbstractObject3D)
+    rotation = get_rotation(obj)
+    return quat_from_euler(rotation.x, rotation.y, rotation.z; order=rotation.order)
+end
+
+@noinline _throw_object_vector(label::String) =
+    throw(ArgumentError("$label must be a Vec3 with finite components"))
+
+@inline function _validated_object_vector(value, label::String)
+    value isa Vec3 || _throw_object_vector(label)
+    vector = convert(Vec3{Float64}, value)
+    isfinite(vector.x) && isfinite(vector.y) && isfinite(vector.z) ||
+        _throw_object_vector(label)
+    return vector
+end
+
+@inline function _validated_object_scalar(value, label::String)
+    value isa Real && !(value isa Bool) ||
+        throw(ArgumentError("$label must be finite"))
+    scalar = Float64(value)
+    isfinite(scalar) || throw(ArgumentError("$label must be finite"))
+    return scalar
+end
+
+function _set_object_quaternion!(obj::AbstractObject3D, q::Quaternion)
+    _object_rotation_settable(obj)
+    rotation = euler_from_quaternion(quat_normalize(q), get_rotation(obj).order)
+    isfinite(rotation.x) && isfinite(rotation.y) && isfinite(rotation.z) ||
+        throw(ArgumentError("$(nameof(typeof(obj))) rotation update is not finite"))
+    obj.rotation = rotation
+    return obj
+end
+
+# Hook for node types whose rendered orientation does not come from
+# `rotation` (target-aimed cameras); see cameras.jl.
+@inline _object_rotation_settable(::AbstractObject3D) = nothing
+
+"""
+    rotate_on_axis!(object, axis, angle) -> object
+
+Rotate `object` by `angle` radians about the unit `axis` in its local space
+(three.js `Object3D.rotateOnAxis`). The Euler order of `object.rotation` is
+kept.
+"""
+function rotate_on_axis!(obj::AbstractObject3D, axis::Vec3, angle::Real)
+    _validate_object_transform(obj)
+    a = _validated_object_vector(axis, "rotate_on_axis! axis")
+    q = quat_from_axis_angle(a, _validated_object_scalar(angle, "rotate_on_axis! angle"))
+    return _set_object_quaternion!(obj, quat_multiply(_object_quaternion(obj), q))
+end
+
+"""
+    rotate_on_world_axis!(object, axis, angle) -> object
+
+Rotate `object` by `angle` radians about the unit `axis` given in its parent's
+frame, which is world space for an unrotated parent (three.js
+`Object3D.rotateOnWorldAxis`, which also assumes no rotated parent).
+"""
+function rotate_on_world_axis!(obj::AbstractObject3D, axis::Vec3, angle::Real)
+    _validate_object_transform(obj)
+    a = _validated_object_vector(axis, "rotate_on_world_axis! axis")
+    q = quat_from_axis_angle(a, _validated_object_scalar(angle, "rotate_on_world_axis! angle"))
+    return _set_object_quaternion!(obj, quat_multiply(q, _object_quaternion(obj)))
+end
+
+"""
+    rotate_x!(object, angle) -> object
+
+Rotate about the local x axis (three.js `Object3D.rotateX`).
+"""
+rotate_x!(obj::AbstractObject3D, angle::Real) =
+    rotate_on_axis!(obj, Vec3(1.0, 0.0, 0.0), angle)
+
+"""
+    rotate_y!(object, angle) -> object
+
+Rotate about the local y axis (three.js `Object3D.rotateY`).
+"""
+rotate_y!(obj::AbstractObject3D, angle::Real) =
+    rotate_on_axis!(obj, Vec3(0.0, 1.0, 0.0), angle)
+
+"""
+    rotate_z!(object, angle) -> object
+
+Rotate about the local z axis (three.js `Object3D.rotateZ`).
+"""
+rotate_z!(obj::AbstractObject3D, angle::Real) =
+    rotate_on_axis!(obj, Vec3(0.0, 0.0, 1.0), angle)
+
+"""
+    translate_on_axis!(object, axis, distance) -> object
+
+Move `object` by `distance` along the unit `axis` in its local (rotated)
+frame (three.js `Object3D.translateOnAxis`).
+"""
+function translate_on_axis!(obj::AbstractObject3D, axis::Vec3, distance::Real)
+    _validate_object_transform(obj)
+    a = _validated_object_vector(axis, "translate_on_axis! axis")
+    d = _validated_object_scalar(distance, "translate_on_axis! distance")
+    position = get_position(obj) + quat_rotate_vector(_object_quaternion(obj), a) * d
+    obj.position = _validated_object_vector(position, "translate_on_axis! position")
+    return obj
+end
+
+"""
+    translate_x!(object, distance) -> object
+
+Move along the local x axis (three.js `Object3D.translateX`).
+"""
+translate_x!(obj::AbstractObject3D, distance::Real) =
+    translate_on_axis!(obj, Vec3(1.0, 0.0, 0.0), distance)
+
+"""
+    translate_y!(object, distance) -> object
+
+Move along the local y axis (three.js `Object3D.translateY`).
+"""
+translate_y!(obj::AbstractObject3D, distance::Real) =
+    translate_on_axis!(obj, Vec3(0.0, 1.0, 0.0), distance)
+
+"""
+    translate_z!(object, distance) -> object
+
+Move along the local z axis (three.js `Object3D.translateZ`).
+"""
+translate_z!(obj::AbstractObject3D, distance::Real) =
+    translate_on_axis!(obj, Vec3(0.0, 0.0, 1.0), distance)
+
+"""
+    local_to_world(object, point) -> Vec3
+
+Transform `point` from the local space of `object` to world space (three.js
+`Object3D.localToWorld`).
+"""
+local_to_world(obj::AbstractObject3D, point::Vec3) =
+    mat4_transform_point(compute_world_matrix(obj), point)
+
+"""
+    world_to_local(object, point) -> Vec3
+
+Transform the world-space `point` into the local space of `object` (three.js
+`Object3D.worldToLocal`).
+"""
+world_to_local(obj::AbstractObject3D, point::Vec3) =
+    mat4_transform_point(mat4_inverse(compute_world_matrix(obj)), point)
+
+"""
+    get_world_position(object) -> Vec3
+
+World-space position of `object` (three.js `Object3D.getWorldPosition`).
+"""
+function get_world_position(obj::AbstractObject3D)
+    e = compute_world_matrix(obj).e
+    return Vec3(e[13], e[14], e[15])
+end
+
+"""
+    get_world_quaternion(object) -> Quaternion
+
+Rotation part of the world matrix of `object`, from `mat4_decompose` (three.js
+`Object3D.getWorldQuaternion`).
+"""
+get_world_quaternion(obj::AbstractObject3D) = mat4_decompose(compute_world_matrix(obj))[2]
+
+"""
+    get_world_scale(object) -> Vec3
+
+Scale part of the world matrix of `object`, from `mat4_decompose` (three.js
+`Object3D.getWorldScale`).
+"""
+get_world_scale(obj::AbstractObject3D) = mat4_decompose(compute_world_matrix(obj))[3]
+
+"""
+    get_world_direction(object) -> Vec3
+
+Unit world direction of the local +z axis of `object` (three.js
+`Object3D.getWorldDirection`). Cameras return their viewing direction, the
+local -z axis, as three.js `Camera.getWorldDirection` does.
+"""
+function get_world_direction(obj::AbstractObject3D)
+    e = compute_world_matrix(obj).e
+    return normalize(Vec3(e[9], e[10], e[11]))
+end
+
+# Rotation part of a world matrix with the column scales removed
+# (three.js Matrix4.extractRotation followed by Quaternion.setFromRotationMatrix).
+_world_rotation_quaternion(world::Mat4) =
+    quat_from_rotation_matrix(mat4_extract_rotation(world))
+
+# three.js Object3D.lookAt (src/core/Object3D.js:609-643): cameras and lights
+# point their -z axis at the target, other objects their +z axis.
+function _look_at_quaternion(obj::AbstractObject3D, target::Vec3, up::Vec3,
+                             eye_convention::Bool)
+    _validate_object_transform(obj)
+    world = compute_world_matrix(obj)
+    position = Vec3(world.e[13], world.e[14], world.e[15])
+    view = eye_convention ? mat4_look_at(position, target, up) :
+                            mat4_look_at(target, position, up)
+    q = quat_from_rotation_matrix(mat4_transpose(view))
+    parent = get_parent(obj)
+    parent === nothing && return q
+    parent_rotation = _world_rotation_quaternion(compute_world_matrix(parent))
+    return quat_multiply(quat_invert(quat_normalize(parent_rotation)), q)
+end
+
+"""
+    look_at!(object, target; up=Vec3(0, 1, 0)) -> object
+
+Rotate `object` so that its local +z axis points at the world-space `target`
+(three.js `Object3D.lookAt`), accounting for the world transform of its
+parent. Lights point their -z axis at `target` as in three.js. Cameras have
+their own method that also aims their `target`.
+"""
+function look_at!(obj::AbstractObject3D, target::Vec3; up::Vec3=Vec3(0.0, 1.0, 0.0))
+    point = _validated_object_vector(target, "look_at! target")
+    up_vector = _validated_object_vector(up, "look_at! up")
+    eye = obj isa AbstractLight
+    return _set_object_quaternion!(obj, _look_at_quaternion(obj, point, up_vector, eye))
+end
+
+"""
+    attach!(parent, child) -> parent
+
+Make `child` a child of `parent` while keeping its world transform (three.js
+`Object3D.attach`). The new local transform is decomposed into position,
+rotation (keeping the Euler order) and scale, so shear produced by non-uniform
+ancestor scales is dropped as in three.js.
+"""
+function attach!(parent::AbstractObject3D, child::AbstractObject3D)
+    parent === child && throw(ArgumentError("Object3D cannot be added as a child of itself"))
+    _is_ancestor(child, parent) &&
+        throw(ArgumentError("Object3D cannot be added to one of its descendants"))
+    _validate_object_transform(child)
+    old_parent = get_parent(child)
+    parent_world = compute_world_matrix(parent)
+    determinant = mat4_determinant(parent_world)
+    isfinite(determinant) && !iszero(determinant) ||
+        throw(ArgumentError("attach! parent world matrix must be invertible"))
+    to_new = mat4_inverse(parent_world)
+    old_parent === nothing || (to_new = to_new * compute_world_matrix(old_parent))
+    position, quaternion, scale = mat4_decompose(to_new * compute_local_matrix(child))
+    all(isfinite, (position.x, position.y, position.z, quaternion.x, quaternion.y,
+                   quaternion.z, quaternion.w, scale.x, scale.y, scale.z)) ||
+        throw(ArgumentError("attach! produces a non-finite local transform"))
+    child.position = position
+    child.rotation = euler_from_quaternion(quaternion, get_rotation(child).order)
+    child.scale = scale
+    add!(parent, child)
+    return parent
+end

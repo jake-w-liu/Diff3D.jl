@@ -43,9 +43,13 @@ include("fixtures/animated_view_nodes.jl")
 end
 
 @testset "Rotation mode and legacy pose constructors" begin
+    # The legacy layouts end before `rotation_driven` (field 17 of
+    # PerspectiveCamera, 19 of OrthographicCamera); later fields such as the
+    # three.js film/view-offset properties are appended after it.
     for camera in (PerspectiveCamera(),OrthographicCamera())
         @test !camera.rotation_driven
-        values=ntuple(i->getfield(camera,i),fieldcount(typeof(camera))-1)
+        legacy=Base.fieldindex(typeof(camera),:rotation_driven)-1
+        values=ntuple(i->getfield(camera,i),legacy)
         @test !typeof(camera)(values...).rotation_driven
     end
     for light in (DirectionalLight(),SpotLight())

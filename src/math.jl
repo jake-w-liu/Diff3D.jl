@@ -2284,8 +2284,12 @@ at `t`, clamped to the endpoints. `values` may be reals or `Vec3`.
 function interpolate_linear(times::AbstractVector, values::AbstractVector, t)
     n = _validate_interpolant_inputs("interpolate_linear", times, values)
     isnan(t) && throw(ArgumentError("interpolate_linear: query time t must not be NaN"))
-    t <= times[1] && return values[1]
-    t >= times[n] && return values[n]
+    # Clamped endpoints go through the interpolation with a zero weight of the
+    # interior weight's type, so integer or narrower values (and AD query
+    # times) return the same type as an interior evaluation.
+    endpoint_weight = zero((t - times[1]) / one(times[1] - times[1]))
+    t <= times[1] && return _lerp_value(values[1], values[1], endpoint_weight)
+    t >= times[n] && return _lerp_value(values[n], values[n], endpoint_weight)
     hi = searchsortedfirst(times, t)
     lo = hi - 1
     α = (t - times[lo]) / (times[hi] - times[lo])
@@ -2381,4 +2385,995 @@ function frustum_intersects_box(f::Frustum, b::Box3)
         plane_distance_to_point(pl, Vec3(px, py, pz)) < 0 && return false
     end
     return true
+end
+
+# ========================== three.js math API additions ==========================
+# Free-function counterparts of three.js r186 Vector3, Matrix4, Sphere, Box3,
+# Plane, Ray, Triangle and MathUtils methods. They are generic over the scalar
+# type (Float32/Float64, ForwardDiff.Dual, reverse-mode ADVar) and return new
+# values instead of mutating a target. A three.js `null` result is `nothing`.
+
+@inline _squared_length(v::Vec3) = v.x * v.x + v.y * v.y + v.z * v.z
+@inline _zero_vec3(v::Vec3) = Vec3(zero(v.x), zero(v.y), zero(v.z))
+
+"""
+    vec3_distance_squared(a, b)
+
+Squared Euclidean distance between `a` and `b` (three.js
+`Vector3.distanceToSquared`).
+"""
+function vec3_distance_squared(a::Vec3, b::Vec3)
+    dx, dy, dz = a.x - b.x, a.y - b.y, a.z - b.z
+    return dx * dx + dy * dy + dz * dz
+end
+
+"""
+    vec3_manhattan_distance(a, b)
+
+Sum of the absolute coordinate differences (three.js
+`Vector3.manhattanDistanceTo`).
+"""
+vec3_manhattan_distance(a::Vec3, b::Vec3) =
+    abs(a.x - b.x) + abs(a.y - b.y) + abs(a.z - b.z)
+
+"""
+    vec3_angle_to(a, b)
+
+Angle in radians, in `[0, π]`, between `a` and `b`; `π/2` when either is zero
+(three.js `Vector3.angleTo`).
+"""
+function vec3_angle_to(a::Vec3, b::Vec3)
+    denominator = sqrt(_squared_length(a) * _squared_length(b))
+    # acos(0) is π/2 in the scalar type of the general path.
+    iszero(_primal_value(denominator)) && return acos(zero(denominator / one(denominator)))
+    theta = dot(a, b) / denominator
+    return acos(clamp(theta, -one(theta), one(theta)))
+end
+
+"""
+    vec3_project_on_vector(v, onto)
+
+Projection of `v` onto the line along `onto`; the zero vector when `onto` is
+zero (three.js `Vector3.projectOnVector`).
+"""
+function vec3_project_on_vector(v::Vec3, onto::Vec3)
+    denominator = _squared_length(onto)
+    if iszero(_primal_value(denominator))
+        z = zero(dot(v, onto) / one(denominator))
+        return Vec3(z, z, z)
+    end
+    return onto * (dot(onto, v) / denominator)
+end
+
+"""
+    vec3_project_on_plane(v, plane_normal)
+
+Projection of `v` onto the plane through the origin with normal
+`plane_normal` (three.js `Vector3.projectOnPlane`).
+"""
+vec3_project_on_plane(v::Vec3, plane_normal::Vec3) =
+    v - vec3_project_on_vector(v, plane_normal)
+
+"""
+    vec3_reflect(v, normal)
+
+Reflection of `v` off the plane orthogonal to the unit `normal` (three.js
+`Vector3.reflect`).
+"""
+vec3_reflect(v::Vec3, normal::Vec3) = v - normal * (2 * dot(v, normal))
+
+"""
+    vec3_clamp_length(v, min_length, max_length)
+
+`v` rescaled so its length lies in `[min_length, max_length]` (three.js
+`Vector3.clampLength`); a zero vector stays zero.
+"""
+function vec3_clamp_length(v::Vec3, min_length::Real, max_length::Real)
+    len = norm(v)
+    divisor = iszero(_primal_value(len)) ? one(len) : len
+    # MathUtils.clamp is max(min, min(max, value)), which differs from
+    # Base.clamp when min_length > max_length.
+    return (v / divisor) * max(min_length, min(max_length, len))
+end
+
+"""
+    vec3_apply_axis_angle(v, axis, angle)
+
+Rotate `v` by `angle` radians about the unit `axis` (three.js
+`Vector3.applyAxisAngle`).
+"""
+vec3_apply_axis_angle(v::Vec3, axis::Vec3, angle::Real) =
+    quat_rotate_vector(quat_from_axis_angle(axis, angle), v)
+
+"""
+    vec3_apply_euler(v, euler)
+
+Rotate `v` by the Euler rotation `euler` (three.js `Vector3.applyEuler`).
+"""
+vec3_apply_euler(v::Vec3, euler::Euler) =
+    quat_rotate_vector(quat_from_euler(euler.x, euler.y, euler.z; order=euler.order), v)
+
+"""
+    vec3_min(a, b)
+
+Componentwise minimum (three.js `Vector3.min`).
+"""
+vec3_min(a::Vec3, b::Vec3) = Vec3(min(a.x, b.x), min(a.y, b.y), min(a.z, b.z))
+
+"""
+    vec3_max(a, b)
+
+Componentwise maximum (three.js `Vector3.max`).
+"""
+vec3_max(a::Vec3, b::Vec3) = Vec3(max(a.x, b.x), max(a.y, b.y), max(a.z, b.z))
+
+"""
+    vec3_clamp(v, lo, hi)
+
+Componentwise clamp of `v` between the vectors `lo` and `hi`, as three.js
+`Vector3.clamp` (`max(lo, min(hi, v))` per component).
+"""
+vec3_clamp(v::Vec3, lo::Vec3, hi::Vec3) =
+    Vec3(max(lo.x, min(hi.x, v.x)), max(lo.y, min(hi.y, v.y)),
+         max(lo.z, min(hi.z, v.z)))
+
+"""
+    mat4_max_scale_on_axis(m)
+
+Largest length of the three linear columns of `m` (three.js
+`Matrix4.getMaxScaleOnAxis`).
+"""
+mat4_max_scale_on_axis(m::Mat4) =
+    max(_mat4_linear_column_norm(m, 1), _mat4_linear_column_norm(m, 2),
+        _mat4_linear_column_norm(m, 3))
+
+"""
+    mat4_get_position(m)
+
+Translation column of `m` (three.js `Vector3.setFromMatrixPosition`).
+"""
+mat4_get_position(m::Mat4) = Vec3(m.e[13], m.e[14], m.e[15])
+
+"""
+    mat4_get_scale(m)
+
+Lengths of the three linear columns of `m` (three.js
+`Vector3.setFromMatrixScale`).
+"""
+mat4_get_scale(m::Mat4) = Vec3(_mat4_linear_column_norm(m, 1),
+                              _mat4_linear_column_norm(m, 2),
+                              _mat4_linear_column_norm(m, 3))
+
+"""
+    mat4_get_column(m, index)
+
+Column `index` (1 to 4) of `m` as a `Vec4`. three.js
+`Vector3.setFromMatrixColumn(m, index - 1)` returns its first three components.
+"""
+function mat4_get_column(m::Mat4, index::Integer)
+    1 <= index <= 4 || throw(ArgumentError("mat4_get_column index must be in 1:4"))
+    base = (index - 1) * 4
+    return Vec4(m.e[base + 1], m.e[base + 2], m.e[base + 3], m.e[base + 4])
+end
+
+"""
+    mat4_set_position(m, position)
+
+`m` with its translation column replaced by `position` (three.js
+`Matrix4.setPosition`).
+"""
+function mat4_set_position(m::Mat4, position::Vec3)
+    T = promote_type(eltype(m.e), _vec3_eltype(position))
+    p = (position.x, position.y, position.z)
+    return Mat4{T}(ntuple(i -> convert(T, 13 <= i <= 15 ? p[i - 12] : m.e[i]), Val(16)))
+end
+
+"""
+    mat4_make_basis(x_axis, y_axis, z_axis)
+
+Matrix whose first three columns are the given axes (three.js
+`Matrix4.makeBasis`).
+"""
+function mat4_make_basis(x::Vec3, y::Vec3, z::Vec3)
+    a, b, c = _promote_vec3s(x, y, z)
+    T = _vec3_eltype(a)
+    return Mat4{T}((a.x, a.y, a.z, zero(T), b.x, b.y, b.z, zero(T),
+                    c.x, c.y, c.z, zero(T), zero(T), zero(T), zero(T), one(T)))
+end
+
+"""
+    mat4_extract_basis(m) -> (x_axis, y_axis, z_axis)
+
+First three columns of `m` (three.js `Matrix4.extractBasis`).
+"""
+mat4_extract_basis(m::Mat4) = (Vec3(m.e[1], m.e[2], m.e[3]),
+                               Vec3(m.e[5], m.e[6], m.e[7]),
+                               Vec3(m.e[9], m.e[10], m.e[11]))
+
+"""
+    mat4_extract_rotation(m)
+
+Rotation part of `m`: its linear columns divided by their lengths, without
+translation (three.js `Matrix4.extractRotation`; the result is not a pure
+rotation when `m` has shear). As in three.js r186, a singular upper-left 3×3
+block gives the identity.
+"""
+function mat4_extract_rotation(m::Mat4)
+    e = m.e
+    # three.js Matrix4.extractRotation returns the identity when
+    # determinantAffine() === 0 (src/math/Matrix4.js:289-295).
+    if iszero(_primal_value(_mat4_determinant_affine(m)))
+        z = zero(one(e[1]) / one(e[1]))
+        l = one(z)
+        return Mat4((l, z, z, z, z, l, z, z, z, z, l, z, z, z, z, l))
+    end
+    sx = one(e[1]) / _mat4_linear_column_norm(m, 1)
+    sy = one(e[1]) / _mat4_linear_column_norm(m, 2)
+    sz = one(e[1]) / _mat4_linear_column_norm(m, 3)
+    z = zero(sx)
+    return Mat4((e[1] * sx, e[2] * sx, e[3] * sx, z,
+                 e[5] * sy, e[6] * sy, e[7] * sy, z,
+                 e[9] * sz, e[10] * sz, e[11] * sz, z,
+                 z, z, z, one(sx)))
+end
+
+"""
+    mat4_make_rotation_axis(axis, angle)
+
+Rotation by `angle` radians about the unit `axis` (three.js
+`Matrix4.makeRotationAxis`).
+"""
+function mat4_make_rotation_axis(axis::Vec3, angle::Real)
+    c, s = cos(angle), sin(angle)
+    t = 1 - c
+    x, y, z = axis.x, axis.y, axis.z
+    tx, ty = t * x, t * y
+    o = zero(tx * c)
+    return Mat4((tx * x + c, tx * y + s * z, tx * z - s * y, o,
+                 tx * y - s * z, ty * y + c, ty * z + s * x, o,
+                 tx * z + s * y, ty * z - s * x, t * z * z + c, o,
+                 o, o, o, one(o)))
+end
+
+"""
+    mat4_make_shear(xy, xz, yx, yz, zx, zy)
+
+Shear matrix (three.js `Matrix4.makeShear`): `xy` is the amount x is sheared
+by y, and so on.
+"""
+function mat4_make_shear(xy, xz, yx, yz, zx, zy)
+    T = float(promote_type(typeof(xy), typeof(xz), typeof(yx), typeof(yz),
+                           typeof(zx), typeof(zy)))
+    o, l = zero(T), one(T)
+    return Mat4{T}((l, convert(T, xy), convert(T, xz), o,
+                    convert(T, yx), l, convert(T, yz), o,
+                    convert(T, zx), convert(T, zy), l, o,
+                    o, o, o, l))
+end
+
+# ------------------------------ Sphere ------------------------------
+
+"""
+    sphere_is_empty(sphere)
+
+`true` for a negative radius (three.js `Sphere.isEmpty`).
+"""
+sphere_is_empty(s::BoundingSphere) = s.radius < 0
+
+"""
+    sphere_contains_point(sphere, point)
+
+Whether `point` lies inside or on `sphere` (three.js `Sphere.containsPoint`).
+"""
+sphere_contains_point(s::BoundingSphere, p::Vec3) =
+    vec3_distance_squared(p, s.center) <= s.radius * s.radius
+
+"""
+    sphere_distance_to_point(sphere, point)
+
+Signed distance from the surface of `sphere` to `point`, negative inside
+(three.js `Sphere.distanceToPoint`).
+"""
+sphere_distance_to_point(s::BoundingSphere, p::Vec3) = distance(p, s.center) - s.radius
+
+"""
+    sphere_intersects_sphere(a, b)
+
+Whether two spheres overlap or touch (three.js `Sphere.intersectsSphere`).
+"""
+function sphere_intersects_sphere(a::BoundingSphere, b::BoundingSphere)
+    radius_sum = a.radius + b.radius
+    return vec3_distance_squared(b.center, a.center) <= radius_sum * radius_sum
+end
+
+"""
+    sphere_intersects_plane(sphere, plane)
+
+Whether `plane` cuts or touches `sphere` (three.js `Sphere.intersectsPlane`).
+"""
+sphere_intersects_plane(s::BoundingSphere, plane::Plane) =
+    abs(plane_distance_to_point(plane, s.center)) <= s.radius
+
+"""
+    sphere_intersects_box(sphere, box)
+
+Whether `sphere` and `box` overlap (three.js `Sphere.intersectsBox`).
+"""
+sphere_intersects_box(s::BoundingSphere, box::Box3) = box3_intersects_sphere(box, s)
+
+"""
+    sphere_clamp_point(sphere, point)
+
+`point` moved onto `sphere` when it lies outside (three.js
+`Sphere.clampPoint`).
+"""
+function sphere_clamp_point(s::BoundingSphere, p::Vec3)
+    if vec3_distance_squared(s.center, p) > s.radius * s.radius
+        return normalize(p - s.center) * s.radius + s.center
+    end
+    return p + _zero_vec3(s.center)
+end
+
+"""
+    sphere_bounding_box(sphere)
+
+Axis-aligned box enclosing `sphere`; `Box3()` for an empty sphere (three.js
+`Sphere.getBoundingBox`).
+"""
+function sphere_bounding_box(s::BoundingSphere)
+    if sphere_is_empty(s)
+        T = _vec3_eltype(s.center)
+        return Box3(Vec3{T}(T(Inf), T(Inf), T(Inf)), Vec3{T}(T(-Inf), T(-Inf), T(-Inf)))
+    end
+    r = Vec3(s.radius, s.radius, s.radius)
+    return Box3(s.center - r, s.center + r)
+end
+
+"""
+    sphere_apply_matrix4(sphere, m)
+
+`sphere` transformed by `m`: the center is transformed as a point and the
+radius scaled by [`mat4_max_scale_on_axis`](@ref) (three.js
+`Sphere.applyMatrix4`).
+"""
+sphere_apply_matrix4(s::BoundingSphere, m::Mat4) =
+    BoundingSphere(mat4_transform_point(m, s.center),
+                   s.radius * mat4_max_scale_on_axis(m))
+
+"""
+    sphere_expand_by_point(sphere, point)
+
+Smallest sphere that contains `sphere` and `point`, moving the center toward
+`point` (three.js `Sphere.expandByPoint`). An empty sphere becomes the point.
+"""
+function sphere_expand_by_point(s::BoundingSphere, p::Vec3)
+    sphere_is_empty(s) && return BoundingSphere(p, zero(s.radius))
+    offset = p - s.center
+    length_sq = _squared_length(offset)
+    if length_sq > s.radius * s.radius
+        len = sqrt(length_sq)
+        delta = (len - s.radius) / 2
+        return BoundingSphere(s.center + offset * (delta / len), s.radius + delta)
+    end
+    return BoundingSphere(s.center, s.radius + zero(length_sq))
+end
+
+"""
+    sphere_union(a, b)
+
+Smallest sphere containing both spheres (three.js `Sphere.union`).
+"""
+function sphere_union(a::BoundingSphere, b::BoundingSphere)
+    sphere_is_empty(b) && return a
+    sphere_is_empty(a) && return b
+    if a.center.x == b.center.x && a.center.y == b.center.y && a.center.z == b.center.z
+        return BoundingSphere(a.center, max(a.radius, b.radius))
+    end
+    reach = normalize(b.center - a.center) * b.radius
+    return sphere_expand_by_point(sphere_expand_by_point(a, b.center + reach),
+                                  b.center - reach)
+end
+
+# ------------------------------ Box3 ------------------------------
+
+"""
+    box3_clamp_point(box, point)
+
+Closest point of `box` to `point` (three.js `Box3.clampPoint`).
+"""
+box3_clamp_point(box::Box3, p::Vec3) = vec3_clamp(p, box.min, box.max)
+
+"""
+    box3_distance_to_point(box, point)
+
+Distance from `point` to `box`, zero inside (three.js `Box3.distanceToPoint`).
+"""
+box3_distance_to_point(box::Box3, p::Vec3) = distance(box3_clamp_point(box, p), p)
+
+"""
+    box3_bounding_sphere(box)
+
+Sphere centered on `box` with half its diagonal as radius; an empty box gives
+an empty sphere of radius -1 at the origin (three.js `Box3.getBoundingSphere`).
+"""
+function box3_bounding_sphere(box::Box3)
+    if box3_is_empty(box)
+        z = zero(box.min.x) / one(box.min.x)
+        return BoundingSphere(Vec3(z, z, z), z - one(z))
+    end
+    return BoundingSphere(box3_center(box), norm(box3_size(box)) / 2)
+end
+
+"""
+    box3_intersects_sphere(box, sphere)
+
+Whether `box` and `sphere` overlap (three.js `Box3.intersectsSphere`).
+"""
+box3_intersects_sphere(box::Box3, s::BoundingSphere) =
+    vec3_distance_squared(box3_clamp_point(box, s.center), s.center) <= s.radius * s.radius
+
+"""
+    box3_intersects_plane(box, plane)
+
+Whether `plane` cuts or touches `box` (three.js `Box3.intersectsPlane`).
+"""
+function box3_intersects_plane(box::Box3, plane::Plane)
+    n = plane.normal
+    lo_x, hi_x = n.x > 0 ? (n.x * box.min.x, n.x * box.max.x) : (n.x * box.max.x, n.x * box.min.x)
+    lo_y, hi_y = n.y > 0 ? (n.y * box.min.y, n.y * box.max.y) : (n.y * box.max.y, n.y * box.min.y)
+    lo_z, hi_z = n.z > 0 ? (n.z * box.min.z, n.z * box.max.z) : (n.z * box.max.z, n.z * box.min.z)
+    lo = lo_x + lo_y + lo_z
+    hi = hi_x + hi_y + hi_z
+    return lo <= -plane.constant && hi >= -plane.constant
+end
+
+# ------------------------------ Plane ------------------------------
+
+"""
+    plane_from_normal_and_coplanar_point(normal, point)
+
+Plane with `normal` through `point` (three.js
+`Plane.setFromNormalAndCoplanarPoint`); `normal` should have unit length.
+"""
+plane_from_normal_and_coplanar_point(normal::Vec3, point::Vec3) =
+    Plane(normal, -dot(point, normal))
+
+"""
+    plane_from_coplanar_points(a, b, c)
+
+Plane through `a`, `b` and `c`, with the normal `normalize((c-b)×(a-b))`
+(three.js `Plane.setFromCoplanarPoints`, counter-clockwise front side).
+"""
+plane_from_coplanar_points(a::Vec3, b::Vec3, c::Vec3) =
+    plane_from_normal_and_coplanar_point(normalize(cross(c - b, a - b)), a)
+
+"""
+    plane_normalize(plane)
+
+`plane` with a unit normal and the constant scaled to match (three.js
+`Plane.normalize`).
+"""
+function plane_normalize(plane::Plane)
+    inverse_length = one(plane.constant) / norm(plane.normal)
+    return Plane(plane.normal * inverse_length, plane.constant * inverse_length)
+end
+
+"""
+    plane_project_point(plane, point)
+
+Orthogonal projection of `point` onto `plane` (three.js `Plane.projectPoint`).
+"""
+plane_project_point(plane::Plane, p::Vec3) =
+    p + plane.normal * (-plane_distance_to_point(plane, p))
+
+"""
+    plane_coplanar_point(plane)
+
+Point of `plane` closest to the origin, `-constant * normal` (three.js
+`Plane.coplanarPoint`).
+"""
+plane_coplanar_point(plane::Plane) = plane.normal * (-plane.constant)
+
+"""
+    plane_intersect_line(plane, line; clamp_to_line=true) -> Vec3 or nothing
+
+Intersection of `plane` with the segment `line` (with the infinite line when
+`clamp_to_line=false`). A line lying in the plane returns its start; no
+intersection returns `nothing` (three.js `Plane.intersectLine`).
+"""
+function plane_intersect_line(plane::Plane, line::Line3; clamp_to_line::Bool=true)
+    direction = line3_delta(line)
+    denominator = dot(plane.normal, direction)
+    if iszero(_primal_value(denominator))
+        iszero(_primal_value(plane_distance_to_point(plane, line.start))) &&
+            return line.start + _zero_vec3(direction)
+        return nothing
+    end
+    t = -(dot(line.start, plane.normal) + plane.constant) / denominator
+    clamp_to_line && (t < 0 || t > 1) && return nothing
+    return line.start + direction * t
+end
+
+"""
+    plane_intersects_line(plane, line)
+
+Whether the endpoints of `line` lie strictly on opposite sides of `plane`
+(three.js `Plane.intersectsLine`).
+"""
+function plane_intersects_line(plane::Plane, line::Line3)
+    start_side = plane_distance_to_point(plane, line.start)
+    end_side = plane_distance_to_point(plane, line.finish)
+    return (start_side < 0 && end_side > 0) || (end_side < 0 && start_side > 0)
+end
+
+"""
+    plane_intersects_box(plane, box)
+
+Whether `plane` cuts or touches `box` (three.js `Plane.intersectsBox`).
+"""
+plane_intersects_box(plane::Plane, box::Box3) = box3_intersects_plane(box, plane)
+
+"""
+    plane_intersects_sphere(plane, sphere)
+
+Whether `plane` cuts or touches `sphere` (three.js `Plane.intersectsSphere`).
+"""
+plane_intersects_sphere(plane::Plane, s::BoundingSphere) = sphere_intersects_plane(s, plane)
+
+"""
+    plane_apply_matrix4(plane, m)
+
+`plane` transformed by the affine matrix `m`: a coplanar point is transformed
+by `m` and the normal by the normal matrix of `m` (three.js
+`Plane.applyMatrix4`).
+"""
+function plane_apply_matrix4(plane::Plane, m::Mat4)
+    reference = mat4_transform_point(m, plane_coplanar_point(plane))
+    normal = normalize(mat4_transform_direction(mat4_normal_matrix(m), plane.normal))
+    return Plane(normal, -dot(reference, normal))
+end
+
+# ------------------------------ Ray ------------------------------
+
+"""
+    ray_at(ray, t)
+
+Point `origin + t * direction` (three.js `Ray.at`).
+"""
+ray_at(ray::Ray, t::Real) = ray.origin + ray.direction * t
+
+"""
+    ray_closest_point_to_point(ray, point)
+
+Point of `ray` closest to `point`; the origin when `point` lies behind it
+(three.js `Ray.closestPointToPoint`). `direction` should have unit length.
+"""
+function ray_closest_point_to_point(ray::Ray, p::Vec3)
+    along = dot(p - ray.origin, ray.direction)
+    along < 0 && return ray.origin + _zero_vec3(ray.direction) * along
+    return ray.origin + ray.direction * along
+end
+
+"""
+    ray_distance_sq_to_point(ray, point)
+
+Squared distance from `point` to `ray` (three.js `Ray.distanceSqToPoint`).
+"""
+ray_distance_sq_to_point(ray::Ray, p::Vec3) =
+    vec3_distance_squared(ray_closest_point_to_point(ray, p), p)
+
+"""
+    ray_distance_to_point(ray, point)
+
+Distance from `point` to `ray` (three.js `Ray.distanceToPoint`).
+"""
+ray_distance_to_point(ray::Ray, p::Vec3) = sqrt(ray_distance_sq_to_point(ray, p))
+
+"""
+    ray_distance_sq_to_segment(ray, v0, v1) -> (distance_sq, point_on_ray, point_on_segment)
+
+Squared distance between `ray` and the segment `v0`–`v1` with the two closest
+points (three.js `Ray.distanceSqToSegment`, after Eberly's
+DistRaySegment). `direction` should have unit length.
+"""
+function ray_distance_sq_to_segment(ray::Ray, v0::Vec3, v1::Vec3)
+    center = (v0 + v1) / 2
+    segment_direction = normalize(v1 - v0)
+    diff = ray.origin - center
+    extent = distance(v0, v1) / 2
+    a01 = -dot(ray.direction, segment_direction)
+    b0 = dot(diff, ray.direction)
+    b1 = -dot(diff, segment_direction)
+    c = _squared_length(diff)
+    det = abs(1 - a01 * a01)
+    if det > 0
+        s0 = a01 * b1 - b0
+        s1 = a01 * b0 - b1
+        ext_det = extent * det
+        if s0 >= 0
+            if s1 >= -ext_det
+                if s1 <= ext_det
+                    inv_det = 1 / det
+                    s0 *= inv_det
+                    s1 *= inv_det
+                    sqr = s0 * (s0 + a01 * s1 + 2 * b0) + s1 * (a01 * s0 + s1 + 2 * b1) + c
+                else
+                    s1 = extent
+                    s0 = max(zero(s0), -(a01 * s1 + b0))
+                    sqr = -s0 * s0 + s1 * (s1 + 2 * b1) + c
+                end
+            else
+                s1 = -extent
+                s0 = max(zero(s0), -(a01 * s1 + b0))
+                sqr = -s0 * s0 + s1 * (s1 + 2 * b1) + c
+            end
+        else
+            if s1 <= -ext_det
+                s0 = max(zero(s0), -(-a01 * extent + b0))
+                s1 = s0 > 0 ? -extent : min(max(-extent, -b1), extent)
+                sqr = -s0 * s0 + s1 * (s1 + 2 * b1) + c
+            elseif s1 <= ext_det
+                s0 = zero(s0)
+                s1 = min(max(-extent, -b1), extent)
+                sqr = s1 * (s1 + 2 * b1) + c
+            else
+                s0 = max(zero(s0), -(a01 * extent + b0))
+                s1 = s0 > 0 ? extent : min(max(-extent, -b1), extent)
+                sqr = -s0 * s0 + s1 * (s1 + 2 * b1) + c
+            end
+        end
+    else
+        s1 = a01 > 0 ? -extent : extent
+        s0 = max(zero(a01), -(a01 * s1 + b0))
+        sqr = -s0 * s0 + s1 * (s1 + 2 * b1) + c
+    end
+    return sqr, ray.origin + ray.direction * s0, center + segment_direction * s1
+end
+
+"""
+    ray_intersect_sphere(ray, sphere) -> Vec3 or nothing
+
+First intersection of `ray` with `sphere` at or after the origin (the exit
+point when the origin is inside); `nothing` for a miss or an empty sphere
+(three.js `Ray.intersectSphere`).
+"""
+function ray_intersect_sphere(ray::Ray, s::BoundingSphere)
+    s.radius < 0 && return nothing
+    to_center = s.center - ray.origin
+    tca = dot(to_center, ray.direction)
+    d2 = dot(to_center, to_center) - tca * tca
+    radius2 = s.radius * s.radius
+    d2 > radius2 && return nothing
+    thc = sqrt(radius2 - d2)
+    t0 = tca - thc
+    t1 = tca + thc
+    t1 < 0 && return nothing
+    return ray_at(ray, t0 < 0 ? t1 : t0)
+end
+
+"""
+    ray_intersects_sphere(ray, sphere)
+
+Whether `ray` hits `sphere` (three.js `Ray.intersectsSphere`).
+"""
+ray_intersects_sphere(ray::Ray, s::BoundingSphere) =
+    s.radius >= 0 && ray_distance_sq_to_point(ray, s.center) <= s.radius * s.radius
+
+"""
+    ray_distance_to_plane(ray, plane) -> distance or nothing
+
+Ray parameter at which `ray` meets `plane`: zero when the origin lies in a
+parallel plane, `nothing` when the plane is parallel or behind (three.js
+`Ray.distanceToPlane`).
+"""
+function ray_distance_to_plane(ray::Ray, plane::Plane)
+    denominator = dot(plane.normal, ray.direction)
+    if iszero(_primal_value(denominator))
+        iszero(_primal_value(plane_distance_to_point(plane, ray.origin))) &&
+            return zero(denominator)
+        return nothing
+    end
+    t = -(dot(ray.origin, plane.normal) + plane.constant) / denominator
+    return t >= 0 ? t : nothing
+end
+
+"""
+    ray_intersect_plane(ray, plane) -> Vec3 or nothing
+
+Point where `ray` meets `plane` (three.js `Ray.intersectPlane`).
+"""
+function ray_intersect_plane(ray::Ray, plane::Plane)
+    t = ray_distance_to_plane(ray, plane)
+    t === nothing && return nothing
+    return ray_at(ray, t)
+end
+
+"""
+    ray_intersects_plane(ray, plane)
+
+Whether `ray` starts on or points toward `plane` (three.js
+`Ray.intersectsPlane`).
+"""
+function ray_intersects_plane(ray::Ray, plane::Plane)
+    to_point = plane_distance_to_point(plane, ray.origin)
+    iszero(_primal_value(to_point)) && return true
+    return dot(plane.normal, ray.direction) * to_point < 0
+end
+
+"""
+    ray_intersect_box(ray, box) -> Vec3 or nothing
+
+First point of `box` hit by `ray` (the exit point when the origin is inside);
+`nothing` for a miss (three.js `Ray.intersectBox` slab test).
+"""
+function ray_intersect_box(ray::Ray, box::Box3)
+    o = ray.origin
+    inv_x = 1 / ray.direction.x
+    inv_y = 1 / ray.direction.y
+    inv_z = 1 / ray.direction.z
+    tmin, tmax = inv_x >= 0 ? ((box.min.x - o.x) * inv_x, (box.max.x - o.x) * inv_x) :
+                              ((box.max.x - o.x) * inv_x, (box.min.x - o.x) * inv_x)
+    tymin, tymax = inv_y >= 0 ? ((box.min.y - o.y) * inv_y, (box.max.y - o.y) * inv_y) :
+                                ((box.max.y - o.y) * inv_y, (box.min.y - o.y) * inv_y)
+    (tmin > tymax || tymin > tmax) && return nothing
+    (tymin > tmin || isnan(tmin)) && (tmin = tymin)
+    (tymax < tmax || isnan(tmax)) && (tmax = tymax)
+    tzmin, tzmax = inv_z >= 0 ? ((box.min.z - o.z) * inv_z, (box.max.z - o.z) * inv_z) :
+                                ((box.max.z - o.z) * inv_z, (box.min.z - o.z) * inv_z)
+    (tmin > tzmax || tzmin > tmax) && return nothing
+    (tzmin > tmin || isnan(tmin)) && (tmin = tzmin)
+    (tzmax < tmax || isnan(tmax)) && (tmax = tzmax)
+    tmax < 0 && return nothing
+    return ray_at(ray, tmin >= 0 ? tmin : tmax)
+end
+
+"""
+    ray_intersects_box(ray, box)
+
+Whether `ray` hits `box` (three.js `Ray.intersectsBox`).
+"""
+ray_intersects_box(ray::Ray, box::Box3) = ray_intersect_box(ray, box) !== nothing
+
+"""
+    ray_apply_matrix4(ray, m)
+
+`ray` transformed by `m`: the origin as a point and the direction as a
+normalized direction (three.js `Ray.applyMatrix4`).
+"""
+ray_apply_matrix4(ray::Ray, m::Mat4) =
+    Ray(mat4_transform_point(m, ray.origin),
+        normalize(mat4_transform_direction(m, ray.direction)))
+
+# ------------------------------ Triangle ------------------------------
+
+"""
+    triangle_plane(triangle)
+
+Plane containing `triangle` (three.js `Triangle.getPlane`).
+"""
+triangle_plane(tri::Triangle) = plane_from_coplanar_points(tri.a, tri.b, tri.c)
+
+"""
+    triangle_is_front_facing(triangle, direction)
+
+Whether `triangle` faces against `direction`, i.e. its normal has a negative
+dot product with it (three.js `Triangle.isFrontFacing`).
+"""
+triangle_is_front_facing(tri::Triangle, direction::Vec3) =
+    dot(cross(tri.c - tri.b, tri.a - tri.b), direction) < 0
+
+"""
+    triangle_closest_point_to_point(triangle, point)
+
+Point of `triangle` (including its edges) closest to `point` (three.js
+`Triangle.closestPointToPoint`, after Ericson's Real-Time Collision Detection
+5.1.5).
+"""
+function triangle_closest_point_to_point(tri::Triangle, p::Vec3)
+    a, b, c = tri.a, tri.b, tri.c
+    ab = b - a
+    ac = c - a
+    ap = p - a
+    d1 = dot(ab, ap)
+    d2 = dot(ac, ap)
+    (d1 <= 0 && d2 <= 0) && return a + _zero_vec3(ap)
+    bp = p - b
+    d3 = dot(ab, bp)
+    d4 = dot(ac, bp)
+    (d3 >= 0 && d4 <= d3) && return b + _zero_vec3(ap)
+    vc = d1 * d4 - d3 * d2
+    if vc <= 0 && d1 >= 0 && d3 <= 0
+        v = d1 / (d1 - d3)
+        return a + ab * v
+    end
+    cp = p - c
+    d5 = dot(ab, cp)
+    d6 = dot(ac, cp)
+    (d6 >= 0 && d5 <= d6) && return c + _zero_vec3(ap)
+    vb = d5 * d2 - d1 * d6
+    if vb <= 0 && d2 >= 0 && d6 <= 0
+        w = d2 / (d2 - d6)
+        return a + ac * w
+    end
+    va = d3 * d6 - d5 * d4
+    if va <= 0 && (d4 - d3) >= 0 && (d5 - d6) >= 0
+        w = (d4 - d3) / ((d4 - d3) + (d5 - d6))
+        return b + (c - b) * w
+    end
+    denominator = 1 / (va + vb + vc)
+    v = vb * denominator
+    w = vc * denominator
+    return a + ab * v + ac * w
+end
+
+# ------------------------------ MathUtils ------------------------------
+
+"""
+    map_linear(x, a1, a2, b1, b2)
+
+Linear map of `x` from the range `[a1, a2]` to `[b1, b2]` (three.js
+`MathUtils.mapLinear`).
+"""
+map_linear(x, a1, a2, b1, b2) = b1 + (x - a1) * (b2 - b1) / (a2 - a1)
+
+"""
+    inverse_lerp(x, y, value)
+
+Fraction of the way `value` lies from `x` to `y`; zero when `x == y`
+(three.js `MathUtils.inverseLerp`).
+"""
+function inverse_lerp(x, y, value)
+    _primal_value(x) != _primal_value(y) && return (value - x) / (y - x)
+    return zero((value - x) / one(y - x))
+end
+
+"""
+    damp(x, y, lambda, dt)
+
+Frame-rate independent exponential smoothing from `x` toward `y`
+(three.js `MathUtils.damp`, `lerp(x, y, 1 - exp(-lambda*dt))`).
+"""
+function damp(x, y, lambda, dt)
+    t = 1 - exp(-lambda * dt)
+    return (1 - t) * x + t * y
+end
+
+"""
+    pingpong(x, length=1)
+
+Value that moves back and forth between 0 and `length` as `x` increases
+(three.js `MathUtils.pingpong`).
+"""
+pingpong(x, len=1) = len - abs(mod(x, len * 2) - len)
+
+"""
+    smoothstep(x, min, max)
+
+Cubic Hermite step: 0 for `x <= min`, 1 for `x >= max`, `t²(3-2t)` between
+(three.js `MathUtils.smoothstep`).
+"""
+function smoothstep(x, lo, hi)
+    x <= lo && return zero((x - lo) / one(hi - lo))
+    x >= hi && return one((x - lo) / one(hi - lo))
+    t = (x - lo) / (hi - lo)
+    return t * t * (3 - 2 * t)
+end
+
+"""
+    smootherstep(x, min, max)
+
+Ken Perlin's quintic step `t³(t(6t-15)+10)`, clamped like
+[`smoothstep`](@ref) (three.js `MathUtils.smootherstep`).
+"""
+function smootherstep(x, lo, hi)
+    x <= lo && return zero((x - lo) / one(hi - lo))
+    x >= hi && return one((x - lo) / one(hi - lo))
+    t = (x - lo) / (hi - lo)
+    return t * t * t * (t * (t * 6 - 15) + 10)
+end
+
+# ------------------------------ Matrix3 ------------------------------
+
+"""
+    mat3_from_mat4(m)
+
+Upper-left 3×3 block of `m` (three.js `Matrix3.setFromMatrix4`).
+"""
+mat3_from_mat4(m::Mat4) = Mat3((m.e[1], m.e[2], m.e[3], m.e[5], m.e[6], m.e[7],
+                                m.e[9], m.e[10], m.e[11]))
+
+"""
+    mat3_determinant(m)
+
+Determinant of the 3×3 matrix `m` (three.js `Matrix3.determinant`).
+"""
+function mat3_determinant(m::Mat3)
+    a, b, c, d, e, f, g, h, i = m.e
+    return a * e * i - a * f * h - b * d * i + b * f * g + c * d * h - c * e * g
+end
+
+"""
+    mat3_transpose(m)
+
+Transpose of `m` (three.js `Matrix3.transpose`).
+"""
+function mat3_transpose(m::Mat3)
+    e = m.e
+    return Mat3((e[1], e[4], e[7], e[2], e[5], e[8], e[3], e[6], e[9]))
+end
+
+"""
+    mat3_inverse(m)
+
+Inverse of `m`; the zero matrix when `m` is singular (three.js
+`Matrix3.invert`).
+"""
+function mat3_inverse(m::Mat3)
+    n11, n21, n31, n12, n22, n32, n13, n23, n33 = m.e
+    t11 = n33 * n22 - n32 * n23
+    t12 = n32 * n13 - n33 * n12
+    t13 = n23 * n12 - n22 * n13
+    det = n11 * t11 + n21 * t12 + n31 * t13
+    if iszero(_primal_value(det))
+        z = zero(det) / one(det)
+        return Mat3((z, z, z, z, z, z, z, z, z))
+    end
+    inv_det = 1 / det
+    return Mat3((t11 * inv_det, (n31 * n23 - n33 * n21) * inv_det,
+                 (n32 * n21 - n31 * n22) * inv_det,
+                 t12 * inv_det, (n33 * n11 - n31 * n13) * inv_det,
+                 (n31 * n12 - n32 * n11) * inv_det,
+                 t13 * inv_det, (n21 * n13 - n23 * n11) * inv_det,
+                 (n22 * n11 - n21 * n12) * inv_det))
+end
+
+"""
+    mat3_normal_matrix(m::Mat4)
+
+Inverse transpose of the upper-left 3×3 block of `m`, which transforms normals
+(three.js `Matrix3.getNormalMatrix`).
+"""
+mat3_normal_matrix(m::Mat4) = mat3_transpose(mat3_inverse(mat3_from_mat4(m)))
+
+"""
+    mat3_set_uv_transform(tx, ty, sx, sy, rotation, cx, cy)
+
+UV transform with offset `(tx, ty)`, repeat `(sx, sy)` and `rotation` about
+the center `(cx, cy)` (three.js `Matrix3.setUvTransform`).
+"""
+function mat3_set_uv_transform(tx, ty, sx, sy, rotation, cx, cy)
+    c, s = cos(rotation), sin(rotation)
+    m13 = -sx * (c * cx + s * cy) + cx + tx
+    m23 = -sy * (-s * cx + c * cy) + cy + ty
+    a, b, d, e = sx * c, sx * s, -sy * s, sy * c
+    z = zero(m13 * m23)
+    # three.js `set` takes row-major arguments; elements are column-major.
+    return Mat3((a + z, d + z, z, b + z, e + z, z, m13 + z, m23 + z, one(z)))
+end
+
+"""
+    mat3_transform_vec3(m, v)
+
+`m * v` (three.js `Vector3.applyMatrix3`).
+"""
+function mat3_transform_vec3(m::Mat3, v::Vec3)
+    e = m.e
+    return Vec3(e[1] * v.x + e[4] * v.y + e[7] * v.z,
+                e[2] * v.x + e[5] * v.y + e[8] * v.z,
+                e[3] * v.x + e[6] * v.y + e[9] * v.z)
+end
+
+"""
+    *(a::Mat3, b::Mat3)
+
+Matrix product `a * b` (three.js `Matrix3.multiplyMatrices`).
+"""
+function Base.:*(a::Mat3, b::Mat3)
+    ae, be = a.e, b.e
+    return Mat3(ntuple(Val(9)) do index
+        column = (index - 1) ÷ 3
+        row = (index - 1) % 3 + 1
+        ae[row] * be[3column + 1] + ae[row + 3] * be[3column + 2] +
+            ae[row + 6] * be[3column + 3]
+    end)
 end
