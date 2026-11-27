@@ -801,10 +801,13 @@ space).
 - `coeffs` is Diff3D's order-1 form `(DC, x, y, z)`, contributing
   `DC + x·n.x + y·n.y + z·n.z` directly as irradiance.
 
-The irradiance is the sum of both terms, clamped to be non-negative per channel
-and scaled by `intensity`; it adds to the same ambient irradiance as
+The irradiance is the `coeffs` term clamped to be non-negative per channel plus
+the `sh` term, which is not clamped (three.js adds `shGetIrradianceAt` to the
+fragment irradiance unclamped, so ringing of a band-limited probe can subtract
+light), scaled by `intensity`; it adds to the same ambient irradiance as
 [`AmbientLight`](@ref). `LightProbe(ambient)` is a uniform probe with
-`coeffs[1] = ambient`.
+`coeffs[1] = ambient`. The compact WebGL export supports only `coeffs` and
+rejects a probe with non-zero `sh`.
 """
 mutable struct LightProbe <: AbstractLight
     position::Vec3{Float64}
@@ -852,25 +855,17 @@ end
     return result
 end
 
-@inline function _light_probe_combined_channel(dc, gx, gy, gz, sh_value, normal::Vec3)
-    value = dc + gx * normal.x + gy * normal.y + gz * normal.z + sh_value
-    return max(value, zero(value))
-end
-
-# Irradiance of a probe with spherical-harmonic coefficients: the order-1
-# `coeffs` term plus the SH9 term, clamped per channel (before `intensity`).
-function _light_probe_sh_fill(c::NTuple{4,Color3{Float64}}, sh::NTuple{9,Color3{Float64}},
-                              normal::Vec3)
+# SH9 irradiance of a probe, not clamped: three.js adds shGetIrradianceAt to the
+# fragment irradiance as is (lights_fragment_begin.glsl.js:230,
+# WebGLLights.js:283 sums every probe's coefficients first).
+function _light_probe_sh_irradiance(sh::NTuple{9,Color3{Float64}}, normal::Vec3)
     r = _sh9_irradiance_channel(sh[1].r, sh[2].r, sh[3].r, sh[4].r, sh[5].r, sh[6].r,
                                 sh[7].r, sh[8].r, sh[9].r, normal)
     g = _sh9_irradiance_channel(sh[1].g, sh[2].g, sh[3].g, sh[4].g, sh[5].g, sh[6].g,
                                 sh[7].g, sh[8].g, sh[9].g, normal)
     b = _sh9_irradiance_channel(sh[1].b, sh[2].b, sh[3].b, sh[4].b, sh[5].b, sh[6].b,
                                 sh[7].b, sh[8].b, sh[9].b, normal)
-    return Color3(
-        _light_probe_combined_channel(c[1].r, c[2].r, c[3].r, c[4].r, r, normal),
-        _light_probe_combined_channel(c[1].g, c[2].g, c[3].g, c[4].g, g, normal),
-        _light_probe_combined_channel(c[1].b, c[2].b, c[3].b, c[4].b, b, normal))
+    return Color3(r, g, b)
 end
 
 """Build a uniform (DC-only) light probe from an ambient colour."""

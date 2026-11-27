@@ -366,11 +366,18 @@ end
               ((0.48, -0.6, 0.64), (0.23802673344000014, 0.43418654048, -0.21925809164799986))]
     for (normal, expected) in oracle
         got = Diff3D._fill_color(Vec3(normal...), probe)
-        # Diff3D clamps probe irradiance at zero per channel (as for coeffs).
-        @test got.r ≈ max(expected[1], 0.0) atol = 1e-15
-        @test got.g ≈ max(expected[2], 0.0) atol = 1e-15
-        @test got.b ≈ max(expected[3], 0.0) atol = 1e-15
+        # three.js adds shGetIrradianceAt unclamped (lights_fragment_begin.glsl.js:230),
+        # so negative irradiance (three of these channels) is kept.
+        @test got.r ≈ expected[1] atol = 1e-15
+        @test got.g ≈ expected[2] atol = 1e-15
+        @test got.b ≈ expected[3] atol = 1e-15
     end
+    # The clamped order-1 `coeffs` term and the unclamped SH term add.
+    mixed = LightProbe(coeffs=(Color3(-0.2, 0.1, 0.0), Color3(0.0, 0.0, 0.0),
+                               Color3(0.0, 0.0, 0.0), Color3(0.0, 0.0, 0.0)), sh=sh)
+    got = Diff3D._fill_color(Vec3(0.0, 1.0, 0.0), mixed)
+    @test got.r ≈ 0.0 + oracle[1][2][1] atol = 1e-15
+    @test got.g ≈ 0.1 + oracle[1][2][2] atol = 1e-15
     doubled = Diff3D._fill_color(Vec3(1.0, 0.0, 0.0), LightProbe(sh=sh, intensity=2.0))
     single = Diff3D._fill_color(Vec3(1.0, 0.0, 0.0), probe)
     @test (doubled.r, doubled.g, doubled.b) == (2single.r, 2single.g, 2single.b)
@@ -453,5 +460,42 @@ end
     @test Diff3D._shadow_fn_visibility((l, p) -> 0.25, light, points[1], normal) == 0.25
     if Base.JLOptions().opt_level > 0
         @test _audit3b_normal_lookup_allocations(query, light, points, normal) == 0
+    end
+end
+
+function _audit3b_web_html(scene)
+    path = tempname() * ".html"
+    try
+        save_webgl_html(path, [WebGLExportCase("audit3b", "Audit", "audit", scene)]; chrome=false)
+        return read(path, String)
+    finally
+        rm(path; force=true)
+    end
+end
+
+@testset "WebGL export refuses light settings its viewer cannot honour" begin
+    function web_scene(light)
+        scene = Scene()
+        floor = Mesh(BoxGeometry(width=4.0, height=0.2, depth=4.0), MeshStandardMaterial())
+        floor.cast_shadow = true
+        add!(scene, floor)
+        add!(scene, light)
+        return scene
+    end
+    # The viewer evaluates only the order-1 coeffs of a probe.
+    sh = ntuple(j -> Color3(0.1j, 0.0, 0.0), 9)
+    @test_throws ArgumentError _audit3b_web_html(web_scene(LightProbe(sh=sh)))
+    @test occursin("lightProbe", _audit3b_web_html(web_scene(LightProbe(Color3(0.2, 0.2, 0.2)))))
+    # Its shadow shaders take neither shadow intensity nor normal bias.
+    for Light in (DirectionalLight, PointLight, SpotLight)
+        @test_throws ArgumentError _audit3b_web_html(web_scene(
+            Light(position=Vec3(0.0, 3.0, 0.0), cast_shadow=true, shadow_intensity=0.5)))
+        @test_throws ArgumentError _audit3b_web_html(web_scene(
+            Light(position=Vec3(0.0, 3.0, 0.0), cast_shadow=true, shadow_normal_bias=0.1)))
+        # A light that casts no shadow exports whatever its shadow settings.
+        @test _audit3b_web_html(web_scene(
+            Light(position=Vec3(0.0, 3.0, 0.0), shadow_intensity=0.5))) isa String
+        @test _audit3b_web_html(web_scene(
+            Light(position=Vec3(0.0, 3.0, 0.0), cast_shadow=true))) isa String
     end
 end

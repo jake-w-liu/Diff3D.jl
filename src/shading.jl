@@ -1534,20 +1534,20 @@ end
 end
 
 # Order-1 SH irradiance, clamped to non-negative per channel. A probe with
-# three.js SH9 coefficients adds shGetIrradianceAt (lights.jl).
+# three.js SH9 coefficients adds the unclamped shGetIrradianceAt (lights.jl).
 function _fill_color(normal::Vec3, light::LightProbe)
     _validate_light_parameters(light)
     c = light.coeffs
-    _light_probe_has_sh(light) &&
-        return _light_probe_sh_fill(c, light.sh, normal) * light.intensity
-    Color3(
+    order1 = Color3(
         _light_probe_channel(
             c[1].r, c[2].r, c[3].r, c[4].r, normal),
         _light_probe_channel(
             c[1].g, c[2].g, c[3].g, c[4].g, normal),
         _light_probe_channel(
             c[1].b, c[2].b, c[3].b, c[4].b, normal),
-    ) * light.intensity
+    )
+    _light_probe_has_sh(light) || return order1 * light.intensity
+    return (order1 + _light_probe_sh_irradiance(light.sh, normal)) * light.intensity
 end
 
 # Environment-map (basic IBL) specular reflection. Reflect the view direction
