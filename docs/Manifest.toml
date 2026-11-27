@@ -56,7 +56,7 @@ version = "1.11.0"
 deps = ["ForwardDiff", "LinearAlgebra", "Printf"]
 path = ".."
 uuid = "72681062-5925-4945-963f-74d9429756fe"
-version = "1.0.0"
+version = "2.0.0"
 
 [[deps.DiffResults]]
 deps = ["StaticArraysCore"]

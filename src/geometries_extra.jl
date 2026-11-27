@@ -2966,7 +2966,7 @@ end
     ParametricFunctions
 
 three.js's example parametric surfaces (`examples/jsm/geometries/ParametricFunctions.js`)
-as `(u, v) -> Vec3` functions for [`ParametricGeometry`](@ref):
+as `(u, v) -> Vec3` functions for [`ParametricGeometry`](@ref Diff3D.ParametricGeometry):
 `ParametricFunctions.klein`, `ParametricFunctions.plane`,
 `ParametricFunctions.mobius` and `ParametricFunctions.mobius3d`.
 """
