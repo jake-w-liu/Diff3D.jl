@@ -186,6 +186,22 @@ end
         @test only(payloads(LineSegments(segment, Material(opacity=0.5))))["transparent"] === true
         @test only(payloads(LineSegments(segment, Material())))["transparent"] === false
     end
+    # A translucent instanced line takes the per-instance sorted split, so each
+    # draw bakes its instance matrix and instance colour like the mesh path.
+    line_instances = InstancedMesh(segment, LineBasicMaterial(opacity=0.5, color=Color3(1.0, 0.5, 0.25)),
+                                   [mat4_translation(Float64(i), 0.0, 0.0) for i in 1:3];
+                                   draw_mode=:lines)
+    set_instance_color!(line_instances, 1, Color3(0.5, 1.0, 1.0))
+    line_split = payloads(line_instances)
+    @test length(line_split) == 3
+    @test all(p -> p["transparent"] === true && p["mode"] == "lines", line_split)
+    @test [p["matrix"][13] for p in line_split] == [1, 2, 3]
+    @test line_split[1]["color"] == [0.5, 0.5, 0.25]
+    @test line_split[2]["color"] == [1, 0.5, 0.25]
+    opaque_line_instances = InstancedMesh(segment, LineBasicMaterial(),
+                                          [mat4_translation(Float64(i), 0.0, 0.0) for i in 1:3];
+                                          draw_mode=:lines)
+    @test only(payloads(opaque_line_instances))["transparent"] === false
     # Materials with the field stay authoritative (WebGLRenderLists.js push).
     @test only(payloads(Mesh(BoxGeometry(), MeshBasicMaterial(opacity=0.5))))["transparent"] === false
 end
@@ -206,6 +222,22 @@ end
     @test payload["type"] == "hemisphere"
     @test isapprox(payload["direction"],
                    [0.6504805978210656, 0.36756620069764756, 0.6646578668480844];
+                   rtol=0, atol=4eps())
+    # Two nested parents with negative and non-uniform scales (same oracle).
+    outer = Group()
+    outer.position = Vec3(0.0, 1.0, 0.0)
+    outer.rotation = Euler(0.3, -0.7, 1.1)
+    outer.scale = Vec3(-2.0, 0.5, 3.0)
+    inner = Group()
+    inner.position = Vec3(1.0, -2.0, 0.5)
+    inner.rotation = Euler(-0.4, 0.2, 0.9)
+    inner.scale = Vec3(1.0, -1.0, 2.0)
+    add!(outer, inner)
+    add!(inner, HemisphereLight(position=Vec3(1.0, 2.0, -3.0)))
+    nested_scene = Scene()
+    add!(nested_scene, outer)
+    @test isapprox(only(Diff3D._json_parse(Diff3D._web_lights_json(nested_scene)))["direction"],
+                   [0.6376511080927291, 0.0014803232472177413, -0.7703238753869689];
                    rtol=0, atol=4eps())
     # Default position is Object3D.DEFAULT_UP; a zero position stays zero
     # (Vector3.normalize divides by `length() || 1`).
@@ -259,12 +291,15 @@ function _audit3_data_json_allocations(case, io)
     return @allocated Diff3D._web_write_data_json(io, [case])
 end
 
-@testset "WebGL export integer text and per-object allocation budget" begin
+@testset "WebGL export integer text" begin
     for x in (0, 7, 10, 99, 100, 12345, -1, -10, -987654321, typemax(Int), typemin(Int))
         io = IOBuffer()
         Diff3D._web_print_int(io, x)
         @test String(take!(io)) == string(x)
     end
+end
+
+@testset "WebGL export per-object allocation budget" begin
     if Base.JLOptions().opt_level > 0
         count = 300
         case = _audit3_many_objects_case(count)
