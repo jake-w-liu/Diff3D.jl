@@ -2945,6 +2945,116 @@ referenced library that does not exist is an error.
 """
 load_obj_groups(path::String) = _obj_load(path, true)
 
+"""
+    load_obj_scene(path) -> Group
+
+Load a Wavefront OBJ file as a scene, like three.js `OBJLoader.parse`: a
+[`Group`](@ref) with one child per `o`/`g` object that has geometry, named
+after the object. Faces become [`Mesh`](@ref) children with the geometry
+[`load_obj`](@ref) builds for them (one mesh per `usemtl` material of the
+object), `l` polylines become [`LineSegments`](@ref) and `p` points become
+[`PointsObject`](@ref)s. Materials come from the `mtllib` libraries as in
+[`load_obj_groups`](@ref); a material name with no definition, or no `usemtl`,
+gets a default `MeshPhongMaterial`. As in `OBJLoader`, lines use a
+`LineBasicMaterial` and points a `PointsMaterial` with `size_attenuation=false`
+(size 10 with a library material, else 1), both taking the library material's
+colour; vertex colours set `vertex_colors` on meshes and colour points. A file
+with vertices but no faces, lines or points loads as one point cloud.
+
+Unlike `OBJLoader`, which draws the vertices of a polyline `l a b c` pairwise,
+a polyline becomes the segments `a-b` and `b-c`, and the faces, lines and points
+of one object become separate children instead of one object of the last kind.
+Smoothing groups (`s`) are ignored.
+"""
+function load_obj_scene(path::String)
+    rec = Diff3D._OBJSceneRecords()
+    geo, face_mtl, materials = _obj_load(path, true, rec)
+    root = Group(name="")
+    nobj = length(rec.object_names)
+    has_colors = has_attribute(geo, :color)
+    point_colored = !isempty(rec.colors)
+    nothing_emitted = geo.n_faces == 0 && isempty(rec.line_vertices) &&
+                      isempty(rec.point_vertices)
+    if nothing_emitted
+        # OBJLoader.js parse: a single object without geometry is a point cloud.
+        nobj == 1 && length(rec.verts) >= 3 &&
+            add!(root, _obj_points_object(rec, collect(1:(length(rec.verts) ÷ 3)), "",
+                                          nothing, rec.object_names[1]))
+        return root
+    end
+    for k in 1:nobj
+        name = rec.object_names[k]
+        # Triangles of this object, one mesh per material in first-use order.
+        tris = [t for t in eachindex(rec.face_object) if rec.face_object[t] == k]
+        for mtl in unique(face_mtl[t] for t in tris)
+            sel = [t for t in tris if face_mtl[t] == mtl]
+            material = get(materials, mtl, nothing)
+            material === nothing && (material = MeshPhongMaterial())
+            has_colors && (material = _gltf_enable_vertex_colors(material))
+            add!(root, Mesh(_obj_triangle_subset(geo, sel), material; name=name))
+        end
+        segs = [s for s in eachindex(rec.line_object) if rec.line_object[s] == k]
+        for mtl in unique(rec.line_material[s] for s in segs)
+            sel = Int[]
+            for s in segs
+                rec.line_material[s] == mtl || continue
+                push!(sel, rec.line_vertices[2s - 1], rec.line_vertices[2s])
+            end
+            lib = get(materials, mtl, nothing)
+            line_mat = LineBasicMaterial(color=lib === nothing ? Color3(1.0, 1.0, 1.0) : lib.color)
+            add!(root, LineSegments(_obj_vertex_subset(rec.verts, sel), line_mat; name=name))
+        end
+        pts = [q for q in eachindex(rec.point_object) if rec.point_object[q] == k]
+        for mtl in unique(rec.point_material[q] for q in pts)
+            sel = [rec.point_vertices[q] for q in pts if rec.point_material[q] == mtl]
+            add!(root, _obj_points_object(rec, sel, mtl, get(materials, mtl, nothing), name))
+        end
+    end
+    return root
+end
+
+# Positions of the given file vertices, one geometry vertex each.
+function _obj_vertex_subset(verts::Vector{Float64}, sel::Vector{Int})
+    pos = Vector{Float64}(undef, 3 * length(sel))
+    @inbounds for (k, v) in enumerate(sel)
+        pos[3k - 2] = verts[3v - 2]; pos[3k - 1] = verts[3v - 1]; pos[3k] = verts[3v]
+    end
+    return BufferGeometry(pos, Float64[], Float64[], Int[], length(sel), 0)
+end
+
+function _obj_points_object(rec, sel::Vector{Int}, mtl::String, lib, name::String)
+    g = _obj_vertex_subset(rec.verts, sel)
+    colored = !isempty(rec.colors) && all(v -> !isnan(rec.colors[3v - 2]), sel)
+    if colored
+        set_attribute!(g, :color, _obj_vertex_subset(rec.colors, sel).positions, 3)
+    end
+    # OBJLoader.js: PointsMaterial({size: 10, sizeAttenuation: false}) copied
+    # from a library material, else size 1.
+    mat = PointsMaterial(color=lib === nothing ? Color3(1.0, 1.0, 1.0) : lib.color,
+                         size=lib === nothing ? 1.0 : 10.0, size_attenuation=false,
+                         map=lib === nothing ? nothing : lib.map)
+    return PointsObject(g, mat; name=name)
+end
+
+# The triangles `sel` of a load_obj geometry (whose corners are unshared).
+function _obj_triangle_subset(geo::BufferGeometry, sel::Vector{Int})
+    order = Int[]
+    sizehint!(order, 3 * length(sel))
+    for t in sel
+        push!(order, 3t - 2, 3t - 1, 3t)
+    end
+    corners = [geo.indices[c] for c in order]
+    out = BufferGeometry(_ply_expand_by_index(geo.positions, 3, corners),
+                         _ply_expand_by_index(geo.normals, 3, corners),
+                         isempty(geo.uvs) ? Float64[] : _ply_expand_by_index(geo.uvs, 2, corners),
+                         collect(1:length(corners)), length(corners), length(sel))
+    for (name, attr) in geo.attributes
+        set_attribute!(out, name, _ply_expand_by_index(attr.data, attr.item_size, corners),
+                       attr.item_size)
+    end
+    return out
+end
+
 # ========================== Minimal JSON parser ==========================
 # RFC 8259 JSON with ECMAScript JSON.parse results: numbers are Float64
 # (correctly rounded, underflow to ±0), objects are Dict{String,Any} keeping the
@@ -9953,6 +10063,8 @@ function _gltf_texture_transform(texinfo)
                                            "texture transform rotation")
     tex_coord = _gltf_checked_nonnegative_integer(
         get(ext, "texCoord", get(texinfo, "texCoord", 0.0)), "texture texCoord")
+    tex_coord <= 1 ||
+        error("glTF texture texCoord $tex_coord is not supported; textures can use TEXCOORD_0 or TEXCOORD_1")
     return (Vec2(offset[1], offset[2]),
             Vec2(scale[1], scale[2]),
             rotation,
@@ -10113,6 +10225,15 @@ function _gltf_texture(gltf, buffers, dir::String, texinfo; colorspace::Symbol=:
     _gltf_uses_mipmaps(min_filter) && generate_mipmaps!(tex)
     texture_cache !== nothing && (texture_cache[cache_key] = tex)
     return tex
+end
+
+# KHR_materials_ior: `ior` is at least 1, or 0 for an infinite index of
+# refraction, which three.js GLTFLoader.js:1277 represents as 1000.
+function _gltf_material_ior(ext)
+    ior = _gltf_checked_finite_number(get(ext, "ior", 1.5), "ior")
+    ior == 0.0 && return 1000.0
+    ior >= 1.0 || error("glTF KHR_materials_ior ior must be 0 or at least 1")
+    return ior
 end
 
 function _gltf_material(gltf, buffers, dir::String, mi; texture_cache=nothing)
@@ -10302,8 +10423,7 @@ function _gltf_material(gltf, buffers, dir::String, mi; texture_cache=nothing)
                                     attenuation_color=Color3(attenuation_color[1],
                                                              attenuation_color[2],
                                                              attenuation_color[3]),
-                                    ior=_gltf_checked_finite_number(get(ior_ext, "ior", 1.5),
-                                                                    "ior"),
+                                    ior=_gltf_material_ior(ior_ext),
                                     sheen=haskey(extensions, "KHR_materials_sheen") ? 1.0 : 0.0,
                                     sheen_color=Color3(sheen_color_factor[1],
                                                        sheen_color_factor[2],
@@ -10636,6 +10756,16 @@ function _gltf_expand_nontriangle_geometry(geo::BufferGeometry, order::Vector{In
             attr.item_size)
     end
     return BufferGeometry(positions, normals, uvs, Int[], length(order), 0, attrs)
+end
+
+# A triangle geometry de-indexed by `order` (1-based corner indices), with
+# face normals.
+function _gltf_flat_triangle_geometry(geo::BufferGeometry, order::Vector{Int})
+    flat = _gltf_expand_nontriangle_geometry(geo, order)
+    out = BufferGeometry(flat.positions, Float64[], flat.uvs, collect(1:length(order)),
+                         length(order), length(order) ÷ 3, flat.attributes)
+    compute_vertex_normals!(out)
+    return out
 end
 
 function _gltf_validate_node_matrix_trs(matrix::Mat4{Float64})
@@ -11225,7 +11355,11 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
             geo = _gltf_expand_nontriangle_geometry(geo, indices)
             preserve_nontriangle_morphs || _gltf_bake_static_morphs!(geo, morph_weights)
         elseif isempty(normals)
-            compute_vertex_normals!(geo)
+            # glTF 2.0 §3.7.2.1: a primitive without NORMAL is rendered with
+            # flat normals; three.js GLTFLoader.js:3559 sets
+            # material.flatShading. Every triangle gets its own corners and its
+            # face normal, so all renderers and the browser export shade it flat.
+            geo = _gltf_flat_triangle_geometry(geo, tri_indices)
         end
         mat = _gltf_cached_material(get(prim, "material", nothing), has_attribute(geo, :color))
         nontriangle_weights = preserve_nontriangle_morphs ? morph_weights : Float64[]
@@ -11258,9 +11392,9 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
         end
         inv = _gltf_inverse_bind_matrices(gltf, buffers, skin, length(bones))
         skeleton = Skeleton(bones, inv)
-        skin_indices = _gltf_skin_tuples(geo, :skinIndex, nverts;
+        skin_indices = _gltf_skin_tuples(geo, :skinIndex, geo.n_vertices;
                                          indices=true, joint_count=length(bones))
-        skin_weights = _gltf_skin_tuples(geo, :skinWeight, nverts)
+        skin_weights = _gltf_skin_tuples(geo, :skinWeight, geo.n_vertices)
         sm = SkinnedMesh(geo, mat, skeleton, skin_indices, skin_weights;
                          morph_target_influences=morph_weights,
                          morph_target_names=morph_names)
@@ -11496,13 +11630,20 @@ end
 # for a multi-primitive Group, its direct primitive meshes.
 function _gltf_morph_track_targets(obj, node_object_set)
     targets = AbstractObject3D[]
-    hasproperty(obj, :morph_target_influences) && push!(targets, obj)
+    _gltf_has_morph_targets(obj) && push!(targets, obj)
     for child in get_children(obj)
         child in node_object_set && continue
-        hasproperty(child, :morph_target_influences) && push!(targets, child)
+        _gltf_has_morph_targets(child) && push!(targets, child)
     end
     return targets
 end
+
+# Whether a loaded primitive has morph targets. three.js only gives such meshes
+# morphTargetInfluences (Mesh.updateMorphTargets), so a weights channel on a
+# mesh without targets creates no track (GLTFLoader.js loadAnimation).
+_gltf_has_morph_targets(obj) =
+    hasproperty(obj, :morph_target_influences) && hasproperty(obj, :geometry) &&
+    any(name -> startswith(String(name), "morph"), keys(obj.geometry.attributes))
 
 function _gltf_animation_clips(gltf, buffers, node_objects)
     haskey(gltf, "animations") || return AnimationClip[]

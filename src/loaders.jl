@@ -1098,7 +1098,57 @@ load_obj(path::String) = _obj_load(path, false)[1]
 # same geometry for one file. With `groups`, it also records the `usemtl` name
 # of every triangle and loads the `mtllib` libraries; without it, those
 # statements are skipped as load_obj documents.
-function _obj_load(path::String, groups::Bool)
+# Per-object records load_obj_scene needs beyond the triangle geometry:
+# OBJLoader's objects (`o`/`g`), and its `l` and `p` primitives.
+mutable struct _OBJSceneRecords
+    object_names::Vector{String}
+    declared::Bool               # the current object came from an o/g line
+    face_object::Vector{Int}     # object of each triangle
+    line_object::Vector{Int}     # object of each segment
+    line_material::Vector{String}
+    line_vertices::Vector{Int}   # two file vertex indices per segment
+    point_object::Vector{Int}
+    point_material::Vector{String}
+    point_vertices::Vector{Int}
+    # Filled after parsing: file positions and linear colours (NaN when a v
+    # has none, empty when no v has one).
+    verts::Vector{Float64}
+    colors::Vector{Float64}
+end
+
+_OBJSceneRecords() = _OBJSceneRecords([""], false, Int[], Int[], String[], Int[],
+                                      Int[], String[], Int[], Float64[], Float64[])
+
+function _obj_start_object!(rec::_OBJSceneRecords, name::String)
+    # OBJLoader.js startObject: the initial object, until a declaration names
+    # it, takes the first o/g name.
+    if !rec.declared
+        rec.object_names[end] = name
+        rec.declared = true
+    else
+        push!(rec.object_names, name)
+    end
+    return rec
+end
+
+# Vertex indices of an `l` or `p` record (`v` or `v/vt` tokens).
+function _obj_primitive_vertices!(out::Vector{Int}, line::AbstractString, nverts_v::Int,
+                                  nverts_uv::Int, nverts_n::Int)
+    empty!(out)
+    last_i = lastindex(line)
+    i = nextind(line, firstindex(line))
+    while true
+        first_i, tok_last, i, found = _obj_next_token_range(line, i, last_i)
+        found || break
+        vidx, _, _ = _obj_parse_corner_range(line, first_i, tok_last,
+                                             nverts_v, nverts_uv, nverts_n)
+        push!(out, vidx)
+    end
+    return out
+end
+
+function _obj_load(path::String, groups::Bool,
+                   scene::Union{Nothing,_OBJSceneRecords}=nothing)
     verts = Float64[]            # v
     file_uvs = Float64[]         # vt
     file_normals = Float64[]     # vn
@@ -1129,6 +1179,7 @@ function _obj_load(path::String, groups::Bool)
     sizehint!(out_nrm, n_n_hint == 0 ? 0 : 3 * emitted_hint)
     sizehint!(indices, emitted_hint)
     groups && sizehint!(face_mtl, n_tri_hint)
+    corner_scratch = Int[]
 
     # try/finally instead of a `do` block: the loop reassigns out_vi,
     # have_uvs, ... which a closure would box.
@@ -1170,6 +1221,7 @@ function _obj_load(path::String, groups::Bool)
             if groups
                 for _ in (length(face_mtl) + 1):(length(indices) ÷ 3)
                     push!(face_mtl, cur_mtl)
+                    scene === nothing || push!(scene.face_object, length(scene.object_names))
                 end
             end
             continue
@@ -1182,7 +1234,7 @@ function _obj_load(path::String, groups::Bool)
             x, y, z, state = _obj_parse_vec3_tokens_state(parts, tag_state[2],
                                                           "v", "v x", "v y", "v z")
             push!(verts, x, y, z)
-            if colors_ok
+            if colors_ok || scene !== nothing
                 # OBJLoader.js: `v x y z r g b` (data.length >= 7) carries an
                 # sRGB colour; `v x y z [w]` does not. A `#` token starts an
                 # inline comment, which load_obj has always ignored after z.
@@ -1226,6 +1278,29 @@ function _obj_load(path::String, groups::Bool)
         elseif groups && tag == "usemtl"
             _obj_required_arg(parts, tag_state[2], "OBJ usemtl requires a material name")
             cur_mtl = String(_mtl_rest_of_line(line, tag))
+        elseif scene !== nothing && (tag == "o" || tag == "g")
+            _obj_start_object!(scene, String(_mtl_rest_of_line(line, tag)))
+        elseif scene !== nothing && tag == "l"
+            # OBJLoader.js addLineGeometry; a polyline a b c is the segments
+            # a-b and b-c.
+            _obj_primitive_vertices!(corner_scratch, line, length(verts) ÷ 3,
+                                     length(file_uvs) ÷ 2, length(file_normals) ÷ 3)
+            length(corner_scratch) >= 2 || error("OBJ line requires at least 2 vertices")
+            for k in 1:(length(corner_scratch) - 1)
+                push!(scene.line_vertices, corner_scratch[k], corner_scratch[k + 1])
+                push!(scene.line_object, length(scene.object_names))
+                push!(scene.line_material, cur_mtl)
+            end
+        elseif scene !== nothing && tag == "p"
+            # OBJLoader.js addPointGeometry
+            _obj_primitive_vertices!(corner_scratch, line, length(verts) ÷ 3,
+                                     length(file_uvs) ÷ 2, length(file_normals) ÷ 3)
+            isempty(corner_scratch) && error("OBJ point requires at least 1 vertex")
+            for v in corner_scratch
+                push!(scene.point_vertices, v)
+                push!(scene.point_object, length(scene.object_names))
+                push!(scene.point_material, cur_mtl)
+            end
         end
     end
     finally
@@ -1268,6 +1343,10 @@ function _obj_load(path::String, groups::Bool)
             colors[3k] = file_colors[b+3]
         end
         colors_ok && set_attribute!(geo, :color, colors, 3)
+    end
+    if scene !== nothing
+        scene.verts = verts
+        scene.colors = file_colors
     end
     return geo, face_mtl, materials
 end
