@@ -263,6 +263,208 @@ function save_stl_binary(path::String, geo::BufferGeometry)
     return path
 end
 
+function _export_require_finite(data::AbstractVector, fname::String, what::String)
+    @inbounds for x in data
+        isfinite(x) || throw(ArgumentError("$fname $what must be finite"))
+    end
+    return nothing
+end
+
+# Per-vertex attribute vector for an exporter: `nothing` when absent, else
+# `data` after checking it holds `width` finite values per vertex.
+function _export_vertex_data(data::AbstractVector, width::Int, nv::Int,
+                             fname::String, what::String)
+    isempty(data) && return nothing
+    length(data) == width * nv ||
+        throw(ArgumentError("$fname $what must hold $width values per vertex"))
+    _export_require_finite(data, fname, what)
+    return data
+end
+
+# The `:color` attribute as `(data, item_size)`, or `nothing` without one.
+function _export_vertex_colors(geo::BufferGeometry, fname::String)
+    has_attribute(geo, :color) || return nothing
+    attr = get_attribute(geo, :color)
+    (attr.item_size >= 3 && length(attr.data) == attr.item_size * geo.n_vertices) ||
+        throw(ArgumentError("$fname :color must hold at least 3 values per vertex"))
+    _export_require_finite(attr.data, fname, ":color")
+    return attr.data, attr.item_size
+end
+
+"""
+    save_stl_ascii(path, geo) -> path
+
+Write `geo` as an ASCII STL file laid out like three.js `STLExporter` with
+`binary: false`: a `solid exported` block holding one `facet normal` record
+per triangle, the normal computed from the triangle (zero for a degenerate
+one). Coordinates are written at full `Float64` precision. Round-trips with
+[`load_stl`](@ref).
+"""
+function save_stl_ascii(path::String, geo::BufferGeometry)
+    _validate_triangle_geometry_indices(geo, "save_stl_ascii")
+    _export_require_finite(geo.positions, "save_stl_ascii", "positions")
+    for fi in 1:geo.n_faces
+        n, _, _, _ = _stl_facet_data(geo, fi)
+        isfinite(n.x) && isfinite(n.y) && isfinite(n.z) ||
+            throw(ArgumentError("save_stl_ascii face $fi normal must be finite"))
+    end
+    open(path, "w") do io
+        print(io, "solid exported\n")
+        for fi in 1:geo.n_faces
+            n, v1, v2, v3 = _stl_facet_data(geo, fi)
+            print(io, "\tfacet normal ", n.x, ' ', n.y, ' ', n.z, "\n\t\touter loop\n")
+            for v in (v1, v2, v3)
+                print(io, "\t\t\tvertex ", v.x, ' ', v.y, ' ', v.z, '\n')
+            end
+            print(io, "\t\tendloop\n\tendfacet\n")
+        end
+        print(io, "endsolid exported\n")
+    end
+    return path
+end
+
+"""
+    save_obj(path, geo; name="") -> path
+
+Write `geo` as a Wavefront OBJ file laid out like three.js `OBJExporter` for
+one mesh: `o name`, the `v` records, `vt` records when `geo.uvs` is set, `vn`
+records (normalized) when `geo.normals` is set, then one `f` record per
+triangle using the `v/vt/vn`, `v//vn` or `v/vt` form that matches. Values are
+written at full `Float64` precision. Round-trips with [`load_obj`](@ref).
+"""
+function save_obj(path::String, geo::BufferGeometry; name::AbstractString="")
+    _validate_triangle_geometry_indices(geo, "save_obj")
+    any(c -> c == '\n' || c == '\r', name) &&
+        throw(ArgumentError("save_obj name must not contain a line break"))
+    nv = geo.n_vertices
+    _export_require_finite(view(geo.positions, 1:3nv), "save_obj", "positions")
+    uvs = _export_vertex_data(geo.uvs, 2, nv, "save_obj", "uvs")
+    normals = _export_vertex_data(geo.normals, 3, nv, "save_obj", "normals")
+    open(path, "w") do io
+        print(io, "o ", name, '\n')
+        @inbounds for i in 1:nv
+            b = 3(i - 1)
+            print(io, "v ", geo.positions[b+1], ' ', geo.positions[b+2], ' ',
+                  geo.positions[b+3], '\n')
+        end
+        if uvs !== nothing
+            @inbounds for i in 1:nv
+                print(io, "vt ", uvs[2i-1], ' ', uvs[2i], '\n')
+            end
+        end
+        if normals !== nothing
+            @inbounds for i in 1:nv
+                n = normalize(Vec3(normals[3i-2], normals[3i-1], normals[3i]))
+                print(io, "vn ", n.x, ' ', n.y, ' ', n.z, '\n')
+            end
+        end
+        for fi in 1:geo.n_faces
+            print(io, 'f')
+            for j in get_face(geo, fi)
+                print(io, ' ', j)
+                if uvs !== nothing || normals !== nothing
+                    print(io, '/')
+                    uvs === nothing || print(io, j)
+                    normals === nothing || print(io, '/', j)
+                end
+            end
+            print(io, '\n')
+        end
+    end
+    return path
+end
+
+# Write one PLY vertex value: 8 bytes in binary, else the shortest decimal
+# preceded by a space unless it starts the row. Returns `false` (the next
+# value no longer starts the row).
+@inline function _ply_emit_value(io::IO, x::Float64, binary::Bool,
+                                 little_endian::Bool, starts_row::Bool)
+    if binary
+        write(io, little_endian ? htol(x) : hton(x))
+    else
+        starts_row || print(io, ' ')
+        print(io, x)
+    end
+    return false
+end
+
+"""
+    save_ply(path, geo; binary=false, little_endian=false) -> path
+
+Write `geo` as a Stanford PLY file laid out like three.js `PLYExporter`:
+`double` x/y/z, then nx/ny/nz (normalized) when `geo.normals` is set, s/t
+when `geo.uvs` is set, and red/green/blue when the geometry has a `:color`
+attribute, followed by a `vertex_index` list of 0-based triangle indices.
+Colours are converted from linear to sRGB, as `PLYExporter` does. `binary`
+selects `binary_little_endian` or `binary_big_endian` (the `PLYExporter`
+default) by `little_endian`.
+"""
+function save_ply(path::String, geo::BufferGeometry; binary::Bool=false,
+                  little_endian::Bool=false)
+    _validate_triangle_geometry_indices(geo, "save_ply")
+    nv = geo.n_vertices
+    _export_require_finite(view(geo.positions, 1:3nv), "save_ply", "positions")
+    uvs = _export_vertex_data(geo.uvs, 2, nv, "save_ply", "uvs")
+    normals = _export_vertex_data(geo.normals, 3, nv, "save_ply", "normals")
+    colors = _export_vertex_colors(geo, "save_ply")
+    for fi in 1:geo.n_faces, j in get_face(geo, fi)
+        # The header declares the indices as `int` (signed 32-bit).
+        j - 1 <= typemax(Int32) ||
+            throw(ArgumentError("save_ply vertex index $j does not fit int32"))
+    end
+    format = !binary ? "ascii" :
+             little_endian ? "binary_little_endian" : "binary_big_endian"
+    open(path, "w") do io
+        print(io, "ply\nformat ", format, " 1.0\nelement vertex ", nv, '\n',
+              "property double x\nproperty double y\nproperty double z\n")
+        normals === nothing ||
+            print(io, "property double nx\nproperty double ny\nproperty double nz\n")
+        uvs === nothing || print(io, "property double s\nproperty double t\n")
+        colors === nothing ||
+            print(io, "property double red\nproperty double green\nproperty double blue\n")
+        print(io, "element face ", geo.n_faces, '\n',
+              "property list uchar int vertex_index\nend_header\n")
+        for i in 1:nv
+            f = _ply_emit_value(io, geo.positions[3i-2], binary, little_endian, true)
+            f = _ply_emit_value(io, geo.positions[3i-1], binary, little_endian, f)
+            f = _ply_emit_value(io, geo.positions[3i], binary, little_endian, f)
+            if normals !== nothing
+                n = normalize(Vec3(normals[3i-2], normals[3i-1], normals[3i]))
+                f = _ply_emit_value(io, n.x, binary, little_endian, f)
+                f = _ply_emit_value(io, n.y, binary, little_endian, f)
+                f = _ply_emit_value(io, n.z, binary, little_endian, f)
+            end
+            if uvs !== nothing
+                f = _ply_emit_value(io, uvs[2i-1], binary, little_endian, f)
+                f = _ply_emit_value(io, uvs[2i], binary, little_endian, f)
+            end
+            if colors !== nothing
+                data, width = colors
+                b = width * (i - 1)
+                for k in 1:3
+                    f = _ply_emit_value(io, linear_to_srgb(Float64(data[b+k])),
+                                        binary, little_endian, f)
+                end
+            end
+            binary || print(io, '\n')
+        end
+        for fi in 1:geo.n_faces
+            a, b, c = get_face(geo, fi)
+            if binary
+                write(io, UInt8(3))
+                for j in (a, b, c)
+                    u = Int32(j - 1)
+                    write(io, little_endian ? htol(u) : hton(u))
+                end
+            else
+                print(io, "3 ", a - 1, ' ', b - 1, ' ', c - 1, '\n')
+            end
+        end
+        binary || print(io, '\n')
+    end
+    return path
+end
+
 function _looks_binary_stl(path::String)
     sz = filesize(path)
     sz < 84 && return false
@@ -286,6 +488,12 @@ end
 Load an STL mesh, auto-detecting binary vs ASCII.  Each triangle contributes
 three independent vertices; call [`compute_vertex_normals!`](@ref) afterward
 for smooth shading.
+
+A binary file whose header contains a `COLOR=rgba` sequence gets a per-vertex
+`:color` attribute, as in three.js `STLLoader`: each facet uses its own 5-bit
+RGB from the attribute word when bit 15 is clear, and the header colour
+otherwise. Colours are converted from sRGB to linear. The header alpha byte is
+not stored.
 """
 function load_stl(path::String)
     _looks_binary_stl(path) && return _load_stl_binary(path)
@@ -303,9 +511,28 @@ end
     return ncodeunits(line) == n || isspace(line[nextind(line, n)])
 end
 
+# Default facet colour from a Materialise-style "COLOR=rgba" header sequence,
+# as STLLoader.js parseBinary scans it: every start offset 0..69 is tested and
+# the last match wins. Returns `nothing` when the header has no such sequence.
+function _stl_header_default_color(head::Vector{UInt8})
+    found = nothing
+    @inbounds for off in 0:69
+        head[off + 1] == UInt8('C') && head[off + 2] == UInt8('O') &&
+            head[off + 3] == UInt8('L') && head[off + 4] == UInt8('O') &&
+            head[off + 5] == UInt8('R') && head[off + 6] == UInt8('=') || continue
+        found = (head[off + 7], head[off + 8], head[off + 9])
+    end
+    return found
+end
+
+@inline _stl_f32_le(rec::Vector{UInt8}, off::Int) =
+    @inbounds Float64(reinterpret(Float32,
+        UInt32(rec[off]) | (UInt32(rec[off + 1]) << 8) |
+        (UInt32(rec[off + 2]) << 16) | (UInt32(rec[off + 3]) << 24)))
+
 function _load_stl_binary(path::String)
     open(path, "r") do io
-        seek(io, 80)
+        head = read(io, 80)
         ntri = Int(read(io, UInt32))
         # A binary STL is exactly 84 + 50*ntri bytes; reject a truncated/corrupt
         # file (or absurd count) before allocating ntri*9 floats / reading past EOF.
@@ -314,14 +541,21 @@ function _load_stl_binary(path::String)
         positions = Vector{Float64}(undef, ntri * 9)
         normals = Vector{Float64}(undef, ntri * 9)
         indices = Vector{Int}(undef, ntri * 3)
+        default_color = _stl_header_default_color(head)
+        colors = default_color === nothing ? Float64[] : Vector{Float64}(undef, ntri * 9)
+        rec = Vector{UInt8}(undef, _STL_BINARY_FACET_BYTES)
         p = 1; vi = 0
         for _ in 1:ntri
-            nx = Float64(read(io, Float32)); ny = Float64(read(io, Float32)); nz = Float64(read(io, Float32))
+            readbytes!(io, rec, _STL_BINARY_FACET_BYTES) == _STL_BINARY_FACET_BYTES ||
+                error("binary STL ended inside a facet record")
+            nx = _stl_f32_le(rec, 1); ny = _stl_f32_le(rec, 5); nz = _stl_f32_le(rec, 9)
             isfinite(nx) || error("binary STL facet normal x must be finite")
             isfinite(ny) || error("binary STL facet normal y must be finite")
             isfinite(nz) || error("binary STL facet normal z must be finite")
-            for _v in 1:3
-                x = Float64(read(io, Float32)); y = Float64(read(io, Float32)); z = Float64(read(io, Float32))
+            for v in 0:2
+                x = _stl_f32_le(rec, 13 + 12v)
+                y = _stl_f32_le(rec, 17 + 12v)
+                z = _stl_f32_le(rec, 21 + 12v)
                 isfinite(x) || error("binary STL vertex x must be finite")
                 isfinite(y) || error("binary STL vertex y must be finite")
                 isfinite(z) || error("binary STL vertex z must be finite")
@@ -329,106 +563,151 @@ function _load_stl_binary(path::String)
                 normals[p] = nx; normals[p+1] = ny; normals[p+2] = nz
                 p += 3; vi += 1; indices[vi] = vi
             end
-            read(io, UInt16)                         # attribute byte count
+            if default_color !== nothing
+                # STLLoader.js parseBinary: attribute bit 15 clear means the facet
+                # carries its own 5-bit RGB (red in bits 0-4); set means the header
+                # default. Channels are sRGB and stored linear, like setRGB(...,
+                # SRGBColorSpace).
+                packed = UInt16(rec[49]) | (UInt16(rec[50]) << 8)
+                r, g, b = if packed & 0x8000 == 0
+                    ((packed & 0x1f) / 31, ((packed >> 5) & 0x1f) / 31,
+                     ((packed >> 10) & 0x1f) / 31)
+                else
+                    (default_color[1] / 255, default_color[2] / 255,
+                     default_color[3] / 255)
+                end
+                lr = srgb_to_linear(r); lg = srgb_to_linear(g); lb = srgb_to_linear(b)
+                for c in (p - 9):3:(p - 3)
+                    colors[c] = lr; colors[c + 1] = lg; colors[c + 2] = lb
+                end
+            end
         end
-        return BufferGeometry(positions, normals, Float64[], indices, ntri * 3, ntri)
+        geo = BufferGeometry(positions, normals, Float64[], indices, ntri * 3, ntri)
+        default_color === nothing || set_attribute!(geo, :color, colors, 3)
+        return geo
     end
 end
 
-function _stl_parse_ascii_float(tok, context::String)
-    value = tryparse(Float64, tok)
-    value === nothing && error("ASCII STL $context must be a number")
-    isfinite(value) || error("ASCII STL $context must be finite")
-    return value
-end
-
-@inline function _stl_next_token_bounds(line::AbstractString, state::Int)
-    i = state
-    last_i = lastindex(line)
-    while i <= last_i && isspace(line[i])
-        i = nextind(line, i)
+@inline function _stl_token_is(bytes::AbstractVector{UInt8}, first::Int, last::Int,
+                               word::String)
+    last - first + 1 == ncodeunits(word) || return false
+    @inbounds for j in 1:ncodeunits(word)
+        bytes[first + j - 1] == codeunit(word, j) || return false
     end
-    i <= last_i || return nothing
-    first_i = i
-    while i <= last_i && !isspace(line[i])
-        i = nextind(line, i)
+    return true
+end
+
+# Keywords of the ASCII STL grammar. A number slot that holds one of these (or
+# the end of the file) means the record is short of components.
+@inline function _stl_is_keyword(bytes::AbstractVector{UInt8}, first::Int, last::Int)
+    for word in ("solid", "endsolid", "facet", "normal", "outer", "loop",
+                 "vertex", "endloop", "endfacet")
+        _stl_token_is(bytes, first, last, word) && return true
     end
-    return (first_i, prevind(line, i), i)
+    return false
 end
 
-@inline function _stl_required_token_bounds(line::AbstractString, state::Int,
-                                            message::String)
-    token = _stl_next_token_bounds(line, state)
-    token === nothing && error(message)
-    return token
+@noinline function _stl_ascii_float_error(context::String, status::UInt8)
+    status == UInt8(2) ? error("ASCII STL $context must be finite") :
+                         error("ASCII STL $context must be a number")
 end
 
-@inline function _stl_parse_ascii_float_range(line::AbstractString,
-                                              first_i::Int, last_i::Int,
-                                              context::String)
-    return _stl_parse_ascii_float(SubString(line, first_i, last_i), context)
+# Read the next whitespace-separated token as a finite number. `short` is the
+# error raised when the file ends or a keyword appears instead.
+@inline function _stl_ascii_component(bytes::AbstractVector{UInt8}, p::Int, n::Int,
+                                      short::String, context::String)
+    first, last, p = _ply_next_ascii_token(bytes, p, n)
+    (first == 0 || _stl_is_keyword(bytes, first, last)) && error(short)
+    value, status = _try_parse_ascii_float(bytes, first, last)
+    status == UInt8(0) || _stl_ascii_float_error(context, status)
+    return value, p
 end
 
+# Whether a complete `facet normal nx ny nz` record starts at token `first`.
+function _stl_facet_record_at(bytes::AbstractVector{UInt8}, first::Int, last::Int,
+                              next::Int, n::Int)
+    _stl_token_is(bytes, first, last, "facet") || return false
+    f, l, next = _ply_next_ascii_token(bytes, next, n)
+    f != 0 && _stl_token_is(bytes, f, l, "normal") || return false
+    for _ in 1:3
+        f, l, next = _ply_next_ascii_token(bytes, next, n)
+        f != 0 && _try_parse_ascii_float(bytes, f, l)[2] == UInt8(0) || return false
+    end
+    return true
+end
+
+# Skip the name after `solid`/`endsolid`: the rest of its line (STLLoader.js
+# patternName /solid\s(.+)/). STLLoader.js finds facets anywhere in the solid
+# text, so a file written on one line continues at its first complete
+# `facet normal` record. Returns the offset of the line break, of that
+# `facet`, or n + 1.
+function _stl_skip_solid_name(bytes::AbstractVector{UInt8}, p::Int, n::Int)
+    while true
+        while p <= n && _ply_ascii_space(bytes[p]) &&
+              bytes[p] != UInt8('\n') && bytes[p] != UInt8('\r')
+            p += 1
+        end
+        (p > n || bytes[p] == UInt8('\n') || bytes[p] == UInt8('\r')) && return p
+        first, last, next = _ply_next_ascii_token(bytes, p, n)
+        _stl_facet_record_at(bytes, first, last, next, n) && return p
+        p = next
+    end
+end
+
+# ASCII STL is parsed as a stream of whitespace-separated tokens, like the
+# regular expressions in three.js STLLoader.js parseASCII (`facet`, `normal`
+# and `vertex` followed by `\s+` and numbers): any mix of spaces, tabs, CR, LF
+# or CRLF separates tokens, and a record may span lines. The text after
+# `solid`/`endsolid` up to the end of that line is the solid name, unless a
+# `facet normal` record starts on that line.
 function _load_stl_ascii(path::String)
+    text = read(path, String)
+    bytes = codeunits(text)
+    n = length(bytes)
     positions = Float64[]; normals = Float64[]; indices = Int[]
-    cur_n = (0.0, 0.0, 0.0); vi = 0; vertices_in_facet = 0; in_facet = false
-    open(path, "r") do io
-    for raw in eachline(io)
-        line = strip(raw)
-        if _stl_keyword(line, "facet normal")
+    nx = ny = nz = 0.0; vi = 0; vertices_in_facet = 0; in_facet = false
+    p = 1
+    if n >= 3 && bytes[1] == 0xef && bytes[2] == 0xbb && bytes[3] == 0xbf
+        p = 4                                     # UTF-8 byte-order mark
+    end
+    while true
+        first, last, p = _ply_next_ascii_token(bytes, p, n)
+        first == 0 && break
+        if _stl_token_is(bytes, first, last, "facet")
             !in_facet || error("ASCII STL nested facet is invalid")
-            first_state = _stl_required_token_bounds(
-                line, firstindex(line), "ASCII STL facet normal requires 3 components")
-            second_state = _stl_required_token_bounds(
-                line, first_state[3], "ASCII STL facet normal requires 3 components")
-            nx_state = _stl_required_token_bounds(
-                line, second_state[3], "ASCII STL facet normal requires 3 components")
-            ny_state = _stl_required_token_bounds(
-                line, nx_state[3], "ASCII STL facet normal requires 3 components")
-            nz_state = _stl_required_token_bounds(
-                line, ny_state[3], "ASCII STL facet normal requires 3 components")
-            cur_n = (
-                _stl_parse_ascii_float_range(line, nx_state[1], nx_state[2],
-                                             "facet normal x"),
-                _stl_parse_ascii_float_range(line, ny_state[1], ny_state[2],
-                                             "facet normal y"),
-                _stl_parse_ascii_float_range(line, nz_state[1], nz_state[2],
-                                             "facet normal z"),
-            )
+            f2, l2, p = _ply_next_ascii_token(bytes, p, n)
+            f2 != 0 && _stl_token_is(bytes, f2, l2, "normal") ||
+                error("ASCII STL facet must be followed by normal")
+            short = "ASCII STL facet normal requires 3 components"
+            nx, p = _stl_ascii_component(bytes, p, n, short, "facet normal x")
+            ny, p = _stl_ascii_component(bytes, p, n, short, "facet normal y")
+            nz, p = _stl_ascii_component(bytes, p, n, short, "facet normal z")
             in_facet = true
             vertices_in_facet = 0
-        elseif _stl_keyword(line, "vertex")
+        elseif _stl_token_is(bytes, first, last, "vertex")
             in_facet || error("ASCII STL vertex appears outside a facet")
-            first_state = _stl_required_token_bounds(
-                line, firstindex(line), "ASCII STL vertex requires 3 coordinates")
-            x_state = _stl_required_token_bounds(
-                line, first_state[3], "ASCII STL vertex requires 3 coordinates")
-            y_state = _stl_required_token_bounds(
-                line, x_state[3], "ASCII STL vertex requires 3 coordinates")
-            z_state = _stl_required_token_bounds(
-                line, y_state[3], "ASCII STL vertex requires 3 coordinates")
             vertices_in_facet < 3 || error("ASCII STL facet has more than 3 vertices")
-            push!(positions,
-                  _stl_parse_ascii_float_range(line, x_state[1], x_state[2], "vertex x"),
-                  _stl_parse_ascii_float_range(line, y_state[1], y_state[2], "vertex y"),
-                  _stl_parse_ascii_float_range(line, z_state[1], z_state[2], "vertex z"))
-            push!(normals, cur_n[1], cur_n[2], cur_n[3])
+            short = "ASCII STL vertex requires 3 coordinates"
+            x, p = _stl_ascii_component(bytes, p, n, short, "vertex x")
+            y, p = _stl_ascii_component(bytes, p, n, short, "vertex y")
+            z, p = _stl_ascii_component(bytes, p, n, short, "vertex z")
+            push!(positions, x, y, z)
+            push!(normals, nx, ny, nz)
             vi += 1; push!(indices, vi)
             vertices_in_facet += 1
-        elseif _stl_keyword(line, "endfacet")
+        elseif _stl_token_is(bytes, first, last, "endfacet")
             in_facet || error("ASCII STL endfacet appears outside a facet")
             vertices_in_facet == 3 ||
                 error("ASCII STL facet has $vertices_in_facet vertices; expected 3")
             in_facet = false
             vertices_in_facet = 0
+        elseif _stl_token_is(bytes, first, last, "solid") ||
+               _stl_token_is(bytes, first, last, "endsolid")
+            p = _stl_skip_solid_name(bytes, p, n)
         end
     end
-    end
     !in_facet || error("ASCII STL facet is missing endfacet")
-    rem(length(indices), 3) == 0 ||
-        error("ASCII STL vertex count $(length(indices)) is not divisible by 3")
-    nfaces = length(indices) ÷ 3
-    return BufferGeometry(positions, normals, Float64[], indices, vi, nfaces)
+    return BufferGeometry(positions, normals, Float64[], indices, vi, vi ÷ 3)
 end
 
 # ========================== OBJ ==========================
@@ -440,25 +719,11 @@ function _obj_index_count_label(kind::Symbol)
     return string(kind, "s")
 end
 
-function _obj_checked_index(tok, count::Int, kind::Symbol)
-    label = _obj_index_label(kind)
-    raw = _obj_parse_index_token(tok, kind)
-    raw == 0 && error("OBJ $label index 0 is invalid")
-    idx = raw < 0 ? count + raw + 1 : raw
-    1 <= idx <= count ||
-        error("OBJ $label index $raw out of bounds for $count $(_obj_index_count_label(kind))")
-    return idx
-end
-
 function _obj_index_label(kind::Symbol)
     kind === :vertex && return "vertex"
     kind === :uv && return "uv"
     kind === :normal && return "normal"
     return String(kind)
-end
-
-function _obj_parse_index_token(tok, kind::Symbol)
-    return _obj_parse_index_range(tok, firstindex(tok), lastindex(tok), kind)
 end
 
 function _obj_parse_index_range(tok::AbstractString, first_i::Int, last_i::Int, kind::Symbol)
@@ -564,13 +829,27 @@ function _obj_next_token_range(line::AbstractString, i::Int, last_i::Int)
     return (first_i, prevind(line, i), i, true)
 end
 
+_obj_emit_corner!(out_pos::Vector{Float64}, out_uvs::Vector{Float64},
+                  out_nrm::Vector{Float64}, indices::Vector{Int},
+                  verts::Vector{Float64}, file_uvs::Vector{Float64},
+                  file_normals::Vector{Float64}, corner::NTuple{3,Int},
+                  out_vi::Int, have_uvs::Bool, have_normals::Bool,
+                  missing_normals::Bool) =
+    _obj_emit_corner!(out_pos, out_uvs, out_nrm, indices, verts, file_uvs,
+                      file_normals, corner, out_vi, have_uvs, have_normals,
+                      missing_normals, nothing)
+
+# `corner_vertices`, when a vector, receives the file vertex index of every
+# emitted corner (load_obj uses it to expand per-vertex colours).
 function _obj_emit_corner!(out_pos::Vector{Float64}, out_uvs::Vector{Float64},
                            out_nrm::Vector{Float64}, indices::Vector{Int},
                            verts::Vector{Float64}, file_uvs::Vector{Float64},
                            file_normals::Vector{Float64}, corner::NTuple{3,Int},
                            out_vi::Int, have_uvs::Bool, have_normals::Bool,
-                           missing_normals::Bool)
+                           missing_normals::Bool,
+                           corner_vertices::Union{Nothing,Vector{Int}})
     vidx, uidx, nidx = corner
+    corner_vertices === nothing || push!(corner_vertices, vidx)
     @inbounds begin
         base = (vidx - 1) * 3
         push!(out_pos, verts[base + 1], verts[base + 2], verts[base + 3])
@@ -597,13 +876,26 @@ function _obj_emit_corner!(out_pos::Vector{Float64}, out_uvs::Vector{Float64},
     return out_vi, have_uvs, have_normals, missing_normals
 end
 
+_obj_emit_face_record_range!(out_pos::Vector{Float64}, out_uvs::Vector{Float64},
+                             out_nrm::Vector{Float64}, indices::Vector{Int},
+                             verts::Vector{Float64}, file_uvs::Vector{Float64},
+                             file_normals::Vector{Float64}, line::AbstractString,
+                             nverts_v::Int, nverts_uv::Int, nverts_n::Int,
+                             out_vi::Int, have_uvs::Bool, have_normals::Bool,
+                             missing_normals::Bool) =
+    _obj_emit_face_record_range!(out_pos, out_uvs, out_nrm, indices, verts,
+                                 file_uvs, file_normals, line, nverts_v,
+                                 nverts_uv, nverts_n, out_vi, have_uvs,
+                                 have_normals, missing_normals, nothing)
+
 function _obj_emit_face_record_range!(out_pos::Vector{Float64}, out_uvs::Vector{Float64},
                                       out_nrm::Vector{Float64}, indices::Vector{Int},
                                       verts::Vector{Float64}, file_uvs::Vector{Float64},
                                       file_normals::Vector{Float64}, line::AbstractString,
                                       nverts_v::Int, nverts_uv::Int, nverts_n::Int,
                                       out_vi::Int, have_uvs::Bool, have_normals::Bool,
-                                      missing_normals::Bool)
+                                      missing_normals::Bool,
+                                      corner_vertices::Union{Nothing,Vector{Int}})
     last_i = lastindex(line)
     i = nextind(line, firstindex(line))
     first_first, first_last, i, have_first = _obj_next_token_range(line, i, last_i)
@@ -621,15 +913,18 @@ function _obj_emit_face_record_range!(out_pos::Vector{Float64}, out_uvs::Vector{
         out_vi, have_uvs, have_normals, missing_normals =
             _obj_emit_corner!(out_pos, out_uvs, out_nrm, indices, verts,
                               file_uvs, file_normals, first_corner, out_vi,
-                              have_uvs, have_normals, missing_normals)
+                              have_uvs, have_normals, missing_normals,
+                              corner_vertices)
         out_vi, have_uvs, have_normals, missing_normals =
             _obj_emit_corner!(out_pos, out_uvs, out_nrm, indices, verts,
                               file_uvs, file_normals, prev_corner, out_vi,
-                              have_uvs, have_normals, missing_normals)
+                              have_uvs, have_normals, missing_normals,
+                              corner_vertices)
         out_vi, have_uvs, have_normals, missing_normals =
             _obj_emit_corner!(out_pos, out_uvs, out_nrm, indices, verts,
                               file_uvs, file_normals, corner, out_vi,
-                              have_uvs, have_normals, missing_normals)
+                              have_uvs, have_normals, missing_normals,
+                              corner_vertices)
         prev_corner = corner
         next_first, next_last, i, have_next = _obj_next_token_range(line, i, last_i)
         have_next || break
@@ -637,11 +932,6 @@ function _obj_emit_face_record_range!(out_pos::Vector{Float64}, out_uvs::Vector{
                                          nverts_v, nverts_uv, nverts_n)
     end
     return out_vi, have_uvs, have_normals, missing_normals
-end
-
-function _obj_require_values(tokens, count::Int, label::String)
-    length(tokens) >= count + 1 ||
-        error("OBJ $label requires $count $(count == 1 ? "value" : "values")")
 end
 
 function _obj_parse_float(tok, label::String)
@@ -700,7 +990,11 @@ end
     return n_triangles
 end
 
-function _obj_scan_counts(path::String)
+_obj_scan_counts(path::String) = open(_obj_scan_counts, path, "r")
+
+# The scan state lives in this function's locals rather than in variables a
+# `do` block captures and reassigns, which Julia would box.
+function _obj_scan_counts(io::IO)
     buf = Vector{UInt8}(undef, _OBJ_SCAN_BUFFER_SIZE)
     n_vertices = 0
     n_uvs = 0
@@ -716,57 +1010,55 @@ function _obj_scan_counts(path::String)
     in_token = false
     skip_line = false
 
-    open(path, "r") do io
-        while !eof(io)
-            nread = readbytes!(io, buf)
-            @inbounds for k in 1:nread
-                b = buf[k]
-                if b == UInt8('\n')
-                    if in_token && token_no == 1
-                        tag_code = _obj_scan_tag_code(tag1, tag2, tag_len)
-                        tag_code == UInt8(1) ? (n_vertices += 1) :
-                        tag_code == UInt8(2) ? (n_uvs += 1) :
-                        tag_code == UInt8(3) && (n_normals += 1)
-                    end
-                    n_triangles = skip_line ? n_triangles :
-                                  _obj_scan_finish_line(tag_code, face_corners,
-                                                        n_triangles)
-                    token_no = 0
-                    tag_len = 0
-                    tag1 = UInt8(0)
-                    tag2 = UInt8(0)
-                    tag_code = UInt8(0)
-                    face_corners = 0
-                    in_token = false
-                    skip_line = false
-                elseif skip_line
-                    continue
-                elseif _obj_scan_space(b)
-                    if in_token && token_no == 1
-                        tag_code = _obj_scan_tag_code(tag1, tag2, tag_len)
-                        tag_code == UInt8(1) ? (n_vertices += 1) :
-                        tag_code == UInt8(2) ? (n_uvs += 1) :
-                        tag_code == UInt8(3) && (n_normals += 1)
-                    end
-                    in_token = false
-                elseif !in_token
-                    if token_no == 0 && b == UInt8('#')
-                        skip_line = true
-                    else
-                        token_no += 1
-                        in_token = true
-                        if token_no == 1
-                            tag_len = 1
-                            tag1 = b
-                            tag2 = UInt8(0)
-                        elseif tag_code == UInt8(4)
-                            face_corners += 1
-                        end
-                    end
-                elseif token_no == 1
-                    tag_len += 1
-                    tag_len == 2 && (tag2 = b)
+    while !eof(io)
+        nread = readbytes!(io, buf)
+        @inbounds for k in 1:nread
+            b = buf[k]
+            if b == UInt8('\n')
+                if in_token && token_no == 1
+                    tag_code = _obj_scan_tag_code(tag1, tag2, tag_len)
+                    tag_code == UInt8(1) ? (n_vertices += 1) :
+                    tag_code == UInt8(2) ? (n_uvs += 1) :
+                    tag_code == UInt8(3) && (n_normals += 1)
                 end
+                n_triangles = skip_line ? n_triangles :
+                              _obj_scan_finish_line(tag_code, face_corners,
+                                                    n_triangles)
+                token_no = 0
+                tag_len = 0
+                tag1 = UInt8(0)
+                tag2 = UInt8(0)
+                tag_code = UInt8(0)
+                face_corners = 0
+                in_token = false
+                skip_line = false
+            elseif skip_line
+                continue
+            elseif _obj_scan_space(b)
+                if in_token && token_no == 1
+                    tag_code = _obj_scan_tag_code(tag1, tag2, tag_len)
+                    tag_code == UInt8(1) ? (n_vertices += 1) :
+                    tag_code == UInt8(2) ? (n_uvs += 1) :
+                    tag_code == UInt8(3) && (n_normals += 1)
+                end
+                in_token = false
+            elseif !in_token
+                if token_no == 0 && b == UInt8('#')
+                    skip_line = true
+                else
+                    token_no += 1
+                    in_token = true
+                    if token_no == 1
+                        tag_len = 1
+                        tag1 = b
+                        tag2 = UInt8(0)
+                    elseif tag_code == UInt8(4)
+                        face_corners += 1
+                    end
+                end
+            elseif token_no == 1
+                tag_len += 1
+                tag_len == 2 && (tag2 = b)
             end
         end
     end
@@ -781,13 +1073,6 @@ function _obj_scan_counts(path::String)
     return n_vertices, n_uvs, n_normals, n_triangles
 end
 
-function _obj_parse_vec3(tokens, label::String)
-    _obj_require_values(tokens, 3, label)
-    return (_obj_parse_float(tokens[2], "$label x"),
-            _obj_parse_float(tokens[3], "$label y"),
-            _obj_parse_float(tokens[4], "$label z"))
-end
-
 @noinline function _obj_require_values_error(count::Int, label::String)
     error("OBJ $label requires $count $(count == 1 ? "value" : "values")")
 end
@@ -800,12 +1085,20 @@ end
 
 function _obj_parse_vec3_tokens(parts, state, label::String,
                                 x_label::String, y_label::String, z_label::String)
+    x, y, z, _ = _obj_parse_vec3_tokens_state(parts, state, label,
+                                              x_label, y_label, z_label)
+    return (x, y, z)
+end
+
+# Like `_obj_parse_vec3_tokens`, also returning the iterator state after z.
+function _obj_parse_vec3_tokens_state(parts, state, label::String, x_label::String,
+                                      y_label::String, z_label::String)
     x_state = _obj_required_token(parts, state, 3, label)
     y_state = _obj_required_token(parts, x_state[2], 3, label)
     z_state = _obj_required_token(parts, y_state[2], 3, label)
     return (_obj_parse_float(x_state[1], x_label),
             _obj_parse_float(y_state[1], y_label),
-            _obj_parse_float(z_state[1], z_label))
+            _obj_parse_float(z_state[1], z_label), z_state[2])
 end
 
 _obj_parse_vec3_tokens(parts, state, label::String) =
@@ -825,17 +1118,38 @@ end
     return token_state
 end
 
+# Next token of `parts`, or `nothing` at the end of the line or at a token
+# that starts an inline `#` comment.
+@inline function _obj_noncomment_token(parts, state)
+    next = iterate(parts, state)
+    (next === nothing || startswith(next[1], '#')) && return nothing
+    return next
+end
+
 """
     load_obj(path) -> BufferGeometry
 
 Load a Wavefront OBJ mesh (vertices, texture coordinates, normals, and faces;
-polygons fan-triangulated). Normals are taken from the file when present,
-otherwise computed smoothly. Materials are ignored.
+polygons fan-triangulated). Normals are taken from the file when present;
+a corner without a usable file normal (no `vn` reference, or a zero `vn`)
+gets its face normal, and a file without normals gets
+[`compute_vertex_normals!`](@ref). Materials are ignored.
+
+As in three.js `OBJLoader`, a line ending in a backslash continues on the
+next line, and vertex records written as `v x y z r g b` add a per-vertex
+`:color` attribute, with the sRGB channels converted to linear. Colours are
+kept only when every vertex that a face references carries one (otherwise
+three.js builds a colour attribute that does not line up with the corners).
 """
 function load_obj(path::String)
     verts = Float64[]            # v
     file_uvs = Float64[]         # vt
     file_normals = Float64[]     # vn
+    # Linear r g b per v record from the first coloured one on; NaN marks a v
+    # without a colour.
+    file_colors = Float64[]
+    colors_ok = true             # no emitted corner references a v without a colour
+    corner_vertices = Int[]      # file vertex index of each emitted corner
     out_pos = Float64[]
     out_uvs = Float64[]
     out_nrm = Float64[]
@@ -854,19 +1168,43 @@ function load_obj(path::String)
     sizehint!(out_nrm, n_n_hint == 0 ? 0 : 3 * emitted_hint)
     sizehint!(indices, emitted_hint)
 
-    open(path, "r") do io
-    for raw in eachline(io)
+    # try/finally instead of a `do` block: the loop reassigns out_vi,
+    # have_uvs, ... which a closure would box.
+    io = open(path, "r")
+    try
+    continued = ""
+    while true
+        if eof(io)
+            # A continuation on the last line joins with nothing.
+            isempty(continued) && break
+            raw = ""
+        else
+            raw = readline(io)
+        end
+        # OBJLoader.js parse: text.replace(/\\\n/g, '') joins a line that ends
+        # in a backslash with the next one.
+        if endswith(raw, '\\')
+            continued = string(continued, chop(raw))
+            continue
+        elseif !isempty(continued)
+            raw = string(continued, raw)
+            continued = ""
+        end
         line = strip(raw)
         (isempty(line) || startswith(line, "#")) && continue
         if _obj_is_face_record(line)
             nverts_v = length(verts) ÷ 3
             nverts_uv = length(file_uvs) ÷ 2
             nverts_n = length(file_normals) ÷ 3
+            # Before the first coloured v, every vertex a face can reference
+            # lacks a colour.
+            isempty(file_colors) && (colors_ok = false)
             out_vi, have_uvs, have_normals, missing_normals =
                 _obj_emit_face_record_range!(out_pos, out_uvs, out_nrm, indices,
                                              verts, file_uvs, file_normals, line,
                                              nverts_v, nverts_uv, nverts_n, out_vi,
-                                             have_uvs, have_normals, missing_normals)
+                                             have_uvs, have_normals, missing_normals,
+                                             colors_ok ? corner_vertices : nothing)
             continue
         end
         parts = eachsplit(line)
@@ -874,13 +1212,36 @@ function load_obj(path::String)
         tag_state === nothing && continue
         tag = tag_state[1]
         if tag == "v"
-            x, y, z = _obj_parse_vec3_tokens(parts, tag_state[2],
-                                             "v", "v x", "v y", "v z")
+            x, y, z, state = _obj_parse_vec3_tokens_state(parts, tag_state[2],
+                                                          "v", "v x", "v y", "v z")
             push!(verts, x, y, z)
+            if colors_ok
+                # OBJLoader.js: `v x y z r g b` (data.length >= 7) carries an
+                # sRGB colour; `v x y z [w]` does not. A `#` token starts an
+                # inline comment, which load_obj has always ignored after z.
+                r_state = _obj_noncomment_token(parts, state)
+                g_state = r_state === nothing ? nothing :
+                          _obj_noncomment_token(parts, r_state[2])
+                b_state = g_state === nothing ? nothing :
+                          _obj_noncomment_token(parts, g_state[2])
+                if b_state === nothing
+                    isempty(file_colors) || push!(file_colors, NaN, NaN, NaN)
+                else
+                    if isempty(file_colors)
+                        # pad the v records before the first coloured one
+                        resize!(file_colors, length(verts) - 3)
+                        fill!(file_colors, NaN)
+                    end
+                    push!(file_colors,
+                          srgb_to_linear(_obj_parse_float(r_state[1], "v red")),
+                          srgb_to_linear(_obj_parse_float(g_state[1], "v green")),
+                          srgb_to_linear(_obj_parse_float(b_state[1], "v blue")))
+                end
+            end
         elseif tag == "vt"
             # A 1-D texture coordinate (`vt u`) is valid; treat the missing
-            # second component as 0.0 (matching three.js OBJLoader) instead of
-            # indexing past the end of the token list with a BoundsError.
+            # second component as 0.0 (three.js OBJLoader stores
+            # parseFloat(undefined), i.e. NaN).
             u, v = _obj_parse_vt_tokens(parts, tag_state[2])
             push!(file_uvs, u, v)
         elseif tag == "vn"
@@ -888,55 +1249,52 @@ function load_obj(path::String)
                                              "vn", "vn x", "vn y", "vn z")
             push!(file_normals, x, y, z)
         elseif tag == "f"
-            nverts_v = length(verts) ÷ 3
-            nverts_uv = length(file_uvs) ÷ 2
-            nverts_n = length(file_normals) ÷ 3
-            first_state = iterate(parts, tag_state[2])
-            second_state = first_state === nothing ? nothing : iterate(parts, first_state[2])
-            third_state = second_state === nothing ? nothing : iterate(parts, second_state[2])
-            third_state === nothing && error("OBJ face requires at least 3 vertices")
-            first_corner = _obj_parse_corner(first_state[1], nverts_v, nverts_uv, nverts_n)
-            prev_corner = _obj_parse_corner(second_state[1], nverts_v, nverts_uv, nverts_n)
-            corner = _obj_parse_corner(third_state[1], nverts_v, nverts_uv, nverts_n)
-            # Fan-triangulate polygon (corner 1, k, k+1).
-            while true
-                out_vi, have_uvs, have_normals, missing_normals =
-                    _obj_emit_corner!(out_pos, out_uvs, out_nrm, indices, verts,
-                                      file_uvs, file_normals, first_corner, out_vi,
-                                      have_uvs, have_normals, missing_normals)
-                out_vi, have_uvs, have_normals, missing_normals =
-                    _obj_emit_corner!(out_pos, out_uvs, out_nrm, indices, verts,
-                                      file_uvs, file_normals, prev_corner, out_vi,
-                                      have_uvs, have_normals, missing_normals)
-                out_vi, have_uvs, have_normals, missing_normals =
-                    _obj_emit_corner!(out_pos, out_uvs, out_nrm, indices, verts,
-                                      file_uvs, file_normals, corner, out_vi,
-                                      have_uvs, have_normals, missing_normals)
-                prev_corner = corner
-                next_state = iterate(parts, third_state[2])
-                next_state === nothing && break
-                corner = _obj_parse_corner(next_state[1], nverts_v, nverts_uv, nverts_n)
-                third_state = next_state
-            end
+            # Every `f` with corners took the face-record path above; only a
+            # bare `f` reaches here.
+            error("OBJ face requires at least 3 vertices")
         end
     end
+    finally
+        close(io)
     end
     nfaces = length(indices) ÷ 3
     geo = BufferGeometry(out_pos, out_nrm, have_uvs ? out_uvs : Float64[],
                          indices, out_vi, nfaces)
-    # Recompute smooth normals when the file had none, or when ANY emitted vertex
-    # normal is zero-length (e.g. a face lacked vn) — otherwise those vertices
-    # keep a degenerate (0,0,0) normal and shade black.
-    needs_recompute = !have_normals || missing_normals
-    if !needs_recompute
+    if !have_normals
+        compute_vertex_normals!(geo)
+    else
+        # OBJLoader.js addFace keeps the file normals of a face and gives a face
+        # without `vn` its face normal (addFaceNormal). Emitted corners never
+        # share a vertex, so compute_vertex_normals! yields exactly those face
+        # normals; copy them into the corners left at (0,0,0), which also
+        # covers an explicit zero `vn` that would otherwise shade black.
+        face_normals = Float64[]
         @inbounds for b in 1:3:length(out_nrm)
-            if out_nrm[b] == 0.0 && out_nrm[b+1] == 0.0 && out_nrm[b+2] == 0.0
-                needs_recompute = true
-                break
+            out_nrm[b] == 0.0 && out_nrm[b+1] == 0.0 && out_nrm[b+2] == 0.0 || continue
+            if isempty(face_normals)
+                _validate_triangle_geometry_indices(geo, "load_obj")
+                resize!(face_normals, length(out_nrm))
+                _compute_vertex_normals!(face_normals, geo, Vec3(0.0, 0.0, 1.0))
             end
+            out_nrm[b] = face_normals[b]
+            out_nrm[b+1] = face_normals[b+1]
+            out_nrm[b+2] = face_normals[b+2]
         end
     end
-    needs_recompute && compute_vertex_normals!(geo)
+    if colors_ok && out_vi > 0
+        colors = Vector{Float64}(undef, 3 * out_vi)
+        @inbounds for (k, vidx) in enumerate(corner_vertices)
+            b = 3 * (vidx - 1)
+            if isnan(file_colors[b+1])
+                colors_ok = false
+                break
+            end
+            colors[3k-2] = file_colors[b+1]
+            colors[3k-1] = file_colors[b+2]
+            colors[3k] = file_colors[b+3]
+        end
+        colors_ok && set_attribute!(geo, :color, colors, 3)
+    end
     return geo
 end
 
@@ -1172,13 +1530,6 @@ function _ply_parse_element_count(tok)
     return count
 end
 
-function _ply_parse_ascii_float(tok, context::String)
-    value = tryparse(Float64, tok)
-    value === nothing && error("PLY $context must be a number")
-    isfinite(value) || error("PLY $context must be finite")
-    return value
-end
-
 @inline _ply_ascii_space(b::UInt8) =
     b == UInt8(' ') || b == UInt8('\t') || b == UInt8('\r') || b == UInt8('\n') ||
     b == UInt8('\v') || b == UInt8('\f')
@@ -1261,18 +1612,6 @@ end
     return value, UInt8(0)
 end
 
-@noinline function _ply_ascii_float_context_error(context::String, status::UInt8)
-    status == UInt8(2) ? error("PLY $context must be finite") :
-                         error("PLY $context must be a number")
-end
-
-function _ply_parse_ascii_float(bytes::AbstractVector{UInt8}, first::Int, last::Int,
-                                context::String)
-    value, status = _try_parse_ascii_float(bytes, first, last)
-    status == UInt8(0) || _ply_ascii_float_context_error(context, status)
-    return value
-end
-
 @noinline function _ply_vertex_ascii_float_error(row::Int, col::Int, props, status::UInt8)
     reason = status == UInt8(2) ? "finite" : "a number"
     if col <= length(props)
@@ -1353,11 +1692,6 @@ function _ply_next_ascii_token(bytes::AbstractVector{UInt8}, p::Int, line_stop::
     return first, p - 1, p
 end
 
-function _ply_checked_finite(value, context::String)
-    isfinite(value) || error("PLY $context must be finite")
-    return value
-end
-
 @noinline _ply_vertex_finite_error(row::Int, prop) =
     error("PLY vertex row $row property $prop must be finite")
 
@@ -1433,17 +1767,62 @@ end
     end
 end
 
+# Next header line starting at byte `i`, without its `eol` byte or a CR before
+# it, and the offset just past the line end.
+function _ply_header_line(bytes::Vector{UInt8}, i::Int, n::Int, eol::UInt8)
+    j = i
+    while j <= n && bytes[j] != eol; j += 1; end
+    e = j - 1
+    e >= i && bytes[e] == UInt8('\r') && (e -= 1)   # strip CRLF
+    line = e >= i ? String(bytes[i:e]) : ""
+    return line, j + 1
+end
+
+# Triangulate a PLY face one corner at a time (0-based `idx` in, 1-based
+# indices out). A quad splits as (0,1,3), (1,2,3), as PLYLoader.js
+# handleElement does; larger polygons, which three.js drops, fan from corner 0.
+@inline function _ply_polygon_corner!(indices::Vector{Int}, k::Int, nitems::Int,
+                                      idx::Int, first_idx::Int, prev_idx::Int,
+                                      third_idx::Int)
+    if k == 1
+        first_idx = idx
+    elseif k == 2
+        prev_idx = idx
+    elseif nitems == 4
+        if k == 3
+            third_idx = idx
+        else
+            push!(indices, first_idx + 1, prev_idx + 1, idx + 1,
+                  prev_idx + 1, third_idx + 1, idx + 1)
+        end
+    else
+        push!(indices, first_idx + 1, prev_idx + 1, idx + 1)
+        prev_idx = idx
+    end
+    return first_idx, prev_idx, third_idx
+end
+
+function _ply_checked_binary_skip(i::Int, n::Int, nbytes::Int)
+    nbytes >= 0 || error("PLY binary skip size must be non-negative")
+    nbytes <= _ply_available_bytes(n, i) ||
+        error("PLY binary element data is truncated")
+    return i + nbytes
+end
+
 """
     load_ply(path) -> BufferGeometry
 
 Load a Stanford `.ply` mesh (ASCII, `binary_little_endian`, or
-`binary_big_endian`). Reads the
-`vertex` element (`x,y,z`; optional `nx,ny,nz`; optional `red,green,blue`) and
-the `face` element (a vertex-index list per face, fan-triangulated). Returns a
-[`BufferGeometry`](@ref) with positions, normals (file normals when present,
-otherwise smooth normals via [`compute_vertex_normals!`](@ref)), and a `:color`
-vertex attribute when colours are present (integer channels normalised to
-`[0,1]`).
+`binary_big_endian`). Reads the `vertex` element and the `face` element (a
+vertex-index list per face). Vertex properties are found by the names three.js
+`PLYLoader` accepts: `x|px|posx` (likewise y, z), `nx|normalx` (likewise ny,
+nz), `s|u|texture_u|tx` and `t|v|texture_v|ty` for uvs, and
+`red|diffuse_red|r|diffuse_r` (likewise green, blue). A quad face splits into
+triangles (0,1,3) and (1,2,3) as in `PLYLoader`; larger polygons are
+fan-triangulated. Returns a [`BufferGeometry`](@ref) with positions, uvs when
+present, normals (file normals when present, otherwise smooth normals via
+[`compute_vertex_normals!`](@ref)), and a `:color` vertex attribute when
+colours are present (integer channels normalised to `[0,1]`).
 """
 function load_ply(path::String)
     bytes = read(path)
@@ -1453,29 +1832,21 @@ function load_ply(path::String)
     # `i` walks the byte offset; after "end_header" it marks the body start.
     format = :ascii                 # :ascii | :binary_little_endian | :binary_big_endian
     # Per element, in declared order: name, count, and an ordered property list.
-    # Vertex/scalar properties are stored as (:scalar, name, type). A face list
-    # property is stored as (:list, name, count_type, index_type).
-    elements = Tuple{String,Int,Vector{Any}}[]
+    # Vertex/scalar properties are stored as (:scalar, name, type, :none). A
+    # face list property is stored as (:list, name, count_type, index_type).
+    # One concrete tuple type keeps the per-row loops type-stable.
+    elements = Tuple{String,Int,Vector{Tuple{Symbol,String,Symbol,Symbol}}}[]
     i = 1
     # Classic Mac headers end lines with a bare CR, as three.js PLYLoader accepts.
     cr = findfirst(b -> b == UInt8('\r') || b == UInt8('\n'), bytes)
     eol = cr !== nothing && bytes[cr] == UInt8('\r') &&
           (cr == n || bytes[cr + 1] != UInt8('\n')) ? UInt8('\r') : UInt8('\n')
-    function next_line()
-        j = i
-        while j <= n && bytes[j] != eol; j += 1; end
-        e = j - 1
-        e >= i && bytes[e] == UInt8('\r') && (e -= 1)   # strip CRLF
-        line = e >= i ? String(bytes[i:e]) : ""
-        i = j + 1                   # advance past the newline
-        return line
-    end
-
-    magic = next_line()
+    magic, i = _ply_header_line(bytes, i, n, eol)
     strip(magic) == "ply" || error("not a PLY file")
     while true
         i <= n || error("PLY header has no end_header")
-        line = strip(next_line())
+        raw_line, i = _ply_header_line(bytes, i, n, eol)
+        line = strip(raw_line)
         (isempty(line) || startswith(line, "comment") || startswith(line, "obj_info")) && continue
         t = split(line)
         tag = t[1]
@@ -1493,7 +1864,8 @@ function load_ply(path::String)
             end
         elseif tag == "element"
             length(t) >= 3 || error("PLY element declaration requires a name and count")
-            push!(elements, (String(t[2]), _ply_parse_element_count(t[3]), Any[]))
+            push!(elements, (String(t[2]), _ply_parse_element_count(t[3]),
+                             Tuple{Symbol,String,Symbol,Symbol}[]))
         elseif tag == "property"
             isempty(elements) && error("PLY property before element")
             props = elements[end][3]
@@ -1506,7 +1878,7 @@ function load_ply(path::String)
                 push!(props, (:list, String(t[5]), ct, it))
             else
                 length(t) >= 3 || error("PLY property declaration requires type and name")
-                push!(props, (:scalar, String(t[3]), _ply_parse_type(t[2], "property")))
+                push!(props, (:scalar, String(t[3]), _ply_parse_type(t[2], "property"), :none))
             end
         elseif tag == "end_header"
             break
@@ -1514,17 +1886,10 @@ function load_ply(path::String)
     end
 
     # --- Locate vertex/face elements and column roles. ---
-    positions = Float64[]; normals = Float64[]; colors = Float64[]
+    positions = Float64[]; normals = Float64[]; colors = Float64[]; uvs = Float64[]
     indices = Int[]
-    have_normals = false; have_color = false
+    have_normals = false; have_color = false; have_uv = false
     read_binary = format === :binary_big_endian ? _ply_read_be : _ply_read_le
-    function checked_binary_skip!(nbytes::Int)
-        nbytes >= 0 || error("PLY binary skip size must be non-negative")
-        nbytes <= _ply_available_bytes(n, i) ||
-            error("PLY binary element data is truncated")
-        i += nbytes
-        return nothing
-    end
     function checked_list_count(cnt)
         isfinite(cnt) && cnt >= 0 && cnt == floor(cnt) ||
             error("PLY list property count must be a non-negative integer")
@@ -1551,14 +1916,24 @@ function load_ply(path::String)
             # Map property name -> column index for the roles we read.
             names = String[p[2] for p in props]
             types = Symbol[p[1] === :scalar ? p[3] : :u32 for p in props]
-            col(name) = findfirst(==(name), names)
-            ix = col("x"); iy = col("y"); iz = col("z")
+            # First property found among the candidate names, tried in order
+            # (PLYLoader.js getAttributeDescriptor findProperty).
+            function col(candidates::String...)
+                for name in candidates
+                    c = findfirst(==(name), names)
+                    c === nothing || return c
+                end
+                return nothing
+            end
+            ix = col("x", "px", "posx"); iy = col("y", "py", "posy")
+            iz = col("z", "pz", "posz")
             (ix === nothing || iy === nothing || iz === nothing) && error("PLY vertex element lacks x/y/z")
             for c in (ix, iy, iz)
                 props[c][1] === :scalar ||
                     error("PLY vertex property $(props[c][2]) must be scalar")
             end
-            inx = col("nx"); iny = col("ny"); inz = col("nz")
+            inx = col("nx", "normalx"); iny = col("ny", "normaly")
+            inz = col("nz", "normalz")
             have_normals = inx !== nothing && iny !== nothing && inz !== nothing
             if have_normals
                 for c in (inx, iny, inz)
@@ -1566,13 +1941,20 @@ function load_ply(path::String)
                         error("PLY vertex property $(props[c][2]) must be scalar")
                 end
             end
-            ir = col("red"); ig = col("green"); ib = col("blue")
-            if ir === nothing
-                ir = col("r"); ig = col("g"); ib = col("b")
-            end
+            ir = col("red", "diffuse_red", "r", "diffuse_r")
+            ig = col("green", "diffuse_green", "g", "diffuse_g")
+            ib = col("blue", "diffuse_blue", "b", "diffuse_b")
             have_color = ir !== nothing && ig !== nothing && ib !== nothing
             if have_color
                 for c in (ir, ig, ib)
+                    props[c][1] === :scalar ||
+                        error("PLY vertex property $(props[c][2]) must be scalar")
+                end
+            end
+            ius = col("s", "u", "texture_u", "tx"); ivt = col("t", "v", "texture_v", "ty")
+            have_uv = ius !== nothing && ivt !== nothing
+            if have_uv
+                for c in (ius, ivt)
                     props[c][1] === :scalar ||
                         error("PLY vertex property $(props[c][2]) must be scalar")
                 end
@@ -1581,6 +1963,7 @@ function load_ply(path::String)
             positions = Vector{Float64}(undef, coord_count)
             have_normals && (normals = Vector{Float64}(undef, coord_count))
             have_color && (colors = Vector{Float64}(undef, coord_count))
+            have_uv && (uvs = Vector{Float64}(undef, 2 * ecount))
 
             if format == :ascii
                 p = i
@@ -1630,6 +2013,10 @@ function load_ply(path::String)
                             elseif have_color && c == ib
                                 colors[b3+3] = _ply_normalize_color(
                                     val, types[c], v + 1, prop[2])
+                            elseif have_uv && c == ius
+                                uvs[2v+1] = val
+                            elseif have_uv && c == ivt
+                                uvs[2v+2] = val
                             end
                         end
                     end
@@ -1647,7 +2034,7 @@ function load_ply(path::String)
                             # reading a single value and desyncing every row after.
                             cnt, i = read_binary(body, i, p[3])
                             nitems = checked_list_count(cnt)
-                            checked_binary_skip!(_ply_checked_mul(
+                            i = _ply_checked_binary_skip(i, n, _ply_checked_mul(
                                 nitems, _PLY_SIZE[p[4]], "list payload byte count"))
                             continue
                         end
@@ -1668,6 +2055,8 @@ function load_ply(path::String)
                         elseif have_color && c == ib
                             colors[b3+3] = _ply_normalize_color(
                                 val, types[c], v + 1, p[2])
+                        elseif have_uv && c == ius; uvs[2v+1] = val
+                        elseif have_uv && c == ivt; uvs[2v+2] = val
                         end
                     end
                 end
@@ -1706,8 +2095,7 @@ function load_ply(path::String)
                         count_value = _ply_ascii_typed_value(
                             raw_count, prop[3], "face", face_row, prop[2])
                         nitems = checked_list_count(count_value)
-                        first_idx = 0
-                        prev_idx = 0
+                        first_idx = prev_idx = third_idx = 0
                         for k in 1:nitems
                             first, last, p = _ply_next_ascii_token(body, p, n)
                             first != 0 ||
@@ -1720,15 +2108,9 @@ function load_ply(path::String)
                                     raw_index, prop[4], "face", face_row,
                                     prop[2], k)
                                 idx = checked_vertex_index(typed_index, nverts)
-                                if k == 1
-                                    first_idx = idx
-                                elseif k == 2
-                                    prev_idx = idx
-                                else
-                                    push!(indices, first_idx + 1, prev_idx + 1,
-                                          idx + 1)
-                                    prev_idx = idx
-                                end
+                                first_idx, prev_idx, third_idx = _ply_polygon_corner!(
+                                    indices, k, nitems, idx, first_idx, prev_idx,
+                                    third_idx)
                             else
                                 _ply_validate_ascii_property_value(
                                     body, first, last, "face", face_row,
@@ -1751,25 +2133,18 @@ function load_ply(path::String)
                         # validate before consuming the declared list payload.
                         nitems = checked_list_count(cnt)
                         if prop_col != list_col
-                            checked_binary_skip!(_ply_checked_mul(
+                            i = _ply_checked_binary_skip(i, n, _ply_checked_mul(
                                 nitems, _PLY_SIZE[prop[4]],
                                 "list payload byte count"))
                             continue
                         end
-                        first_idx = 0
-                        prev_idx = 0
+                        first_idx = prev_idx = third_idx = 0
                         for k in 1:nitems
                             val, i = read_binary(body, i, prop[4])
                             idx = checked_vertex_index(val, nverts) # 0-based
-                            if k == 1
-                                first_idx = idx
-                            elseif k == 2
-                                prev_idx = idx
-                            else
-                                push!(indices, first_idx + 1, prev_idx + 1,
-                                      idx + 1)
-                                prev_idx = idx
-                            end
+                            first_idx, prev_idx, third_idx = _ply_polygon_corner!(
+                                indices, k, nitems, idx, first_idx, prev_idx,
+                                third_idx)
                         end
                     end
                 end
@@ -1803,11 +2178,11 @@ function load_ply(path::String)
                 for _ in 0:ecount-1
                     for p in props
                         if p[1] === :scalar
-                            checked_binary_skip!(_PLY_SIZE[p[3]])
+                            i = _ply_checked_binary_skip(i, n, _PLY_SIZE[p[3]])
                         else
                             cnt, i = read_binary(body, i, p[3])
                             nitems = checked_list_count(cnt)
-                            checked_binary_skip!(_ply_checked_mul(
+                            i = _ply_checked_binary_skip(i, n, _ply_checked_mul(
                                 nitems, _PLY_SIZE[p[4]], "list payload byte count"))
                         end
                     end
@@ -1818,8 +2193,8 @@ function load_ply(path::String)
 
     nverts = length(positions) ÷ 3
     nfaces = length(indices) ÷ 3
-    geo = BufferGeometry(positions, have_normals ? normals : Float64[], Float64[],
-                         indices, nverts, nfaces)
+    geo = BufferGeometry(positions, have_normals ? normals : Float64[],
+                         have_uv ? uvs : Float64[], indices, nverts, nfaces)
     have_normals || compute_vertex_normals!(geo)
     have_color && set_attribute!(geo, :color, colors, 3)
     return geo
