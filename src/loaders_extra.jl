@@ -6744,6 +6744,31 @@ function _svg_clip_polygon_to_loop(subject::Vector{Vec2{Float64}},
     return out
 end
 
+function _svg_clip_segment_to_loop(a::Vec2{Float64}, b::Vec2{Float64},
+                                   clip_loop::Vector{Vec2{Float64}})
+    p0 = a
+    p1 = b
+    ccw = _font_polygon_area(clip_loop) >= 0.0
+    for i in eachindex(clip_loop)
+        c = clip_loop[i]
+        d = clip_loop[i == length(clip_loop) ? 1 : i + 1]
+        d0 = _svg_clip_signed_distance(p0, c, d, ccw)
+        d1 = _svg_clip_signed_distance(p1, c, d, ccw)
+        in0 = d0 >= -1e-9
+        in1 = d1 >= -1e-9
+        in0 && in1 && continue
+        (!in0 && !in1) && return nothing
+        hit = _svg_clip_edge_intersection(p0, p1, d0, d1, c, d)
+        if in0
+            p1 = hit
+        else
+            p0 = hit
+        end
+    end
+    _font_same_point(p0, p1) && return nothing
+    return p0, p1
+end
+
 function _svg_lerp_point(a::Vec2{Float64}, b::Vec2{Float64}, t::Float64)
     x = a.x + (b.x - a.x) * t
     y = a.y + (b.y - a.y) * t
@@ -8144,14 +8169,20 @@ function _svg_parse_range!(state::_SVGParseState, first::Int, last::Int,
                 # SVG 1.1 section 5.6 (three.js SVGLoader.js:218-226): the
                 # referenced content is rendered as a child of `use`; it
                 # inherits from `use`, not from its original ancestors, and its
-                # own presentation attributes take precedence.
+                # own presentation attributes take precedence. It is rendered
+                # in its own frame and then moved by the `use` transform, so
+                # clip paths and masks on the referenced content move with it.
                 push!(state.active_uses, target)
                 try
                     _svg_parse_range!(state, target, state.closers[target],
-                                      raw_paths, use_transform, style, true,
-                                      :visible, false)
+                                      raw_paths, _svg_identity_transform(),
+                                      style, true, :visible, false)
                 finally
                     pop!(state.active_uses)
+                end
+                for idx in eachindex(raw_paths)
+                    raw_paths[idx] = _svg_transform_path(raw_paths[idx],
+                                                         use_transform)
                 end
             end
         elseif tag == "path"

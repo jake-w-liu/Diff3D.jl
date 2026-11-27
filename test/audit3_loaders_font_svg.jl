@@ -92,6 +92,29 @@ end
         """<svg><use href="#missing"/></svg>""")
 end
 
+@testset "SVG use moves the referenced content's clip path and mask with it" begin
+    # A userSpaceOnUse clip path or mask on the referenced element lives in that
+    # element's user space, so the instance at x=20 is clipped to x 20..25, the
+    # same shape as the original moved by the use offset.
+    for attr in ("clip-path=\"url(#c)\"", "mask=\"url(#m)\"")
+        doc = _audit3_svg_document("""
+            <svg width="40" height="10">
+              <clipPath id="c"><rect width="5" height="5"/></clipPath>
+              <mask id="m"><rect width="5" height="5" fill="white"/></mask>
+              <rect id="t" width="10" height="10" $attr/>
+              <use href="#t" x="20"/>
+              <g id="g"><rect width="10" height="10" $attr/></g>
+              <use href="#g" transform="translate(0,20)"/>
+            </svg>
+            """)
+        @test length(doc.paths) == 4
+        @test [extrema(p.x for p in path.points) for path in doc.paths] ==
+              [(0.0, 5.0), (20.0, 25.0), (0.0, 5.0), (0.0, 5.0)]
+        @test [extrema(p.y for p in path.points) for path in doc.paths] ==
+              [(0.0, 5.0), (0.0, 5.0), (0.0, 5.0), (20.0, 25.0)]
+    end
+end
+
 @testset "SVG stroke lengths follow the element transform" begin
     # three.js SVGLoader.js:254: strokeWidth * getTransformScale(m), with
     # getTransformScale = sqrt(|det m|) (SVGLoader.js:2040-2046). Oracle:
