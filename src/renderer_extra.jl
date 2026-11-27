@@ -3564,9 +3564,9 @@ end
 
 # Blended wireframes, pushed in `render!`'s order (instances, then meshes) and
 # sorted back to front by the same routine. Items outside the view frustum are
-# dropped as `render!` drops them by default (`frustum_cull=true`): the sort is
-# not stable, so a list with extra offscreen items could order equal-depth
-# visible wireframes differently.
+# dropped as `render!` drops them by default (`frustum_cull=true`), and the
+# sort key (bounding-sphere centre depth, then object id) is the one `render!`
+# uses, so equal-depth wireframes draw in the same order.
 function _tiled_transparent_wireframe_items!(items::Vector{_TransparentRenderItem},
                                              meshes::Vector{Mesh},
                                              mesh_worlds::Vector{Mat4{Float64}},
@@ -3582,12 +3582,14 @@ function _tiled_transparent_wireframe_items!(items::Vector{_TransparentRenderIte
         (material_wireframe(mat) && _primitive_transparent(mat)) || continue
         base = instanced_worlds[instanced_slot]
         geo = _instanced_geometry(im)
+        center = _render_sort_center(geo, bounds_cache)
         for instance_index in eachindex(im.instance_matrices)
             world = base * im.instance_matrices[instance_index]
             _mesh_in_frustum(frustum, geo, world, bounds_cache) || continue
             push!(items, _TransparentRenderItem(
-                _mesh_view_depth_world(world, view),
-                _TRANSPARENT_INSTANCED_WIREFRAME_ITEM, instanced_slot, instance_index))
+                _render_sort_depth(world, view, center),
+                _TRANSPARENT_INSTANCED_WIREFRAME_ITEM, instanced_slot,
+                instance_index, im.id))
         end
     end
     @inbounds for index in eachindex(meshes)
@@ -3597,8 +3599,10 @@ function _tiled_transparent_wireframe_items!(items::Vector{_TransparentRenderIte
         _mesh_in_frustum(frustum, _mesh_geometry(mesh), mesh_worlds[index],
                          bounds_cache) || continue
         push!(items, _TransparentRenderItem(
-            _mesh_view_depth_world(mesh_worlds[index], view),
-            _TRANSPARENT_WIREFRAME_ITEM, index, 0))
+            _render_sort_depth(
+                mesh_worlds[index], view,
+                _render_sort_center(_mesh_geometry(mesh), bounds_cache)),
+            _TRANSPARENT_WIREFRAME_ITEM, index, 0, mesh.id))
     end
     isempty(items) || _sort_transparent_items!(items)
     return items

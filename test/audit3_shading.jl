@@ -120,6 +120,7 @@ end
                                                      sheen_roughness=0.4), :grazing),
                        (0.20739676375721652, 0.1481770253695701, 0.11392689514121213))
     @test audit3_close(audit3_direct(audit3_physical(roughness=0.5, sheen=1.0,
+                                                     sheen_color=Color3(1.0, 1.0, 1.0),
                                                      sheen_roughness=0.0), :oblique),
                        (0.19640801976715971, 0.09830542795995229, 0.052644977621319713))
     # Thin-film iridescence replaces the specular Fresnel term.

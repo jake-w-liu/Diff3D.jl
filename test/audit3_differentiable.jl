@@ -249,6 +249,10 @@ end
     # clipped into interpolated vertices that must not reuse cached ones.
     for eye in ((0.4, 0.6, 3.0), (0.1, 0.1, 1.05))
         p, faces, colors, vp = audit3_sphere(eye)
+        # The exact sphere puts vertices on min/max ties (kinks of the image
+        # model), where each AD mode may return a different one-sided
+        # derivative. A 1e-9 generic offset keeps the scene and leaves the kinks.
+        p .+= 1e-9 .* sin.(1.7 .* eachindex(p))
         render = vertex_render_fn(faces, colors, vp, width, height)
         weights = audit3_weights(height, width)
         objective(q) = sum(render(q) .* weights)
