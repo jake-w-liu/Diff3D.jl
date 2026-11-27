@@ -2284,8 +2284,12 @@ at `t`, clamped to the endpoints. `values` may be reals or `Vec3`.
 function interpolate_linear(times::AbstractVector, values::AbstractVector, t)
     n = _validate_interpolant_inputs("interpolate_linear", times, values)
     isnan(t) && throw(ArgumentError("interpolate_linear: query time t must not be NaN"))
-    t <= times[1] && return values[1]
-    t >= times[n] && return values[n]
+    # Clamped endpoints go through the interpolation with a zero weight of the
+    # interior weight's type, so integer or narrower values (and AD query
+    # times) return the same type as an interior evaluation.
+    endpoint_weight = zero((t - times[1]) / one(times[1] - times[1]))
+    t <= times[1] && return _lerp_value(values[1], values[1], endpoint_weight)
+    t >= times[n] && return _lerp_value(values[n], values[n], endpoint_weight)
     hi = searchsortedfirst(times, t)
     lo = hi - 1
     α = (t - times[lo]) / (times[hi] - times[lo])
