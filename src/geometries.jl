@@ -386,18 +386,6 @@ function _geometry_attribute_for_components(geo::BufferGeometry, name::Symbol, m
     return attr
 end
 
-function _line_distance_write!(distances::Vector{Float64}, seen::Vector{Bool},
-                               vertex_index::Int, value::Float64)
-    if seen[vertex_index]
-        isapprox(distances[vertex_index], value; atol=1e-8, rtol=1e-8) ||
-            throw(ArgumentError("indexed dashed lines require one lineDistance per vertex; duplicate vertex $(vertex_index) needs conflicting distances"))
-    else
-        distances[vertex_index] = value
-        seen[vertex_index] = true
-    end
-    return nothing
-end
-
 @inline function _line_distance_checked_index(geo::BufferGeometry, idx::Int)
     1 <= idx <= geo.n_vertices ||
         throw(ArgumentError("geometry indices must be within 1:n_vertices"))
@@ -871,10 +859,104 @@ function apply_morph_tangents!(out::Vector{Float64}, g::BufferGeometry,
     return _apply_morph_tangents_validated!(out, g, influences, base_attr)
 end
 
-function _compute_bounding_box_validated(g::BufferGeometry)
+const _MORPH_POSITION_PREFIX = "morphPosition"
+
+# Zero-based target index `k` of a `morphPosition<k>` name, spelled as
+# `_morph_position_symbol` spells it (no leading zeros), else -1. Only those
+# names can be reached by a morph influence. The interned symbol's bytes are
+# read in place so bounding volumes stay allocation-free; a shorter name stops
+# at its NUL terminator, which never matches the prefix.
+function _morph_position_index(name::Symbol)
+    ptr = Base.unsafe_convert(Ptr{UInt8}, name)
+    prefix_length = ncodeunits(_MORPH_POSITION_PREFIX)
+    for i in 1:prefix_length
+        unsafe_load(ptr, i) == codeunit(_MORPH_POSITION_PREFIX, i) || return -1
+    end
+    i = prefix_length + 1
+    first_digit = unsafe_load(ptr, i)
+    UInt8('0') <= first_digit <= UInt8('9') || return -1
+    first_digit == UInt8('0') && return unsafe_load(ptr, i + 1) == 0x00 ? 0 : -1
+    k = 0
+    while true
+        c = unsafe_load(ptr, i)
+        c == 0x00 && return k
+        UInt8('0') <= c <= UInt8('9') || return -1
+        digit = Int(c - UInt8('0'))
+        # No influence vector can reach an index beyond typemax(Int).
+        k <= (typemax(Int) - digit) ÷ 10 || return -1
+        k = 10k + digit
+        i += 1
+    end
+end
+
+# The morph position target with the smallest index above `after`, as
+# `(index, name)`, or `(-1, name)` when none is left. three.js grows the
+# bounding box target by target in `morphAttributes.position` order, and each
+# step can depend on the previous ones, so targets are visited by index.
+function _next_morph_position_target(g::BufferGeometry, after::Int)
+    best = -1
+    best_name = :morphPosition
+    for name in keys(g.attributes)
+        k = _morph_position_index(name)
+        if k > after && (best < 0 || k < best)
+            best = k
+            best_name = name
+        end
+    end
+    return best, best_name
+end
+
+function _morph_delta_bounds(attr::BufferAttribute, name::Symbol, n_vertices::Int)
+    _validate_morph_position_attribute(attr, name, n_vertices)
+    delta_box = Box3()::Box3{Float64}
+    @inbounds for vi in 1:n_vertices
+        base = 3vi - 2
+        delta_box = box3_expand_by_point(delta_box, Vec3(
+            _morph_attribute_value(attr, base, name),
+            _morph_attribute_value(attr, base + 1, name),
+            _morph_attribute_value(attr, base + 2, name)))
+    end
+    return delta_box
+end
+
+function _morph_bounding_radius(radius::Float64, center::Vec3{Float64},
+                                g::BufferGeometry, attr::BufferAttribute,
+                                name::Symbol)
+    @inbounds for vi in 1:g.n_vertices
+        base = 3vi - 2
+        p = get_vertex(g, vi) + Vec3(_morph_attribute_value(attr, base, name),
+                                     _morph_attribute_value(attr, base + 1, name),
+                                     _morph_attribute_value(attr, base + 2, name))
+        radius = max(radius, norm(p - center))
+    end
+    return radius
+end
+
+function _position_bounding_box(g::BufferGeometry)
     box = Box3()
     @inbounds for vi in 1:g.n_vertices
         box = box3_expand_by_point(box, get_vertex(g, vi))
+    end
+    return box
+end
+
+function _compute_bounding_box_validated(g::BufferGeometry)
+    box = _position_bounding_box(g)
+    # BufferGeometry.js:671-695 with morphTargetsRelative: Diff3D morph
+    # position targets are deltas, so each one grows the box by the extent of
+    # its deltas. Visited in index order because a target whose delta extent
+    # does not contain zero can move both box corners.
+    k = -1
+    while true
+        k, name = _next_morph_position_target(g, k)
+        k < 0 && break
+        attr = g.attributes[name]
+        # Assert per branch so the concrete result is never boxed.
+        delta_box = attr isa BufferAttribute{Float64} ?
+            _morph_delta_bounds(attr, name, g.n_vertices)::Box3{Float64} :
+            _morph_delta_bounds(attr, name, g.n_vertices)::Box3{Float64}
+        box = box3_expand_by_point(box, box.min + delta_box.min)
+        box = box3_expand_by_point(box, box.max + delta_box.max)
     end
     return box
 end
@@ -884,18 +966,48 @@ end
     return _stable_midpoint(a, b)
 end
 
-"""Axis-aligned bounding box of the geometry (three.js `computeBoundingBox`)."""
+"""
+    compute_bounding_box(geo)
+
+Axis-aligned bounding box of the geometry (three.js `computeBoundingBox`). Like
+three.js with relative morph targets, each `morphPosition<k>` attribute grows
+the box by the extent of its deltas, in target order, so every pose whose
+influences lie in `[0, 1]` stays inside it. A malformed target raises an
+`ArgumentError`.
+"""
 function compute_bounding_box(g::BufferGeometry)
     _validate_geometry_vertices(g, "compute_bounding_box")
     g.n_vertices == 0 && return Box3()
     return _compute_bounding_box_validated(g)
 end
 
-"""Bounding sphere centred on the box centre (three.js `computeBoundingSphere`)."""
+"""
+    compute_bounding_sphere(geo)
+
+Bounding sphere centred on the bounding-box centre (three.js
+`computeBoundingSphere`). Its radius covers every vertex and, for each
+`morphPosition<k>` attribute, every vertex displaced by its full delta.
+"""
 function compute_bounding_sphere(g::BufferGeometry)
     _validate_geometry_vertices(g, "compute_bounding_sphere")
     g.n_vertices == 0 && return BoundingSphere(Vec3(), 0.0)
-    box = _compute_bounding_box_validated(g)
+    return _bounding_sphere_validated(g, true)
+end
+
+# Bounds of the positions alone, for the CPU renderers' frustum culling. They
+# cull the geometry they draw, whose positions already carry the mesh's morph
+# pose (a morph proxy), so these bounds are exact; including every morph target
+# would cost a pass per target per frame and make an unused malformed target an
+# error at render time.
+function _compute_position_bounding_sphere(g::BufferGeometry)
+    _validate_geometry_vertices(g, "compute_bounding_sphere")
+    g.n_vertices == 0 && return BoundingSphere(Vec3(), 0.0)
+    return _bounding_sphere_validated(g, false)
+end
+
+function _bounding_sphere_validated(g::BufferGeometry, include_morph_targets::Bool)
+    box = include_morph_targets ? _compute_bounding_box_validated(g) :
+          _position_bounding_box(g)
     center = Vec3(
         _geometry_midpoint(box.min.x, box.max.x),
         _geometry_midpoint(box.min.y, box.max.y),
@@ -905,6 +1017,14 @@ function compute_bounding_sphere(g::BufferGeometry)
     @inbounds for vi in 1:g.n_vertices
         d = get_vertex(g, vi) - center
         radius = max(radius, norm(d))
+    end
+    include_morph_targets || return BoundingSphere(center, radius)
+    # BufferGeometry.js:747-773 (box) and 790-816 (radius)
+    for (name, attr) in g.attributes
+        _morph_position_index(name) >= 0 || continue
+        radius = attr isa BufferAttribute{Float64} ?
+            _morph_bounding_radius(radius, center, g, attr, name)::Float64 :
+            _morph_bounding_radius(radius, center, g, attr, name)::Float64
     end
     return BoundingSphere(center, radius)
 end
@@ -930,6 +1050,107 @@ function compute_face_normal(g::BufferGeometry, face_idx::Int)
     v2 = get_vertex(g, i2)
     v3 = get_vertex(g, i3)
     triangle_normal(Triangle(v1, v2, v3))
+end
+
+# Faces visited by `compute_tangents!`: the draw groups when present
+# (BufferGeometry.js:923-944), otherwise every face.
+function _tangent_face_ranges(g::BufferGeometry)
+    isempty(g.groups) && return [1:g.n_faces]
+    ranges = Vector{UnitRange{Int}}(undef, length(g.groups))
+    for (k, (start, count, _)) in enumerate(g.groups)
+        last_face = _geometry_checked_add(start, count - 1,
+                                          "compute_tangents! group range")
+        (count == 0 || (start >= 1 && last_face <= g.n_faces)) ||
+            throw(ArgumentError(
+                "compute_tangents! group $k must lie within the geometry's faces"))
+        ranges[k] = start:last_face
+    end
+    return ranges
+end
+
+@inline _tangent_vec3(data::Vector{Float64}, vi::Int) =
+    @inbounds Vec3(data[3vi - 2], data[3vi - 1], data[3vi])
+
+"""
+    compute_tangents!(geo)
+
+Compute per-vertex tangents from positions, normals, and UVs and store them as
+the 4-component `:tangent` attribute (`x, y, z, handedness`), following three.js
+`BufferGeometry.computeTangents`. Each face adds its UV-aligned `s` and `t`
+directions to its three vertices; a face whose UV determinant has no finite
+reciprocal is skipped. Each vertex tangent is then Gram-Schmidt orthogonalized
+against its normal and normalized (a zero result stays zero), and the
+handedness is `-1` when `cross(normal, tangent)` points against the summed `t`
+direction, else `1`. Only the faces of the draw groups are visited when `geo`
+has groups; vertices no visited face references keep the tangent they already
+had (zero for a newly created attribute).
+
+The geometry must be indexed and carry a normal and a UV for every vertex;
+otherwise an `ArgumentError` is thrown. An existing `Float64` tangent attribute
+with item size 4 and one entry per vertex is updated in place; any other
+`:tangent` attribute is replaced. Returns `geo`.
+"""
+function compute_tangents!(g::BufferGeometry)
+    _validate_triangle_geometry_indices(g, "compute_tangents!")
+    n = g.n_vertices
+    (g.n_faces > 0 && !isempty(g.indices)) ||
+        throw(ArgumentError("compute_tangents! requires an indexed triangle geometry"))
+    length(g.normals) >= 3n ||
+        throw(ArgumentError("compute_tangents! requires a normal for every vertex"))
+    length(g.uvs) >= 2n ||
+        throw(ArgumentError("compute_tangents! requires a UV for every vertex"))
+    face_ranges = _tangent_face_ranges(g)
+
+    positions, normals, uvs, indices = g.positions, g.normals, g.uvs, g.indices
+    zero_vec = Vec3(0.0, 0.0, 0.0)
+    tan1 = fill(zero_vec, n)
+    tan2 = fill(zero_vec, n)
+    # BufferGeometry.js:888-921 `handleTriangle`.
+    for faces in face_ranges, f in faces
+        a, b, c = indices[3f - 2], indices[3f - 1], indices[3f]
+        va = _tangent_vec3(positions, a)
+        vb = _tangent_vec3(positions, b) - va
+        vc = _tangent_vec3(positions, c) - va
+        @inbounds begin
+            uax, uay = uvs[2a - 1], uvs[2a]
+            ubx, uby = uvs[2b - 1] - uax, uvs[2b] - uay
+            ucx, ucy = uvs[2c - 1] - uax, uvs[2c] - uay
+        end
+        r = 1.0 / (ubx * ucy - ucx * uby)
+        # three.js silently ignores degenerate UV triangles.
+        isfinite(r) || continue
+        sdir = (vb * ucy + vc * (-uby)) * r
+        tdir = (vc * ubx + vb * (-ucx)) * r
+        @inbounds begin
+            tan1[a] += sdir; tan1[b] += sdir; tan1[c] += sdir
+            tan2[a] += tdir; tan2[b] += tdir; tan2[c] += tdir
+        end
+    end
+
+    existing = get(g.attributes, :tangent, nothing)
+    tangent = if existing isa BufferAttribute{Float64} && existing.item_size == 4 &&
+                 length(existing.data) == 4n
+        existing.data
+    else
+        data = zeros(Float64, 4n)
+        g.attributes[:tangent] = BufferAttribute(data, 4)
+        data
+    end
+    # BufferGeometry.js:956-994 `handleVertex`.
+    for faces in face_ranges, f in faces, corner in 0:2
+        v = indices[3f - 2 + corner]
+        nrm = _tangent_vec3(normals, v)
+        t = tan1[v]
+        tmp = normalize(t - nrm * dot(nrm, t))
+        w = dot(cross(nrm, t), tan2[v]) < 0.0 ? -1.0 : 1.0
+        @inbounds begin
+            tangent[4v - 3] = tmp.x
+            tangent[4v - 2] = tmp.y
+            tangent[4v - 1] = tmp.z
+            tangent[4v] = w
+        end
+    end
+    return g
 end
 
 # ========================== Box Geometry ==========================
@@ -982,6 +1203,15 @@ function _box_add_quad_face!(positions::Vector{Float64}, normals_arr::Vector{Flo
     return vi + 4, out + 6
 end
 
+# Grid points of a side, `a + (b - a) * t` as in BoxGeometry.js:111-115
+# (`iy * segmentHeight - heightHalf`). A constant coordinate stays exact and
+# t == 1 returns `b`, so subdivided sides share their edge vertices exactly
+# with the neighbouring sides.
+@inline _box_lerp(a::Float64, b::Float64, t::Float64) =
+    t == 1.0 ? b : a + (b - a) * t
+@inline _box_lerp(a::Vec3, b::Vec3, t::Float64) =
+    Vec3(_box_lerp(a.x, b.x, t), _box_lerp(a.y, b.y, t), _box_lerp(a.z, b.z, t))
+
 function _box_add_grid_face!(positions::Vector{Float64}, normals_arr::Vector{Float64},
                              uvs_arr::Vector{Float64}, indices::Vector{Int},
                              vi::Int, out::Int, p1, p2, p3, p4, n,
@@ -990,11 +1220,11 @@ function _box_add_grid_face!(positions::Vector{Float64}, normals_arr::Vector{Flo
     row = u_segments + 1
     for j in 0:v_segments
         tv = j / v_segments
-        left = p1 * (1 - tv) + p4 * tv
-        right = p2 * (1 - tv) + p3 * tv
+        left = _box_lerp(p1, p4, tv)
+        right = _box_lerp(p2, p3, tv)
         for i in 0:u_segments
             tu = i / u_segments
-            p = left * (1 - tu) + right * tu
+            p = _box_lerp(left, right, tu)
             _box_write_vertex!(positions, normals_arr, uvs_arr,
                                base + j * row + i, p, n, tu, tv)
         end
@@ -1035,6 +1265,10 @@ function BoxGeometry(; width=1.0, height=1.0, depth=1.0,
     hs = _geometry_segment_count("height_segments", height_segments)
     ds = _geometry_segment_count("depth_segments", depth_segments)
     w, h, d = width/2, height/2, depth/2
+    # BoxGeometry.js:131 orients each side by the sign of its signed offset
+    # (`depth > 0 ? 1 : -1`), so a negative dimension keeps the normals
+    # pointing away from the center and a zero one gives both sides -1.
+    side(offset) = offset > 0 ? 1.0 : -1.0
 
     # Vertices are duplicated per face so each face keeps flat normals and UVs.
     n_verts = 2 * ((ws + 1) * (hs + 1) +
@@ -1055,27 +1289,27 @@ function BoxGeometry(; width=1.0, height=1.0, depth=1.0,
     # +Z face
     vi, out = _box_add_face!(positions, normals_arr, uvs_arr, indices, vi, out,
                              use_quad_faces, Vec3(-w,-h,d), Vec3(w,-h,d),
-                             Vec3(w,h,d), Vec3(-w,h,d), Vec3(0,0,1), ws, hs)
+                             Vec3(w,h,d), Vec3(-w,h,d), Vec3(0.0, 0.0, side(depth)), ws, hs)
     # -Z face
     vi, out = _box_add_face!(positions, normals_arr, uvs_arr, indices, vi, out,
                              use_quad_faces, Vec3(w,-h,-d), Vec3(-w,-h,-d),
-                             Vec3(-w,h,-d), Vec3(w,h,-d), Vec3(0,0,-1), ws, hs)
+                             Vec3(-w,h,-d), Vec3(w,h,-d), Vec3(0.0, 0.0, side(-depth)), ws, hs)
     # +Y face
     vi, out = _box_add_face!(positions, normals_arr, uvs_arr, indices, vi, out,
                              use_quad_faces, Vec3(-w,h,d), Vec3(w,h,d),
-                             Vec3(w,h,-d), Vec3(-w,h,-d), Vec3(0,1,0), ws, ds)
+                             Vec3(w,h,-d), Vec3(-w,h,-d), Vec3(0.0, side(height), 0.0), ws, ds)
     # -Y face
     vi, out = _box_add_face!(positions, normals_arr, uvs_arr, indices, vi, out,
                              use_quad_faces, Vec3(-w,-h,-d), Vec3(w,-h,-d),
-                             Vec3(w,-h,d), Vec3(-w,-h,d), Vec3(0,-1,0), ws, ds)
+                             Vec3(w,-h,d), Vec3(-w,-h,d), Vec3(0.0, side(-height), 0.0), ws, ds)
     # +X face
     vi, out = _box_add_face!(positions, normals_arr, uvs_arr, indices, vi, out,
                              use_quad_faces, Vec3(w,-h,d), Vec3(w,-h,-d),
-                             Vec3(w,h,-d), Vec3(w,h,d), Vec3(1,0,0), ds, hs)
+                             Vec3(w,h,-d), Vec3(w,h,d), Vec3(side(width), 0.0, 0.0), ds, hs)
     # -X face
     vi, out = _box_add_face!(positions, normals_arr, uvs_arr, indices, vi, out,
                              use_quad_faces, Vec3(-w,-h,-d), Vec3(-w,-h,d),
-                             Vec3(-w,h,d), Vec3(-w,h,-d), Vec3(-1,0,0), ds, hs)
+                             Vec3(-w,h,d), Vec3(-w,h,-d), Vec3(side(-width), 0.0, 0.0), ds, hs)
 
     BufferGeometry(positions, normals_arr, uvs_arr, indices, n_verts, n_faces)
 end
@@ -1128,8 +1362,18 @@ function SphereGeometry(; radius=1.0, width_segments=32, height_segments=16,
     for j in 0:height_segments
         v = j / height_segments
         θ = theta_start + v * theta_length
-        sinθ = sin(θ)
+        # SphereGeometry.js:81-82 places each ring at y = radius * cos(theta)
+        # with ringRadius = sqrt(radius^2 - y^2) = |radius| * |sin(theta)|,
+        # which is never negative: sweeps outside [0, pi] fold back onto the
+        # sphere and a negative radius mirrors only y.
+        abs_sinθ = abs(sin(θ))
         cosθ = cos(θ)
+        ring_radius = abs(radius) * abs_sinθ
+        y = radius * cosθ
+        # SphereGeometry.js:113 normalizes the vertex, i.e. its direction
+        # from the center; a zero radius leaves zero normals.
+        ny_dir = radius > 0 ? cosθ : radius < 0 ? -cosθ : 0.0
+        ring_dir = iszero(radius) ? 0.0 : abs_sinθ
         # three.js centers each pole vertex's u between its ring neighbours.
         u_offset = j == 0 && theta_start == 0 ? 0.5 / width_segments :
                    j == height_segments && bottom_pole ? -0.5 / width_segments : 0.0
@@ -1139,11 +1383,10 @@ function SphereGeometry(; radius=1.0, width_segments=32, height_segments=16,
             sinϕ = sin(ϕ)
             cosϕ = cos(ϕ)
 
-            x = -radius * sinθ * cosϕ
-            y = radius * cosθ
-            z = radius * sinθ * sinϕ
+            x = -ring_radius * cosϕ
+            z = ring_radius * sinϕ
 
-            nx, ny, nz = -sinθ * cosϕ, cosθ, sinθ * sinϕ
+            nx, ny, nz = -ring_dir * cosϕ, ny_dir, ring_dir * sinϕ
             nl = hypot(nx, ny, nz)
             if nl > 0
                 nx /= nl; ny /= nl; nz /= nl
@@ -1171,10 +1414,12 @@ function SphereGeometry(; radius=1.0, width_segments=32, height_segments=16,
             c = a + (width_segments + 1)
             d = c + 1
 
+            # SphereGeometry.js:134-140 names these b, a, c, d and emits
+            # (a, b, d), (b, c, d).
             if j != 0 || !top_pole
-                indices[out] = a
-                indices[out + 1] = d
-                indices[out + 2] = b
+                indices[out] = b
+                indices[out + 1] = a
+                indices[out + 2] = d
                 out += 3
             end
             if j != height_segments - 1 || !bottom_pole
@@ -1228,17 +1473,20 @@ function PlaneGeometry(; width=1.0, height=1.0, width_segments=1, height_segment
         end
     end
 
+    # PlaneGeometry.js:85-95 splits each cell along its (ix, iy+1)-(ix+1, iy)
+    # diagonal: (a, b, d), (b, c, d). The diagonal decides the surface shape
+    # once vertices are displaced out of the plane (terrain, morph targets).
     out = 1
     for iy in 0:height_segments-1
         for ix in 0:width_segments-1
             a = iy * (width_segments + 1) + ix + 1
-            b = a + 1
-            c = a + (width_segments + 1)
-            d = c + 1
+            d = a + 1
+            b = a + (width_segments + 1)
+            c = b + 1
             indices[out] = a
-            indices[out + 1] = d
-            indices[out + 2] = b
-            indices[out + 3] = a
+            indices[out + 1] = b
+            indices[out + 2] = d
+            indices[out + 3] = b
             indices[out + 4] = c
             indices[out + 5] = d
             out += 6
@@ -1258,8 +1506,9 @@ function CylinderGeometry(; radius_top=1.0, radius_bottom=1.0, height=1.0,
     radius_top = _geometry_finite_float(radius_top, "CylinderGeometry radius_top")
     radius_bottom = _geometry_finite_float(radius_bottom, "CylinderGeometry radius_bottom")
     height = _geometry_finite_float(height, "CylinderGeometry height")
-    # Clamp segment counts so a 0 cannot produce NaN geometry (see PlaneGeometry).
-    radial_segments = _clamp_seg(radial_segments, 3, "CylinderGeometry radial_segments")
+    # CylinderGeometry.js only floors the counts, so any count >= 1 is kept;
+    # clamp 0 to 1 so it cannot produce 0/0 = NaN geometry (see PlaneGeometry).
+    radial_segments = _clamp_seg(radial_segments, 1, "CylinderGeometry radial_segments")
     height_segments = _clamp_seg(height_segments, 1, "CylinderGeometry height_segments")
     side_vertices = (height_segments + 1) * (radial_segments + 1)
     top_cap = !open_ended && radius_top > 0
@@ -1327,21 +1576,23 @@ function CylinderGeometry(; radius_top=1.0, radius_bottom=1.0, height=1.0,
         end
     end
 
+    # CylinderGeometry.js:156-178 walks columns outermost and splits each
+    # quad along its lower-left/upper-right diagonal: (a, b, d), (b, c, d).
     out = 1
-    for y_seg in 0:height_segments-1
-        for x_seg in 0:radial_segments-1
+    for x_seg in 0:radial_segments-1
+        for y_seg in 0:height_segments-1
             a = y_seg * (radial_segments + 1) + x_seg + 1
-            b = a + 1
-            c = a + (radial_segments + 1)
-            d = c + 1
+            d = a + 1
+            b = a + (radial_segments + 1)
+            c = b + 1
             if top_side || y_seg != 0
                 indices[out] = a
-                indices[out + 1] = d
-                indices[out + 2] = b
+                indices[out + 1] = b
+                indices[out + 2] = d
                 out += 3
             end
             if bottom_side || y_seg != height_segments - 1
-                indices[out] = a
+                indices[out] = b
                 indices[out + 1] = c
                 indices[out + 2] = d
                 out += 3
@@ -1390,18 +1641,19 @@ function CylinderGeometry(; radius_top=1.0, radius_bottom=1.0, height=1.0,
                 uvs_arr[ubase + 1] = sinθ * 0.5 * cap_ny + 0.5
             end
 
+            # CylinderGeometry.js:272-287: (i, i + 1, c) on top, (i + 1, i, c)
+            # on the bottom, with this generator's single shared center c.
             for x_seg in 0:radial_segments-1
                 curr = center_idx + 1 + x_seg
                 next_v = curr + 1
                 if cap_ny > 0
-                    indices[out] = center_idx
-                    indices[out + 1] = curr
-                    indices[out + 2] = next_v
-                else
-                    indices[out] = center_idx
+                    indices[out] = curr
                     indices[out + 1] = next_v
-                    indices[out + 2] = curr
+                else
+                    indices[out] = next_v
+                    indices[out + 1] = curr
                 end
+                indices[out + 2] = center_idx
                 out += 3
             end
         end
@@ -1432,9 +1684,10 @@ function TorusGeometry(; radius=1.0, tube=0.4, radial_segments=12, tubular_segme
     theta_start = _geometry_finite_float(theta_start, "TorusGeometry theta_start")
     theta_length = _geometry_finite_float(theta_length, "TorusGeometry theta_length")
     _geometry_check_abs_sum(radius, tube, "TorusGeometry")
-    # Clamp segment counts so a 0 cannot produce NaN geometry (see PlaneGeometry).
-    radial_segments = _clamp_seg(radial_segments, 2, "TorusGeometry radial_segments")
-    tubular_segments = _clamp_seg(tubular_segments, 3, "TorusGeometry tubular_segments")
+    # TorusGeometry.js only floors the counts, so any count >= 1 is kept;
+    # clamp 0 to 1 so it cannot produce 0/0 = NaN geometry (see PlaneGeometry).
+    radial_segments = _clamp_seg(radial_segments, 1, "TorusGeometry radial_segments")
+    tubular_segments = _clamp_seg(tubular_segments, 1, "TorusGeometry tubular_segments")
     n_verts = (radial_segments + 1) * (tubular_segments + 1)
     n_faces = 2 * radial_segments * tubular_segments
     position_len, uv_len, index_len =
@@ -1489,16 +1742,17 @@ function TorusGeometry(; radius=1.0, tube=0.4, radial_segments=12, tubular_segme
     out = 1
     for j in 1:radial_segments
         for i in 1:tubular_segments
-            a = (j - 1) * (tubular_segments + 1) + i
-            b = a + 1
-            c = j * (tubular_segments + 1) + i
-            d = c + 1
+            # TorusGeometry.js:113-121: (a, b, d), (b, c, d) with a/d on ring j.
+            a = j * (tubular_segments + 1) + i
+            b = (j - 1) * (tubular_segments + 1) + i
+            c = b + 1
+            d = a + 1
             indices[out] = a
             indices[out + 1] = b
             indices[out + 2] = d
-            indices[out + 3] = a
-            indices[out + 4] = d
-            indices[out + 5] = c
+            indices[out + 3] = b
+            indices[out + 4] = c
+            indices[out + 5] = d
             out += 6
         end
     end
@@ -1575,6 +1829,44 @@ function _torus_knot_frame(tangent::Vec3{Float64}, center::Vec3{Float64})
     return normal, binormal
 end
 
+@inline function _torus_knot_unit_point(p_phase::Float64, q_phase::Float64)
+    radial = 0.5 * (2.0 + cos(q_phase))
+    return Vec3(radial * cos(p_phase), radial * sin(p_phase), 0.5 * sin(q_phase))
+end
+
+# TorusKnotGeometry.js:87-100 builds the tube frame from a secant of the curve:
+# T = P2 - P1 and N = P2 + P1 with P2 0.01 further along `u = p * phase`, then
+# B = T x N and N = B x T. The frame is evaluated on the unit-radius curve
+# (it only depends on the sign of `radius`) so a large radius cannot overflow
+# P1 + P2. When three.js's construction is not finite or degenerates, the
+# analytic tangent frame is used instead.
+function _torus_knot_secant_frame(radius::Float64, p_val::Float64,
+                                  q_val::Float64, p_phase::Float64,
+                                  q_phase::Float64, center::Vec3{Float64})
+    zero_vec = Vec3(0.0, 0.0, 0.0)
+    # three.js normalizes the all-zero frame of a zero-radius knot to zeros.
+    iszero(radius) && return zero_vec, zero_vec
+    dq = (q_val / p_val) * 0.01
+    if isfinite(dq)
+        a = _torus_knot_unit_point(p_phase, q_phase)
+        b = _torus_knot_unit_point(p_phase + 0.01, q_phase + dq)
+        tangent = b - a
+        binormal = cross(tangent, b + a)
+        normal = cross(binormal, tangent)
+        binormal_length = norm(binormal)
+        normal_length = norm(normal)
+        if binormal_length > 0.0 && normal_length > 0.0 &&
+           isfinite(binormal_length) && isfinite(normal_length)
+            # Negating the curve negates T and N + P but leaves B unchanged.
+            normal_sign = radius > 0.0 ? 1.0 : -1.0
+            return normal * (normal_sign / normal_length),
+                   binormal / binormal_length
+        end
+    end
+    tangent = _torus_knot_tangent(radius, p_val, q_val, p_phase, q_phase)
+    return _torus_knot_frame(tangent, center)
+end
+
 function TorusKnotGeometry(; radius=1.0, tube=0.4, tubular_segments=64,
                             radial_segments=8, p_val=2, q_val=3)
     radius = _geometry_finite_float(radius, "TorusKnotGeometry radius")
@@ -1592,10 +1884,10 @@ function TorusKnotGeometry(; radius=1.0, tube=0.4, tubular_segments=64,
     q_val = _geometry_finite_float(
         _geometry_finite_scalar(q_val, "TorusKnotGeometry q_val"),
         "TorusKnotGeometry q_val")
-    # Clamp segment counts so a 0 can't make i/tubular_segments or j/radial_segments
-    # a 0/0 = NaN, matching every sibling generator in this file.
-    tubular_segments = _clamp_seg(tubular_segments, 3, "TorusKnotGeometry tubular_segments")
-    radial_segments = _clamp_seg(radial_segments, 3, "TorusKnotGeometry radial_segments")
+    # TorusKnotGeometry.js only floors the counts, so any count >= 1 is kept;
+    # clamp 0 to 1 so i/tubular_segments or j/radial_segments cannot be 0/0 = NaN.
+    tubular_segments = _clamp_seg(tubular_segments, 1, "TorusKnotGeometry tubular_segments")
+    radial_segments = _clamp_seg(radial_segments, 1, "TorusKnotGeometry radial_segments")
     n_verts = (tubular_segments + 1) * (radial_segments + 1)
     n_faces = 2 * tubular_segments * radial_segments
     position_len, uv_len, index_len =
@@ -1609,9 +1901,8 @@ function TorusKnotGeometry(; radius=1.0, tube=0.4, tubular_segments=64,
         ui = i / tubular_segments
         p1, p_phase, q_phase = _torus_knot_point(
             radius, p_val, q_val, ui)
-        T_vec = _torus_knot_tangent(
-            radius, p_val, q_val, p_phase, q_phase)
-        N_vec, B_vec = _torus_knot_frame(T_vec, p1)
+        N_vec, B_vec = _torus_knot_secant_frame(
+            radius, p_val, q_val, p_phase, q_phase, p1)
 
         for j in 0:radial_segments
             vj = j / radial_segments
@@ -1721,17 +2012,18 @@ function RingGeometry(; inner_radius=0.5, outer_radius=1.0, theta_segments=32, p
         end
     end
 
+    # RingGeometry.js:108-124: (a, b, d), (b, c, d) with b/c on the next ring.
     out = 1
     for j in 0:phi_segments-1
         for i in 0:theta_segments-1
             a = j * (theta_segments + 1) + i + 1
-            b = a + 1
-            c = a + (theta_segments + 1)
-            d = c + 1
+            d = a + 1
+            b = a + (theta_segments + 1)
+            c = b + 1
             indices[out] = a
-            indices[out + 1] = d
-            indices[out + 2] = b
-            indices[out + 3] = a
+            indices[out + 1] = b
+            indices[out + 2] = d
+            indices[out + 3] = b
             indices[out + 4] = c
             indices[out + 5] = d
             out += 6
@@ -1785,9 +2077,10 @@ function CircleGeometry(; radius=1.0, segments=32, theta_start=0.0, theta_length
 
     out = 1
     for i in 1:segments
-        indices[out] = 1
-        indices[out + 1] = i + 1
-        indices[out + 2] = i + 2
+        # CircleGeometry.js:101-103: (i, i + 1, 0) in zero-based indices.
+        indices[out] = i + 1
+        indices[out + 1] = i + 2
+        indices[out + 2] = 1
         out += 3
     end
 

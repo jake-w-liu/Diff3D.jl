@@ -2169,7 +2169,7 @@ end
 # world; the radius scales by the largest axis scale extracted from `world_mat`
 # using a conservative operator-norm bound that also covers hierarchical shear.
 @inline function _mesh_local_bounding_sphere(geo::BufferGeometry, ::Nothing)
-    return compute_bounding_sphere(geo)
+    return _compute_position_bounding_sphere(geo)
 end
 
 @inline function _mesh_local_bounding_sphere(geo::BufferGeometry,
@@ -2179,7 +2179,7 @@ end
     @inbounds for i in eachindex(bound_geometries)
         bound_geometries[i] === geo && return bounds[i]
     end
-    bs = compute_bounding_sphere(geo)
+    bs = _compute_position_bounding_sphere(geo)
     push!(bound_geometries, geo)
     push!(bounds, bs)
     return bs
