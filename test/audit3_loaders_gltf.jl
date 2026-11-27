@@ -384,7 +384,7 @@ function audit3_base64_allocations(text)
 end
 
 @testset "glTF data URI base64 decoding" begin
-    # RFC 4648 §4 base64: compare against Base64.base64decode, including
+    # RFC 4648 §4 base64: decode Base64.base64encode output back to its bytes, including
     # whitespace that interrupts quads and both padding forms.
     for n in (0, 1, 2, 3, 4, 5, 47, 48, 49, 1000)
         bytes = UInt8[(37 * i + 11) % 256 for i in 1:n]
