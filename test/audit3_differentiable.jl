@@ -189,3 +189,41 @@ end
     @test map(x -> x.val, audit3_render(ADVar.(p), count, width, height)) ≈
           audit3_render(p, count, width, height) rtol=1e-12 atol=1e-14
 end
+
+const AUDIT3_GENERIC_LOSS = Tuple{Array{T,3} where T, Array{S,3} where S}
+
+@testset "Fused reverse MSE and L1 match the recorded compensated sums" begin
+    H, W, C = 5, 4, 3
+    x = [sin(1.3i) * (i % 4 == 0 ? 0.0 : 1.0) for i in 1:H * W * C]
+    target = reshape([cos(0.7i) for i in 1:H * W * C], H, W, C)
+    target[1] = x[1]   # an exactly zero difference takes the +1 branch of abs
+    for loss in (loss_mse, loss_l1)
+        generic(a, b) = invoke(loss, AUDIT3_GENERIC_LOSS, a, b)
+        fused_value, fused_grad = reverse_value_gradient(p -> loss(reshape(p, H, W, C), target), x)
+        value, grad = reverse_value_gradient(p -> generic(reshape(p, H, W, C), target), x)
+        @test fused_value == value
+        @test fused_grad == grad
+        @test fused_value == loss(reshape(x, H, W, C), target)
+        both = vcat(x, vec(target))
+        split(p) = (reshape(p[1:end ÷ 2], H, W, C), reshape(p[end ÷ 2 + 1:end], H, W, C))
+        @test reverse_gradient(p -> loss(split(p)...), both) ==
+              reverse_gradient(p -> generic(split(p)...), both)
+        @test reverse_gradient(p -> loss(reshape(x, H, W, C), reshape(p, H, W, C)), vec(target)) ==
+              reverse_gradient(p -> generic(reshape(x, H, W, C), reshape(p, H, W, C)), vec(target))
+        # Analytic: d MSE/dx_i = 2 (x_i - y_i) / n, d L1/dx_i = sign(x_i - y_i) / n.
+        n = H * W * C
+        expected = loss === loss_mse ? 2 .* (x .- vec(target)) ./ n :
+            [d < 0 ? -1 / n : 1 / n for d in x .- vec(target)]
+        @test fused_grad ≈ expected rtol=1e-14
+        recorded = Ref(0)
+        reverse_gradient(x) do p
+            image = reshape(p, H, W, C)
+            before = length(Diff3D._ad_tape_stack()[end])
+            result = loss(image, target)
+            recorded[] = length(Diff3D._ad_tape_stack()[end]) - before
+            result
+        end
+        @test recorded[] == 1
+        @test_throws ArgumentError reverse_gradient(p -> loss(reshape(p, H, W, C), zeros(H, W, 2)), x)
+    end
+end

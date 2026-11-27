@@ -602,3 +602,78 @@ function _soft_render_screen(::Type{ADVar}, screen_tris, n_screen_tris::Int,
     end
     return image
 end
+
+# ==========================================================================
+# Fused reverse-mode rules for the pixelwise image losses.
+#
+# Recorded operation by operation, the compensated sums in `loss_mse` and
+# `loss_l1` add about seven tape nodes per image element. These rules evaluate
+# the Float64 loss on primal values and record a single output whose pullback
+# applies d/dx_i = 2 (x_i - y_i) / n (MSE) or sign(x_i - y_i) / n (L1), with
+# the sign of a zero difference taken as +1 like the recorded `abs`. The
+# exact compensated summation has unit derivative with respect to each term.
+# ==========================================================================
+
+const _ADPlainScalar = Union{Base.IEEEFloat,Integer}
+
+struct _ADImageLossPullback{I,T}
+    image::I          # Vector{ADVar} of the image elements, or `nothing`
+    target::T         # Vector{ADVar} of the target elements, or `nothing`
+    differences::Vector{Float64}
+    squared::Bool
+    inv_count::Float64
+    output::Int
+end
+
+function (pullback::_ADImageLossPullback)(tape::Vector{ADVar})
+    adjoint = @inbounds tape[pullback.output].adj
+    iszero(adjoint) && return nothing
+    scale = adjoint * pullback.inv_count
+    differences = pullback.differences
+    image = pullback.image
+    target = pullback.target
+    @inbounds for i in eachindex(differences)
+        difference = differences[i]
+        element_bar = pullback.squared ? 2 * (scale * difference) :
+            (difference < 0 ? -scale : scale)
+        image === nothing || (image[i].adj += element_bar)
+        target === nothing || (target[i].adj -= element_bar)
+    end
+    return nothing
+end
+
+@inline _ad_loss_primal(values::Array{ADVar,3}) = map(x -> x.val, values)
+@inline _ad_loss_primal(values::Array) = values
+@inline _ad_loss_nodes(values::Array{ADVar,3}) = vec(copy(values))
+@inline _ad_loss_nodes(::Array) = nothing
+
+function _ad_image_loss(image::Array, target::Array, squared::Bool)
+    image_values = _ad_loss_primal(image)
+    target_values = _ad_loss_primal(target)
+    value = squared ? loss_mse(image_values, target_values) :
+        loss_l1(image_values, target_values)
+    output = _ad_record(Float64(value), (), ())
+    if _ad_recording()
+        differences = Vector{Float64}(undef, length(image))
+        @inbounds for i in eachindex(differences, image_values, target_values)
+            differences[i] = Float64(image_values[i]) - Float64(target_values[i])
+        end
+        _ad_record_pullback!(_ADImageLossPullback(
+            _ad_loss_nodes(image), _ad_loss_nodes(target), differences, squared,
+            1.0 / Float64(length(image)), length(_ad_tape_stack()[end])))
+    end
+    return output
+end
+
+loss_mse(image::Array{ADVar,3}, target::Array{S,3}) where {S<:_ADPlainScalar} =
+    _ad_image_loss(image, target, true)
+loss_mse(image::Array{S,3}, target::Array{ADVar,3}) where {S<:_ADPlainScalar} =
+    _ad_image_loss(image, target, true)
+loss_mse(image::Array{ADVar,3}, target::Array{ADVar,3}) =
+    _ad_image_loss(image, target, true)
+loss_l1(image::Array{ADVar,3}, target::Array{S,3}) where {S<:_ADPlainScalar} =
+    _ad_image_loss(image, target, false)
+loss_l1(image::Array{S,3}, target::Array{ADVar,3}) where {S<:_ADPlainScalar} =
+    _ad_image_loss(image, target, false)
+loss_l1(image::Array{ADVar,3}, target::Array{ADVar,3}) =
+    _ad_image_loss(image, target, false)
