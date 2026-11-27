@@ -5252,7 +5252,9 @@ end
 
 # three.js Color.setHSL (src/math/Color.js:248-272) with its hue2rgb helper.
 function _svg_hsl_color(h::Float64, s::Float64, l::Float64)
-    h = mod(h, 1.0)
+    # MathUtils.euclideanModulo (src/math/MathUtils.js), ((n % m) + m) % m;
+    # its rounding differs from `mod` for some hues.
+    h = rem(rem(h, 1.0) + 1.0, 1.0)
     s = clamp(s, 0.0, 1.0)
     l = clamp(l, 0.0, 1.0)
     s == 0.0 && return Color3(l, l, l)
@@ -5269,12 +5271,35 @@ function _svg_hsl_color(h::Float64, s::Float64, l::Float64)
     return Color3(hue(h + 1 / 3), hue(h), hue(h - 1 / 3))
 end
 
+# three.js SRGBToLinear (src/math/ColorManagement.js:205-209) with its
+# rounded constants, so parsed colors match three.js bit for bit.
+_svg_srgb_to_linear(c::Float64) =
+    c < 0.04045 ? c * 0.0773993808 : (c * 0.9478672986 + 0.0521327014)^2.4
+# Exact inverse of `_svg_srgb_to_linear`. three.js LinearToSRGB
+# (ColorManagement.js:211-215) uses independently rounded constants and would
+# not return the authored sRGB value (128/255 comes back as 0.501966).
+_svg_linear_to_srgb(c::Float64) =
+    c < 0.04045 * 0.0773993808 ? c / 0.0773993808 :
+    (c^(1 / 2.4) - 0.0521327014) / 0.9478672986
+
+# SVGLoader parses paint with Color.setStyle(style, SRGBColorSpace)
+# (SVGLoader.js:23, 245, 2228), which converts the sRGB CSS value into the
+# linear working color space (Color.js setRGB/setHSL/setHex ->
+# ColorManagement.colorSpaceToWorking). SVG paint colors are therefore stored
+# linear, like every other material color in Diff3D.
+function _svg_color(raw::AbstractString)
+    srgb = _svg_color_srgb(raw)
+    srgb === nothing && return nothing
+    return Color3(_svg_srgb_to_linear(srgb.r), _svg_srgb_to_linear(srgb.g),
+                  _svg_srgb_to_linear(srgb.b))
+end
+
 # Parse an SVG paint color the way three.js Color.setStyle does for SVGLoader
 # (src/math/Color.js:296-440): CSS keywords, #rgb / #rrggbb, rgb()/rgba() with
 # numbers or percentages, and hsl()/hsla(). As in three.js, the alpha of
 # rgba()/hsla() does not change the color; opacity comes from the opacity
-# properties. Channels are kept in sRGB like the hex forms.
-function _svg_color(raw::AbstractString)
+# properties. Returns the sRGB-encoded channels.
+function _svg_color_srgb(raw::AbstractString)
     s = lowercase(strip(String(raw)))
     s == "none" && return nothing
     s == "transparent" && return nothing
@@ -6323,8 +6348,13 @@ function _svg_clip_area_loop_pieces(loops::Vector{Vector{Vec2{Float64}}},
     return pieces
 end
 
+# CSS Masking 1 section 7.2 luminance with the coefficients of SVG 1.1 feColorMatrix
+# luminanceToAlpha, evaluated in sRGB: the initial color-interpolation of a
+# mask is sRGB. Paint colors are stored linear (see `_svg_color`), so they are
+# re-encoded first.
 _svg_mask_fill_luminance(color::Color3) =
-    0.2126 * color.r + 0.7152 * color.g + 0.0722 * color.b
+    0.2126 * _svg_linear_to_srgb(color.r) + 0.7152 * _svg_linear_to_srgb(color.g) +
+    0.0722 * _svg_linear_to_srgb(color.b)
 
 _svg_mask_path_alpha(path::SVGPath) =
     clamp(path.style.opacity * path.style.fill_opacity, 0.0, 1.0)
