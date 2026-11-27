@@ -1757,13 +1757,16 @@ end
     load_ply(path) -> BufferGeometry
 
 Load a Stanford `.ply` mesh (ASCII, `binary_little_endian`, or
-`binary_big_endian`). Reads the
-`vertex` element (`x,y,z`; optional `nx,ny,nz`; optional `red,green,blue`) and
-the `face` element (a vertex-index list per face, fan-triangulated). Returns a
-[`BufferGeometry`](@ref) with positions, normals (file normals when present,
-otherwise smooth normals via [`compute_vertex_normals!`](@ref)), and a `:color`
-vertex attribute when colours are present (integer channels normalised to
-`[0,1]`).
+`binary_big_endian`). Reads the `vertex` element and the `face` element (a
+vertex-index list per face). Vertex properties are found by the names three.js
+`PLYLoader` accepts: `x|px|posx` (likewise y, z), `nx|normalx` (likewise ny,
+nz), `s|u|texture_u|tx` and `t|v|texture_v|ty` for uvs, and
+`red|diffuse_red|r|diffuse_r` (likewise green, blue). A quad face splits into
+triangles (0,1,3) and (1,2,3) as in `PLYLoader`; larger polygons are
+fan-triangulated. Returns a [`BufferGeometry`](@ref) with positions, uvs when
+present, normals (file normals when present, otherwise smooth normals via
+[`compute_vertex_normals!`](@ref)), and a `:color` vertex attribute when
+colours are present (integer channels normalised to `[0,1]`).
 """
 function load_ply(path::String)
     bytes = read(path)
