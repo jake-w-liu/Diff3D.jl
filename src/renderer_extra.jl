@@ -438,7 +438,8 @@ function _rasterize_flat_mesh_cached!(rt::RenderTarget, geo::BufferGeometry,
     mesh_shadow_fn = shadow_fn === nothing ? nothing : (mesh.receive_shadow ? shadow_fn : nothing)
     mesh_clipping_planes = _combined_clipping_planes(clipping_planes,
                                                      material_clipping_planes(mat))
-    _rasterize_geo_flat!(rt, geo, world, mat, lights, proj, view, near, cam_pos,
+    _rasterize_geo_flat!(rt, geo, world, _world_mirrors_faces(world), mat, lights,
+                         proj, view, near, cam_pos,
                          tri, clipped, sx, sy, sz; alpha=alpha, stamp=stamp,
                          stamp_id=stamp_id, shadow_fn=mesh_shadow_fn, xlo=xlo, xhi=xhi,
                          ylo=ylo, yhi=yhi, colorbuf=colorbuf,
@@ -1053,10 +1054,13 @@ function _rasterize_geo_flat_pooled!(rt::RenderTarget, geo::BufferGeometry, worl
                                      ortho_dir=nothing,
                                      flat_attr_tri=nothing,
                                      flat_attr_clipped=nothing,
-                                     flat_iw=nothing)
+                                     flat_iw=nothing,
+                                     mirrored::Union{Nothing,Bool}=nothing)
+    face_flip = mirrored === nothing ? _world_mirrors_faces(world_mat) : mirrored::Bool
     if _has_render_fog(rt.view_state) || _render_pooled_uses_fragment_alpha(geo, mat)
         inv_log_far = rt.view_state === nothing ? 0.0 : rt.view_state.inv_log_far
-        return _rasterize_geo_flat!(rt, geo, world_mat, mat, lights, proj, view, near, cam_pos,
+        return _rasterize_geo_flat!(rt, geo, world_mat, face_flip, mat, lights, proj, view,
+                                    near, cam_pos,
                                     tri, clipped, sx, sy, sz; colorbuf=colorbuf,
                                     log_depth=!iszero(inv_log_far), inv_log_far=inv_log_far,
                                     xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
@@ -1074,8 +1078,8 @@ function _rasterize_geo_flat_pooled!(rt::RenderTarget, geo::BufferGeometry, worl
     modelview = view * world_mat
     lazy_shader_faces = mat isa ShaderMaterial
     face_colors = lazy_shader_faces ? nothing :
-                  shade_mesh_faces!(
-                      colorbuf, geo, world_mat, mat, lights, cam_pos;
+                  _shade_mesh_faces_flip!(
+                      colorbuf, geo, world_mat, mat, lights, cam_pos, face_flip;
                       camera_view=view,
                       ortho_dir=ortho_dir)
     Float64(material_opacity(mat)) >= material_alpha_test(mat) || return nothing
@@ -1089,7 +1093,7 @@ function _rasterize_geo_flat_pooled!(rt::RenderTarget, geo::BufferGeometry, worl
             w3 = mat4_transform_point(world_mat, v3)
             wc = _mean3_vec3(w1, w2, w3)
             front_facing = _face_front_facing(
-                w1, w2, w3, wc, cam_pos, ortho_dir)
+                w1, w2, w3, wc, cam_pos, ortho_dir) != face_flip
             (side === :front ? !front_facing : front_facing) && continue
         end
         tri[1] = mat4_transform_vec4(modelview, Vec4(v1.x, v1.y, v1.z, 1.0))
@@ -1108,7 +1112,7 @@ function _rasterize_geo_flat_pooled!(rt::RenderTarget, geo::BufferGeometry, worl
         fc = lazy_shader_faces ?
              _shade_flat_shader_face(geo, fi, world_mat, mat, lights, cam_pos,
                                      normal_mat, has_normals;
-                                     ortho_dir=ortho_dir) :
+                                     ortho_dir=ortho_dir, mirrored=face_flip) :
              face_colors[fi]
         for k in 2:(m - 1)
             if depth_test && depth_write
@@ -1153,7 +1157,8 @@ function _rasterize_instanced_geo_flat_pooled!(rt::RenderTarget, geo, mat,
                                     ortho_dir=ortho_dir,
                                     flat_attr_tri=flat_attr_tri,
                                     flat_attr_clipped=flat_attr_clipped,
-                                    flat_iw=flat_iw)
+                                    flat_iw=flat_iw,
+                                    mirrored=_world_mirrors_faces(base))
     end
     return nothing
 end
@@ -1181,7 +1186,8 @@ function _rasterize_instanced_geo_flat_pooled_materials!(rt::RenderTarget, geo,
                                     ortho_dir=ortho_dir,
                                     flat_attr_tri=flat_attr_tri,
                                     flat_attr_clipped=flat_attr_clipped,
-                                    flat_iw=flat_iw)
+                                    flat_iw=flat_iw,
+                                    mirrored=_world_mirrors_faces(base))
     end
     return nothing
 end

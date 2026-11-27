@@ -1020,7 +1020,7 @@ function _shade_mesh_faces_fast!(colors::Vector{Color3{Float64}},
                                  geo::BufferGeometry, world_mat::Mat4, material,
                                  lights::Vector{<:AbstractLight}, cam_pos::Vec3,
                                  normal_mat::Mat4, has_normals::Bool,
-                                 side::Symbol; shadow_fn=nothing,
+                                 side::Symbol, face_flip::Bool; shadow_fn=nothing,
                                  camera_view=nothing,
                                  ortho_dir=nothing)
     @inbounds for fi in 1:geo.n_faces
@@ -1041,7 +1041,7 @@ function _shade_mesh_faces_fast!(colors::Vector{Color3{Float64}},
             geo, i1, i2, i3, v1, v2, v3, normal_mat, has_normals)
         if side !== :front
             front_facing = _face_front_facing(
-                v1, v2, v3, center, cam_pos, ortho_dir)
+                v1, v2, v3, center, cam_pos, ortho_dir) != face_flip
             face_n = _side_oriented_normal(face_n, side, front_facing)
         end
         view_dir = _direction_between(center, cam_pos)
@@ -1075,34 +1075,35 @@ function _shade_mesh_faces_dispatch!(colors::Vector{Color3{Float64}},
                                      material::AbstractMaterial,
                                      lights::Vector{AbstractLight}, cam_pos::Vec3;
                                      shadow_fn=nothing, camera_view=nothing,
-                                     ortho_dir=nothing)
+                                     ortho_dir=nothing,
+                                     face_flip::Union{Nothing,Bool}=nothing)
     if !(material isa LitMaterial)
         return _shade_mesh_faces_impl!(colors, geo, world_mat, material, lights,
                                        cam_pos; shadow_fn=shadow_fn,
                                        camera_view=camera_view,
-                                       ortho_dir=ortho_dir)
+                                       ortho_dir=ortho_dir, face_flip=face_flip)
     end
     length(lights) == 0 &&
         return _shade_mesh_faces_impl!(colors, geo, world_mat, material, _EMPTY_SCENE_LIGHTS,
                                        cam_pos; shadow_fn=shadow_fn,
                                        camera_view=camera_view,
-                                       ortho_dir=ortho_dir)
+                                       ortho_dir=ortho_dir, face_flip=face_flip)
     length(lights) == 1 && !(lights[1] isa SceneLight) &&
         return _shade_mesh_faces_impl!(colors, geo, world_mat, material,
                                        _single_light_vector(lights[1]),
                                        cam_pos; shadow_fn=shadow_fn,
                                        camera_view=camera_view,
-                                       ortho_dir=ortho_dir)
+                                       ortho_dir=ortho_dir, face_flip=face_flip)
     scene_lights = _builtin_scene_lights_or_nothing(lights)
     scene_lights === nothing ||
         return _shade_mesh_faces_impl!(colors, geo, world_mat, material, scene_lights,
                                        cam_pos; shadow_fn=shadow_fn,
                                        camera_view=camera_view,
-                                       ortho_dir=ortho_dir)
+                                       ortho_dir=ortho_dir, face_flip=face_flip)
     return _shade_mesh_faces_impl!(colors, geo, world_mat, material, lights, cam_pos;
                                    shadow_fn=shadow_fn,
                                    camera_view=camera_view,
-                                   ortho_dir=ortho_dir)
+                                   ortho_dir=ortho_dir, face_flip=face_flip)
 end
 
 function _shade_mesh_faces_dispatch!(colors::Vector{Color3{Float64}},
@@ -1110,11 +1111,12 @@ function _shade_mesh_faces_dispatch!(colors::Vector{Color3{Float64}},
                                      material::AbstractMaterial,
                                      lights::Vector{<:AbstractLight}, cam_pos::Vec3;
                                      shadow_fn=nothing, camera_view=nothing,
-                                     ortho_dir=nothing)
+                                     ortho_dir=nothing,
+                                     face_flip::Union{Nothing,Bool}=nothing)
     return _shade_mesh_faces_impl!(colors, geo, world_mat, material, lights, cam_pos;
                                    shadow_fn=shadow_fn,
                                    camera_view=camera_view,
-                                   ortho_dir=ortho_dir)
+                                   ortho_dir=ortho_dir, face_flip=face_flip)
 end
 
 function shade_mesh_faces!(colors::Vector{Color3{Float64}},
@@ -1150,14 +1152,51 @@ function shade_mesh_faces!(colors::Vector{Color3{Float64}},
         _depth_face_modelview(world_mat, cam_pos, camera_view), material)
 end
 
+# `shade_mesh_faces!` with the front-face flip of the object matrix supplied by
+# the caller. The renderers use it for InstancedMesh draws, where `world_mat`
+# includes an instance matrix but three.js flips front faces only for a mirrored
+# object matrix (WebGLRenderer.js `frontFaceCW`).
+function _shade_mesh_faces_flip!(colors::Vector{Color3{Float64}},
+                                 geo::BufferGeometry, world_mat::Mat4,
+                                 material::AbstractMaterial,
+                                 lights::Vector{<:AbstractLight}, cam_pos::Vec3,
+                                 face_flip::Bool; shadow_fn=nothing,
+                                 camera_view::Union{Nothing,Mat4}=nothing,
+                                 ortho_dir=nothing)
+    _validate_triangle_geometry_indices(geo, "shade_mesh_faces")
+    _validate_depth_material(material)
+    _validate_material_parameters(material)
+    return _shade_mesh_faces_dispatch!(colors, geo, world_mat,
+                                       material, lights, cam_pos;
+                                       shadow_fn=shadow_fn,
+                                       camera_view=camera_view,
+                                       ortho_dir=ortho_dir,
+                                       face_flip=face_flip)
+end
+
+_shade_mesh_faces_flip!(colors::Vector{Color3{Float64}}, geo::BufferGeometry,
+                        world_mat::Mat4, material::MeshDepthMaterial,
+                        lights::Vector{<:AbstractLight}, cam_pos::Vec3,
+                        ::Bool; shadow_fn=nothing,
+                        camera_view::Union{Nothing,Mat4}=nothing,
+                        ortho_dir=nothing) =
+    shade_mesh_faces!(colors, geo, world_mat, material, lights, cam_pos;
+                      shadow_fn=shadow_fn, camera_view=camera_view,
+                      ortho_dir=ortho_dir)
+
 function _shade_mesh_faces_impl!(colors::Vector{Color3{Float64}},
                                  geo::BufferGeometry, world_mat::Mat4,
                                  material::AbstractMaterial,
                                  lights::Vector{<:AbstractLight}, cam_pos::Vec3;
                                  shadow_fn=nothing, camera_view=nothing,
-                                 ortho_dir=nothing)
+                                 ortho_dir=nothing,
+                                 face_flip::Union{Nothing,Bool}=nothing)
     n_faces = geo.n_faces
     length(colors) == n_faces || resize!(colors, n_faces)
+    # Front faces follow three.js frontFaceCW: flipped when the object matrix
+    # mirrors space. Callers drawing an InstancedMesh pass the flip of its
+    # object matrix, because instance matrices do not flip the front face.
+    flip = face_flip === nothing ? _world_mirrors_faces(world_mat) : face_flip
 
     # Normal matrix (transpose of inverse) for transforming normals to world space.
     normal_mat = mat4_transpose(mat4_inverse(world_mat))
@@ -1193,7 +1232,7 @@ function _shade_mesh_faces_impl!(colors::Vector{Color3{Float64}},
 
     if !use_maps && !use_vertex_colors && env_map === nothing
         return _shade_mesh_faces_fast!(colors, geo, world_mat, material, lights, cam_pos,
-                                       normal_mat, has_normals, side;
+                                       normal_mat, has_normals, side, flip;
                                        shadow_fn=shadow_fn,
                                        camera_view=camera_view,
                                        ortho_dir=ortho_dir)
@@ -1206,7 +1245,7 @@ function _shade_mesh_faces_impl!(colors::Vector{Color3{Float64}},
        physical_pbr_map === nothing && light_map === nothing &&
        !use_vertex_colors && env_map === nothing
         return _shade_mesh_faces_mapped!(colors, geo, world_mat, material, lights, cam_pos,
-                                         normal_mat, has_normals, side, true,
+                                         normal_mat, has_normals, side, flip, true,
                                          albedo_map, nothing, nothing, nothing,
                                          normal_scale, nothing, nothing, nothing,
                                          nothing, nothing, nothing, uv2_attr,
@@ -1217,7 +1256,7 @@ function _shade_mesh_faces_impl!(colors::Vector{Color3{Float64}},
     end
 
     return _shade_mesh_faces_mapped!(colors, geo, world_mat, material, lights, cam_pos,
-                                     normal_mat, has_normals, side, use_maps,
+                                     normal_mat, has_normals, side, flip, use_maps,
                                      albedo_map, ao_map, emissive_map, normal_map,
                                      normal_scale, roughness_map, metalness_map,
                                      specular_map, glossiness_map, physical_pbr_map,
@@ -1233,7 +1272,7 @@ function _shade_mesh_faces_mapped!(colors::Vector{Color3{Float64}},
                                    material::AbstractMaterial,
                                    lights::Vector{<:AbstractLight}, cam_pos::Vec3,
                                    normal_mat::Mat4, has_normals::Bool,
-                                   side::Symbol,
+                                   side::Symbol, face_flip::Bool,
                                    use_maps::Bool, albedo_map, ao_map,
                                    emissive_map, normal_map,
                                    normal_scale::Float64, roughness_map,
@@ -1262,7 +1301,7 @@ function _shade_mesh_faces_mapped!(colors::Vector{Color3{Float64}},
             geo, i1, i2, i3, v1, v2, v3, normal_mat, has_normals)
         if side !== :front
             front_facing = _face_front_facing(
-                v1, v2, v3, center, cam_pos, ortho_dir)
+                v1, v2, v3, center, cam_pos, ortho_dir) != face_flip
             face_n = _side_oriented_normal(face_n, side, front_facing)
         end
         view_dir = _direction_between(center, cam_pos)
