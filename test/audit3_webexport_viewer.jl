@@ -50,8 +50,10 @@ end
             x in (0.0, 0.3, 1.7, 2.0, 2.5, 3.9, 4.0, 4.5, 5.5, 6.0, 6.2, 7.9, 9.0, 1e-17, 2.0 - 1e-16)])
     calls = join(("clipTime({duration:2,loop:\"$loop\",repetitions:$reps,clampWhenFinished:$clamp,timeScale:$(repr(ts))},$(repr(x)))"
                   for (loop, reps, clamp, ts, x) in grid), ",")
-    values = _audit3_node_json(html, ("floorMod", "clipTime"),
-                               "console.log(JSON.stringify([$calls]));")
+    # Load floorMod only when the viewer defines it, so this comparison also runs (and
+    # fails) against a clipTime without the helper.
+    helpers = occursin("  function floorMod(", html) ? ("floorMod", "clipTime") : ("clipTime",)
+    values = _audit3_node_json(html, helpers, "console.log(JSON.stringify([$calls]));")
     if values !== nothing
         expected = [Diff3D._animation_loop_time(x * ts, 2.0, loop, reps, clamp)
                     for (loop, reps, clamp, ts, x) in grid]
@@ -178,13 +180,18 @@ end
     updateMorph(o); const first=gl.uploads.splice(0), positions=o.positions, upload=first[0][1];
     o.morphWeights=[0.5]; o.morphDirty=true; updateMorph(o); const unchanged=gl.uploads.splice(0).length;
     o.morphWeights=[1]; o.morphDirty=true; updateMorph(o); const second=gl.uploads.splice(0);
-    console.log(JSON.stringify({firstUploads:first.map(u=>u[0]),unchanged,
-      samePositions:o.positions===positions,sameUpload:second[0][1]===upload,
+    const state={samePositions:o.positions===positions,sameUpload:second[0][1]===upload,
       positions:Array.from(o.positions),normals:Array.from(o.normals),tangents:Array.from(o.tangents),
-      uploaded:Array.from(second[0][1])}));
+      uploaded:Array.from(second[0][1])};
+    o.morphWeights=[0.5]; o.morphDirty=true; updateMorph(o); const back=gl.uploads.splice(0);
+    console.log(JSON.stringify(Object.assign(state,{firstUploads:first.map(u=>u[0]),unchanged,
+      backUploads:back.map(u=>u[0]),backPositions:Array.from(back[0][1])})));
     """
-    result = _audit3_node_json(html, ("morphScratch", "morphUpload", "sameMorphWeights",
-                                      "normalizeTriples", "updateMorph"), body; prelude)
+    # Only the helpers the viewer defines, so the behaviour is also checked (and fails)
+    # against an updateMorph without them.
+    names = filter(n -> occursin("  function $n(", html),
+                   ("morphScratch", "morphUpload", "sameMorphWeights", "normalizeTriples", "updateMorph"))
+    result = _audit3_node_json(html, names, body; prelude)
     if result !== nothing
         @test result["firstUploads"] == ["p", "n", "t"]
         @test result["unchanged"] == 0
@@ -195,5 +202,9 @@ end
         @test Float64.(result["normals"]) ≈ [1 / sqrt(5), 0.0, 2 / sqrt(5), 0.0, 1.0, 0.0] rtol=1e-15
         @test Float64.(result["tangents"]) == [1.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, -1.0]
         @test Float64.(result["uploaded"]) == Float64.(Float32.([0.0, 1.0, 0.0, 1.0, 1.0, 0.0]))
+        # Returning to an earlier weight is a change from the last applied one: it is
+        # recomputed and uploaded, not skipped.
+        @test result["backUploads"] == ["p", "n", "t"]
+        @test Float64.(result["backPositions"]) == [0.0, 0.5, 0.0, 1.0, 0.5, 0.0]
     end
 end
