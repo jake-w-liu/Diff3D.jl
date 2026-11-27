@@ -1145,8 +1145,8 @@ function get_point(c::SplineCurve, t::Real)
     p = (n - 1) * t
     int_point = floor(p)
     weight = p - int_point
+    0 <= int_point <= n - 1 || throw(ArgumentError("SplineCurve parameter must lie in [0, 1]"))
     i = Int(int_point)
-    0 <= i <= n - 1 || throw(ArgumentError("SplineCurve parameter must lie in [0, 1]"))
     p0 = points[(i == 0 ? i : i - 1) + 1]
     p1 = points[i + 1]
     p2 = points[(i > n - 2 ? n - 1 : i + 1) + 1]

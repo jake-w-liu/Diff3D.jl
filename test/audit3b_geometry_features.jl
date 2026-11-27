@@ -636,3 +636,10 @@ end
           Vec2(0.8838492734309304, 0.4677718053235107)
     @test_throws ArgumentError D.EllipseCurve(0, 0, 1, 1, -1e308, 1e308)
 end
+
+@testset "SplineCurve rejects a far parameter with ArgumentError" begin
+    spline = Diff3D.SplineCurve([Vec2(0.0, 0.0), Vec2(1.0, 1.0)])
+    @test_throws ArgumentError Diff3D.get_point(spline, 1e30)
+    @test_throws ArgumentError Diff3D.get_point(spline, -0.5)
+    @test Diff3D.get_point(spline, 1.0) == Vec2(1.0, 1.0)
+end
