@@ -1080,10 +1080,12 @@ use a rescaled evaluation that stays finite for coordinates near `floatmax`.
     return numerator * scale / max(scaled_len, 1.0e-20 / scale)
 end
 
-# Numerical floors in the scalar type of a hardware or BigFloat computation, so
-# Float32 inputs stay Float32. AD scalars keep the Float64 literal (unchanged
-# promotion, no tape node for a constant).
-@inline _soft_constant(::Type{T}, value::Float64) where {T<:AbstractFloat} = T(value)
+# Numerical floors in Float32 for Float32 computations, so Float32 inputs stay
+# Float32 (1e-20 and 1e-12 are normal Float32 values). Every other scalar keeps
+# the Float64 literal and its promotion: Float16 would round both floors to
+# zero (0/0 for coincident endpoints), BigFloat and Float64 promote to the same
+# value, and AD scalars record no tape node for a constant.
+@inline _soft_constant(::Type{Float32}, value::Float64) = Float32(value)
 @inline _soft_constant(::Type, value::Float64) = value
 
 @inline function point_line_distance(px, py, ax, ay, bx, by)

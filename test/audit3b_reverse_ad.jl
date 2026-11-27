@@ -255,6 +255,14 @@ end
     @test signed_distance_to_triangle(1f0, 1f0, 0f0, 0f0, 3f0, 0f0, 0f0, 3f0) isa Float32
     # |cross((1,2)-(0,0), (3,1))| / |(3,1)| = 5 / sqrt(10).
     @test point_line_distance(1f0, 2f0, 0f0, 0f0, 3f0, 1f0) ≈ 5f0 / sqrt(10f0)
+    # Float16 cannot represent the 1e-20 and 1e-12 floors (both round to zero),
+    # so it keeps the Float64 floors: coincident endpoints give distance 0, not
+    # 0/0, and a point on the segment keeps the sqrt(1e-12) smoothing.
+    h = Float16
+    @test point_line_distance(h(1), h(1), h(0), h(0), h(0), h(0)) == 0
+    @test point_segment_distance(h(1), h(0), h(0), h(0), h(2), h(0)) == sqrt(1e-12)
+    @test ForwardDiff.derivative(
+        t -> point_segment_distance(h(1), t, h(0), h(0), h(2), h(0)), h(0)) == 0
     # 224 faces, 64 x 64: a Float32 workspace render is allocation-free (the
     # round-1 lead reported 4.75 MB; no allocation reproduced on 1.10 or 1.13).
     vertices, faces, colors, vp, config = audit3b_sphere_inputs(Float32)
