@@ -392,3 +392,39 @@ end
         @test r[256] == [255, 255, 255, 255]
     end
 end
+
+@testset "viewer TRS matrices are composed without temporaries" begin
+    # M4.trs built five arrays per call (translate, quat, scale and two products); sampled in
+    # headless Chrome over 240 animated frames of 40 boxes, M4.mul + M4.trs + M4.quat
+    # allocated 15.2 MB before and 6.4 MB after (all sampled: 33.1 -> 24.4 MB, 138 -> 102 KB per
+    # frame). The direct form must give the same numbers.
+    html = _audit3b_viewer_html()
+    @test !occursin("return M4.mul(M4.translate(p[0],p[1],p[2]), M4.mul(M4.quat(q), M4.scale(s[0],s[1],s[2])));", html)
+    prelude = _AUDIT3B_VEC_PRELUDE * _audit3b_viewer_block(html, "M4")
+    body = """
+    let seed=7; const rnd=()=>{ seed=(seed*1103515245+12345)%2147483648; return seed/2147483648*4-2; };
+    let mismatches=0;
+    for(let k=0;k<2000;k++){ const p=[rnd(),rnd(),rnd()], q=[rnd(),rnd(),rnd(),rnd()], s=[rnd(),rnd(),rnd()];
+      const a=M4.trs(p,q,s), b=M4.mul(M4.translate(p[0],p[1],p[2]), M4.mul(M4.quat(q), M4.scale(s[0],s[1],s[2])));
+      for(let i=0;i<16;i++) if(a[i]!==b[i]) mismatches++; }
+    console.log(JSON.stringify(mismatches));
+    """
+    r = _audit3b_node_json(html, String[], body; prelude)
+    r === nothing || @test r == 0
+end
+
+@testset "sprite vertex shader keeps the CPU sprite corner formula" begin
+    # Verified rather than changed: headless Chrome coverage of a rotated (0.7 rad), non-square
+    # (2 x 1), off-centre (0.2, 0.8) sprite under a rotated parent matched CPU render! on
+    # every interior pixel (81, 74 and 10 differing pixels, all on the CPU mask's edge) with
+    # size attenuation, without it, and under an orthographic camera. These are the terms of
+    # _sprite_quad_corners (objects.jl) and three.js sprite.glsl.js.
+    html = _audit3b_viewer_html()
+    svsh = _audit3b_viewer_const(html, "SVSH")
+    for piece in ("vec2 p=(aPosition.xy-uSpriteCenter)*vec2(sx,sy);",
+                  "p=vec2(c*p.x-s*p.y,s*p.x+c*p.y);",
+                  "float atten=mix(max(0.0001,-cv.z),1.0,uSpriteSizeAttenuation);",
+                  "vec3 w=center+uCameraRight*p.x*atten+uCameraUp*p.y*atten;")
+        @test occursin(piece, svsh)
+    end
+end

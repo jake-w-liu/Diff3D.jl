@@ -4431,7 +4431,9 @@ function _web_write_webgl_html(io::IO, data_json::String, title::String;
     translate(x,y,z){ return [1,0,0,0, 0,1,0,0, 0,0,1,0, x,y,z,1]; },
     scale(x,y,z){ return [x,0,0,0, 0,y,0,0, 0,0,z,0, 0,0,0,1]; },
     quat(q){ const x=q[0],y=q[1],z=q[2],w=q[3], x2=x+x,y2=y+y,z2=z+z, xx=x*x2,xy=x*y2,xz=x*z2, yy=y*y2,yz=y*z2,zz=z*z2, wx=w*x2,wy=w*y2,wz=w*z2; return [1-(yy+zz),xy+wz,xz-wy,0, xy-wz,1-(xx+zz),yz+wx,0, xz+wy,yz-wx,1-(xx+yy),0, 0,0,0,1]; },
-    trs(p,q,s){ return M4.mul(M4.translate(p[0],p[1],p[2]), M4.mul(M4.quat(q), M4.scale(s[0],s[1],s[2]))); },
+    // M4.mul(translate, mul(quat, scale)) in one array: the same products, without the four
+    // temporaries (the zero terms of those products add exactly).
+    trs(p,q,s){ const x=q[0],y=q[1],z=q[2],w=q[3], x2=x+x,y2=y+y,z2=z+z, xx=x*x2,xy=x*y2,xz=x*z2, yy=y*y2,yz=y*z2,zz=z*z2, wx=w*x2,wy=w*y2,wz=w*z2, sx=s[0],sy=s[1],sz=s[2]; return [(1-(yy+zz))*sx,(xy+wz)*sx,(xz-wy)*sx,0, (xy-wz)*sy,(1-(xx+zz))*sy,(yz+wx)*sy,0, (xz+wy)*sz,(yz-wx)*sz,(1-(xx+yy))*sz,0, p[0],p[1],p[2],1]; },
     perspective(fov, aspect, near, far){ const t=Math.tan(fov/2); const c=isFinite(far)?-(far+near)/(far-near):-1, d=isFinite(far)?-2*far*near/(far-near):-2*near; return [1/(aspect*t),0,0,0, 0,1/t,0,0, 0,0,c,-1, 0,0,d,0]; },
     orthographic(left,right,bottom,top,near,far){ const w=right-left,h=top-bottom,p=far-near,x=(right+left)/w,y=(top+bottom)/h,z=(far+near)/p; return [2/w,0,0,0, 0,2/h,0,0, 0,0,-2/p,0, -x,-y,-z,1]; },
     lookAt(eye,target,up){ const z=norm(sub(eye,target)), x=norm(cross(up,z)), y=cross(z,x); return [x[0],y[0],z[0],0, x[1],y[1],z[1],0, x[2],y[2],z[2],0, -dot(x,eye),-dot(y,eye),-dot(z,eye),1]; },
