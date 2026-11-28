@@ -4627,7 +4627,11 @@ function ExtrudeGeometry(shape::Vector{<:Vec2}; depth=1.0, extrude_path=nothing,
                 # negative depth turns the wall inside out, normal included.
                 z2 < z1 ? Vec3(-ey, ex, 0.0) : Vec3(ey, -ex, 0.0)
             else
-                # Planar bevel trapezoid: its diagonals span the face plane.
+                # Bevel quad: the normalized cross product of its diagonals. The
+                # quad is planar only when both corner moves are parallel to the
+                # edge (e.g. a rectangle); otherwise this is the quad's average
+                # normal, a few degrees off each triangle's own. three.js gives
+                # each triangle its flat normal (`triangulation=:earcut`).
                 normalize(cross(Vec3(q2.x - p1.x, q2.y - p1.y, z2 - z1),
                                 Vec3(q1.x - p2.x, q1.y - p2.y, z2 - z1)))
             end

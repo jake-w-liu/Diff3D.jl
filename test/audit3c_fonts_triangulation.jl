@@ -165,3 +165,17 @@ end
     @test area ≈ shoelace(outer) + sum(shoelace, holes) rtol=1e-12
     @test (@elapsed ShapeGeometry(outer; holes=holes, triangulation=:earcut)) < 1.0
 end
+
+@testset "LatheGeometry last profile point normal follows three.js's direction" begin
+    # three.js LatheGeometry.js:97-100 pushes the last point's normal without
+    # normalizing it (|n| = last segment length, here 0.7071); its direction is
+    # (dy, -dx) of the last segment, which Diff3D stores as a unit vector.
+    g = LatheGeometry([Vec2(0.0, -0.5), Vec2(0.5, 0.0), Vec2(0.0, 0.5)];
+                      segments=5, phi_start=0.3, phi_length=4.0)
+    for (vertex, js) in ((3, [0.14776010811328888, 0.5, 0.47766825556755066]),
+                         (9, [0.4731500446796417, 0.5, -0.16164478659629822]))
+        n = g.normals[3vertex - 2:3vertex]
+        @test isapprox(n, js ./ sqrt(sum(abs2, js)); atol=1e-7)
+        @test sqrt(sum(abs2, n)) ≈ 1.0
+    end
+end
