@@ -4,6 +4,26 @@
 # Pure Julia, no external dependencies.
 # --------------------------------------------------------------------------
 
+# UTF-8 byte-order mark. three.js decodes text files with the WHATWG UTF-8
+# decoder (FileLoader `response.text()`, `TextDecoder`), which drops a leading
+# BOM, so the text loaders skip one before parsing.
+@inline _has_utf8_bom(bytes::AbstractVector{UInt8}) =
+    length(bytes) >= 3 && bytes[1] == 0xef && bytes[2] == 0xbb && bytes[3] == 0xbf
+
+_strip_utf8_bom(text::String) =
+    _has_utf8_bom(codeunits(text)) ? String(codeunits(text)[4:end]) : text
+
+_strip_utf8_bom(bytes::Vector{UInt8}) = _has_utf8_bom(bytes) ? bytes[4:end] : bytes
+
+# Advance `io` past a leading BOM, leaving it where it was otherwise.
+function _skip_utf8_bom!(io::IO)
+    mark(io)
+    bom = !eof(io) && read(io, UInt8) == 0xef && !eof(io) && read(io, UInt8) == 0xbb &&
+          !eof(io) && read(io, UInt8) == 0xbf
+    bom ? unmark(io) : reset(io)
+    return io
+end
+
 function _compute_vertex_normals_scaled!(
         acc::Vector{Float64}, geo::BufferGeometry, degenerate_normal::Vec3)
     fill!(acc, 0.0)
@@ -667,9 +687,7 @@ function _load_stl_ascii(path::String)
     positions = Float64[]; normals = Float64[]; indices = Int[]
     nx = ny = nz = 0.0; vi = 0; vertices_in_facet = 0; in_facet = false
     p = 1
-    if n >= 3 && bytes[1] == 0xef && bytes[2] == 0xbb && bytes[3] == 0xbf
-        p = 4                                     # UTF-8 byte-order mark
-    end
+    _has_utf8_bom(bytes) && (p = 4)
     while true
         first, last, p = _ply_next_ascii_token(bytes, p, n)
         first == 0 && break
@@ -945,7 +963,7 @@ end
     return n_triangles
 end
 
-_obj_scan_counts(path::String) = open(_obj_scan_counts, path, "r")
+_obj_scan_counts(path::String) = open(io -> _obj_scan_counts(_skip_utf8_bom!(io)), path, "r")
 
 # The scan state lives in this function's locals rather than in variables a
 # `do` block captures and reassigns, which Julia would box.
@@ -1185,6 +1203,7 @@ function _obj_load(path::String, groups::Bool,
     # have_uvs, ... which a closure would box.
     io = open(path, "r")
     try
+    _skip_utf8_bom!(io)
     continued = ""
     while true
         if eof(io)
@@ -1460,7 +1479,7 @@ Load an `.xyz` point cloud from disk. Supports plain XYZ records and XYZRGB
 records with sRGB byte colors, returning a [`BufferGeometry`](@ref) suitable for
 [`PointsObject`](@ref).
 """
-load_xyz(path::String) = parse_xyz(read(path, String); source=path)
+load_xyz(path::String) = parse_xyz(_strip_utf8_bom(read(path, String)); source=path)
 
 # ========================== PLY ==========================
 
@@ -1932,6 +1951,7 @@ function _load_ply(path::String, name_map::Dict{String,String},
     cr = findfirst(b -> b == UInt8('\r') || b == UInt8('\n'), bytes)
     eol = cr !== nothing && bytes[cr] == UInt8('\r') &&
           (cr == n || bytes[cr + 1] != UInt8('\n')) ? UInt8('\r') : UInt8('\n')
+    _has_utf8_bom(bytes) && (i = 4)
     magic, i = _ply_header_line(bytes, i, n, eol)
     strip(magic) == "ply" || error("not a PLY file")
     while true

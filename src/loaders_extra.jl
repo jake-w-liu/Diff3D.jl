@@ -3448,6 +3448,7 @@ function load_mtl(path::String)
     st = _MTLState("")
     io = open(path, "r")
     try
+        _skip_utf8_bom!(io)
         for raw in eachline(io)
             line = strip(raw)
             (isempty(line) || startswith(line, "#")) && continue
@@ -13167,7 +13168,7 @@ name, as three.js `GLTFLoader` keeps them (`_TEMPERATURE` becomes
 `:_temperature`). By default they are ignored.
 """
 function load_gltf(path::String; custom_attributes::Bool=false)
-    gltf = _json_parse(read(path, String))
+    gltf = _json_parse(_strip_utf8_bom(read(path)))
     _gltf_validate_document(gltf)
     dir = dirname(path)
     buffers = [_gltf_read_buffer(b, dir) for b in _gltf_document_buffers(gltf)]
@@ -13185,7 +13186,7 @@ nodes, and `weights` channels drive morph-target influences. Use
 is as for [`load_gltf`](@ref).
 """
 function load_gltf_asset(path::String; custom_attributes::Bool=false)
-    gltf = _json_parse(read(path, String))
+    gltf = _json_parse(_strip_utf8_bom(read(path)))
     _gltf_validate_document(gltf)
     dir = dirname(path)
     buffers = [_gltf_read_buffer(b, dir) for b in _gltf_document_buffers(gltf)]
@@ -13255,6 +13256,8 @@ function _parse_glb(path::String)
     end
     have_json || error("GLB has no JSON chunk")
 
+    # GLTFLoader decodes the JSON chunk with TextDecoder, which drops a BOM.
+    _has_utf8_bom(json_bytes) && (json_bytes = @view json_bytes[4:end])
     gltf = _json_parse(json_bytes)
     _gltf_validate_document(gltf)
     dir = dirname(path)
