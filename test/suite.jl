@@ -33359,9 +33359,12 @@ end
         SoftRasterizerConfig(
             sigma=0.1, gamma=0.25,
             bg_color=Color3(0.0, 0.0, 0.0)))
+    # Both faces cover these pixels, so the background floor is eps * S / C;
+    # before it was eps (pixel [0.9796280102250642, 0.0, 0.017942512880571467],
+    # sum 35.77661178484367), within eps / (S + eps) of these values.
     @test vec(ordinary[4, 4, :]) ==
-          [0.9796280102250642, 0.0, 0.017942512880571467]
-    @test sum(ordinary) ≈ 35.77661178484367 rtol=8eps(Float64)
+          [0.9796280149378856, 0.0, 0.017942512966889805]
+    @test sum(ordinary) ≈ 35.77661714203905 rtol=8eps(Float64)
 
     minsub_config = SoftRasterizerConfig(
         sigma=0.1, gamma=smallest,
