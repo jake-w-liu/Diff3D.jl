@@ -986,3 +986,43 @@ end
     @test_throws ArgumentError Diff3D.normalize_component(0.5, Int64)
     @test_throws ArgumentError Diff3D.denormalize_component(0.5, Float64)
 end
+
+# ---------------------------------------------------------------------------
+# (f) StereoCamera aspect multiplier
+# ---------------------------------------------------------------------------
+
+@testset "StereoCamera aspect_multiplier is three.js StereoCamera.aspect" begin
+    camera = PerspectiveCamera(fov=deg2rad(60), aspect=1.6, near=0.3, far=50.0, zoom=1.5)
+    camera.focus = 4.0
+    camera.position = Vec3(0.5, 1.0, 6.0)
+    camera.target = Vec3(0.5, 1.0, 5.0)
+    # Oracle: StereoCamera.update (StereoCamera.js:85-145) with eyeSep 0.1 and
+    # aspect 1, 0.5, 2.25 (f/stereo_oracle.mjs): elements 0 and 8 of the eye
+    # projections; the other elements are those of the camera.
+    oracle = Dict(1.0 => (1.6237976320958225, 0.020297470401197802),
+                  0.5 => (3.2475952641916450, 0.040594940802395604),
+                  2.25 => (0.72168783648703227, 0.0090210979560878448))
+    for (multiplier, (e0, e8)) in oracle
+        stereo = StereoCamera(eye_sep=0.1, aspect_multiplier=multiplier)
+        @test stereo.aspect_multiplier === multiplier
+        stereo_update!(stereo, camera)
+        @test stereo.cameraL.aspect == camera.aspect * multiplier
+        left = projection_matrix(stereo.cameraL)
+        right = projection_matrix(stereo.cameraR)
+        @test left.e[1] ≈ e0 && left.e[9] ≈ e8
+        @test right.e[1] ≈ e0 && right.e[9] ≈ -e8
+        @test left.e[6] ≈ 2.5980762113533165 && left.e[11] ≈ -1.0120724346076457
+    end
+    # The default multiplier keeps the eyes' projections bit for bit.
+    legacy = StereoCamera(0.1, PerspectiveCamera(), PerspectiveCamera())
+    @test legacy.aspect_multiplier === 1.0
+    fresh = StereoCamera(eye_sep=0.1)
+    stereo_update!(legacy, camera)
+    stereo_update!(fresh, camera)
+    @test projection_matrix(legacy.cameraL) == projection_matrix(fresh.cameraL)
+    @test_throws ArgumentError StereoCamera(aspect_multiplier=0.0)
+    @test_throws ArgumentError StereoCamera(aspect_multiplier=Inf)
+    bad = StereoCamera()
+    bad.aspect_multiplier = -1.0
+    @test_throws ArgumentError stereo_update!(bad, camera)
+end
