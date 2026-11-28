@@ -212,3 +212,45 @@ end
     @test check(2^35 - 1, 1, 1, "indices") === nothing
     @test_throws ArgumentError check(2^35, 1, 1, "indices")
 end
+
+# RP-8: OBJLoader.js joins a line ending in a backslash with the next one
+# (text.replace(/\\\n/g, '')). Joining used to re-copy the accumulated text for
+# every physical line, so one face continued over n lines allocated O(n^2).
+@testset "OBJ backslash continuation joins in linear time" begin
+    function write_polygon(path, n, continued)
+        open(path, "w") do io
+            for k in 0:n-1
+                println(io, "v ", cos(2pi * k / n), " ", sin(2pi * k / n), " 0")
+            end
+            print(io, "f")
+            for k in 1:n
+                print(io, " ", k)
+                continued && k < n && print(io, " \\\n")
+            end
+            println(io)
+        end
+    end
+    mktempdir() do dir
+        n = 8000
+        cont = joinpath(dir, "continued.obj"); single = joinpath(dir, "single.obj")
+        write_polygon(cont, n, true); write_polygon(single, n, false)
+        @test _ddlt_geo(load_obj(cont)) == _ddlt_geo(load_obj(single))
+        @test load_obj(cont).n_faces == n - 2
+        gc, gs = load_obj_groups(cont), load_obj_groups(single)
+        @test _ddlt_geo(gc[1]) == _ddlt_geo(gs[1]) && gc[2] == gs[2]
+        sc, ss = load_obj_scene(cont), load_obj_scene(single)
+        @test _ddlt_geo(only(sc.children).geometry) == _ddlt_geo(only(ss.children).geometry)
+        # Continuations at the end of the file and of empty pieces.
+        p = joinpath(dir, "edge.obj")
+        write(p, "v 0 0 0\nv 1 0 \\\n0\nv \\\n\\\n0 1 0\nf 1 \\\n2 3 \\\n")
+        @test load_obj(p).positions == [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]
+        @test load_obj(p).n_faces == 1
+        if Base.JLOptions().opt_level > 0
+            single_bytes = @allocated load_obj(single)
+            continued_bytes = @allocated load_obj(cont)
+            # 8000 physical lines: the quadratic join allocated about 182 MiB
+            # here against about 4 MiB on one line.
+            @test continued_bytes < 2 * single_bytes + 2^20
+        end
+    end
+end

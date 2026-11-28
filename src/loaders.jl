@@ -1204,11 +1204,13 @@ function _obj_load(path::String, groups::Bool,
     io = open(path, "r")
     try
     _skip_utf8_bom!(io)
-    continued = ""
+    # The pieces of a backslash-continued logical line accumulate in one
+    # buffer, so joining n physical lines costs O(total length), not O(n^2).
+    continued = IOBuffer()
     while true
         if eof(io)
             # A continuation on the last line joins with nothing.
-            isempty(continued) && break
+            position(continued) == 0 && break
             raw = ""
         else
             raw = readline(io)
@@ -1216,11 +1218,11 @@ function _obj_load(path::String, groups::Bool,
         # OBJLoader.js parse: text.replace(/\\\n/g, '') joins a line that ends
         # in a backslash with the next one.
         if endswith(raw, '\\')
-            continued = string(continued, chop(raw))
+            write(continued, chop(raw))
             continue
-        elseif !isempty(continued)
-            raw = string(continued, raw)
-            continued = ""
+        elseif position(continued) != 0
+            write(continued, raw)
+            raw = String(take!(continued))
         end
         line = strip(raw)
         (isempty(line) || startswith(line, "#")) && continue
