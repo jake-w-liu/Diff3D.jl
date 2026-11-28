@@ -10896,6 +10896,7 @@ function _gltf_accessor(gltf, buffers, ai::Int)
     compbytes = _gltf_component_bytes(ctype)
     out_len = _checked_mul_int(count, ncomp, "glTF accessor output length")
     _checked_mul_int(out_len, sizeof(Float64), "glTF accessor output byte size")
+    _gltf_check_accessor_allocation(count, ncomp, compbytes, what)
     element = _gltf_accessor_element_layout(typ, ncomp, compbytes)
 
     dense_layout = if dense_payload
@@ -10951,6 +10952,28 @@ function _gltf_accessor(gltf, buffers, ai::Int)
                                      ibuf, ioffset, vbuf, voffset)
     end
     return (out, ncomp, count)
+end
+
+# three.js GLTFLoader.js loadAccessor reads every accessor, including one
+# without a bufferView (zeros, usually a sparse base), into a single typed
+# array of count * itemSize components of the accessor's component type, and
+# an accessor with a bufferView lies inside one ArrayBuffer at least that
+# large. No JavaScript engine three.js runs on can create a buffer of 2^35
+# bytes (V8's sandboxed buffer limit is just under 32 GiB: Node 26 allocates a
+# 24 GiB Float32Array and aborts at 2^35 bytes; SpiderMonkey and
+# JavaScriptCore allow less), so an accessor that large cannot be part of an
+# asset three.js loads. Refusing it here, before anything is allocated, keeps a
+# tiny file from declaring a bufferView-less accessor that would make Diff3D
+# allocate without bound.
+const _GLTF_MAX_ACCESSOR_BYTES = Int64(2)^35
+
+function _gltf_check_accessor_allocation(count::Int, ncomp::Int, component_bytes::Int,
+                                         what::AbstractString)
+    count <= (_GLTF_MAX_ACCESSOR_BYTES - 1) ÷ (ncomp * component_bytes) ||
+        throw(ArgumentError("glTF $what declares $count elements of $ncomp x " *
+                            "$component_bytes bytes, which is beyond the largest typed " *
+                            "array (2^35 bytes) a glTF loader can allocate"))
+    return nothing
 end
 
 function _gltf_apply_sparse_accessor!(out::Vector{Float64}, ncomp::Int, count::Int,
@@ -12077,6 +12100,7 @@ function _gltf_primitive_indices(gltf, buffers, accessor_index::Int, nverts::Int
     count::Int = _gltf_checked_nonnegative_integer(_gltf_required(acc, "count", what),
                                                   "primitive indices accessor count")
     _checked_mul_int(count, sizeof(Int), "glTF primitive indices output byte size")
+    _gltf_check_accessor_allocation(count, 1, _gltf_component_bytes(ctype), what)
     dense_payload = haskey(acc, "bufferView")
     dense_layout = if dense_payload
         _gltf_accessor_buffer_layout(
@@ -12680,6 +12704,21 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
         _gltf_validate_attribute_format(
             gltf, position_accessor, "POSITION",
             _gltf_attribute_types(quantized, :position)...)
+        if !haskey(prim, "indices")
+            # The vertex count fixes a non-indexed primitive's topology, so a
+            # count the mode cannot use is rejected from the declaration,
+            # before any attribute (possibly a bufferView-less run of zeros)
+            # is materialised.
+            position_what = "accessors[$position_accessor]"
+            position_def = gltf["accessors"][position_accessor + 1]
+            declared = _gltf_checked_nonnegative_integer(
+                _gltf_required(position_def, "count", position_what), "accessor count")
+            _gltf_check_accessor_allocation(
+                declared, get(_GLTF_COMP_SIZE, get(position_def, "type", "SCALAR"), 1),
+                _gltf_component_bytes(_gltf_checked_component_type(
+                    position_def["componentType"], "POSITION accessor")), position_what)
+            _gltf_validate_primitive_cardinality(mode, declared, "vertex")
+        end
         pos, position_size, nverts = _gltf_accessor(
             gltf, buffers, position_accessor)
         position_size == 3 || error("glTF POSITION accessor must be VEC3")

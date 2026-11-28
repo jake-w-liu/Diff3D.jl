@@ -167,3 +167,48 @@ end
     traverse(empty_node.scene, o -> o isa Mesh && push!(meshes, o))
     @test isempty(meshes) && length(empty_node.scene.children) == 1
 end
+
+# LH-10: an accessor without a bufferView is zeros of its declared count; a
+# count no glTF loader could allocate is refused before anything is allocated.
+@testset "glTF bufferView-less accessors are bounded" begin
+    zero_doc(count; icount=nothing) =
+        """{"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"mesh":0}],
+           "meshes":[{"primitives":[{"attributes":{"POSITION":0}$(icount === nothing ? "" : ",\"indices\":1")}]}],
+           "accessors":[{"componentType":5126,"count":$count,"type":"VEC3","min":[0,0,0],"max":[0,0,0]},
+                        {"componentType":5125,"count":$(something(icount, 0)),"type":"SCALAR"}]}"""
+    # Zeros of a plausible count still load (three.js allocates them as well).
+    small = _ddlt_load(zero_doc(30))
+    meshes = Any[]
+    traverse(small.scene, o -> o isa Mesh && push!(meshes, o))
+    @test only(meshes).geometry.positions == zeros(90)
+    # 2^31 vertices (24 GiB as three.js stores them, so within its limit) are
+    # not a whole number of triangles: rejected from the declared count,
+    # before the 2^31 x 3 Float64 zeros are materialised.
+    stats = @timed try
+        _ddlt_load(zero_doc(2^31)); nothing
+    catch e
+        e
+    end
+    @test stats.value isa ErrorException &&
+          occursin("divisible by 3", sprint(showerror, stats.value))
+    @test stats.bytes < 50_000_000
+    # Counts of 2^35 bytes or more as three.js stores them (the 242-byte
+    # repro file declares 2^40 vertices).
+    for (count, icount) in ((2^40, nothing), (3 * 2^40, nothing), (3 * 2^33, nothing),
+                            (3 * 2^33, 3), (3, 3 * 2^33))
+        stats = @timed try
+            _ddlt_load(zero_doc(count; icount=icount)); nothing
+        catch e
+            e
+        end
+        @test stats.value isa ArgumentError &&
+              occursin("beyond the largest typed array", stats.value.msg)
+        @test stats.bytes < 50_000_000
+    end
+    # The limit is exactly 2^35 bytes of the accessor's own component type.
+    check = Diff3D._gltf_check_accessor_allocation
+    @test check((2^35 - 1) ÷ 12, 3, 4, "POSITION") === nothing
+    @test_throws ArgumentError check((2^35 - 1) ÷ 12 + 1, 3, 4, "POSITION")
+    @test check(2^35 - 1, 1, 1, "indices") === nothing
+    @test_throws ArgumentError check(2^35, 1, 1, "indices")
+end
