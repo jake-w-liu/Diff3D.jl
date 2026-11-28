@@ -464,6 +464,40 @@ function _png_write_idat_gray16(io::IO, img::AbstractArray, height::Int,
     end
 end
 
+# PNG file bytes of an H×W×C image with C = 1 (gray), 2 (gray+alpha), 3 (RGB)
+# or 4 (RGBA) channels, keeping the channel layout (PNG colour types 0, 4, 2
+# and 6) and storing 8-bit samples round(v * 255). Every value must be finite
+# and within [0, 1]: PNG cannot hold the rest, and clamping would silently
+# change the image. `flip_rows=true` writes the last row first.
+function _png_encode_bytes(img::AbstractArray{<:Real,3}; flip_rows::Bool=false)
+    H, W, C = size(img)
+    (H > 0 && W > 0) ||
+        throw(ArgumentError("PNG image dimensions must be positive; got $(size(img))"))
+    1 <= C <= 4 ||
+        throw(ArgumentError("PNG images have 1 to 4 channels; got $C"))
+    for v in img
+        isfinite(v) && 0 <= v <= 1 ||
+            throw(ArgumentError("PNG image values must be finite and within [0, 1]; got $v"))
+    end
+    color_type = (0x00, 0x04, 0x02, 0x06)[C]
+    io = IOBuffer()
+    _png_write_signature(io)
+    _png_write_ihdr_chunk(io, W, H, 0x08, color_type)
+    line = Vector{UInt8}(undef, 1 + W * C)
+    _png_write_idat_scanlines(io, H, line) do dst, row
+        src = flip_rows ? H - row + 1 : row
+        dst[1] = 0x00
+        k = 2
+        @inbounds for col in 1:W, c in 1:C
+            dst[k] = round(UInt8, img[src, col, c] * 255)
+            k += 1
+        end
+        dst
+    end
+    _png_write_iend_chunk(io)
+    return take!(io)
+end
+
 function _pdf_fill_rgb_row!(rowbuf::Vector{UInt8}, img::AbstractArray,
                             row::Int, width::Int, channels::Int,
                             isgray2d::Bool, isu8::Bool)

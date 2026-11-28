@@ -699,23 +699,23 @@ end
     dir = mktempdir()
     out = joinpath(dir, "x.gltf")
     tri() = BufferGeometry([0.0, 0, 0, 1, 0, 0, 0, 1, 0], Float64[], Float64[], [1, 2, 3], 3, 1)
+    # Lights, cameras, textures, physical materials and custom attributes are
+    # exported since 2.1 (test/audit3c_loader_gaps.jl); these have no glTF form.
     scene = Scene()
-    add!(scene, DirectionalLight())
-    @test_throws "save_gltf: DirectionalLight objects cannot be exported" Diff3D.save_gltf(out, scene)
-    @test_throws "save_gltf: PerspectiveCamera objects cannot be exported" Diff3D.save_gltf(
-        out, PerspectiveCamera())
+    add!(scene, HemisphereLight())
+    @test_throws "save_gltf: HemisphereLight objects cannot be exported" Diff3D.save_gltf(out, scene)
     tex = Texture(ones(2, 2, 3))
-    @test_throws "save_gltf: MeshStandardMaterial.map is set; textures cannot be exported" Diff3D.save_gltf(
-        out, Mesh(tri(), MeshStandardMaterial(map=tex)))
-    @test_throws "save_gltf: MeshPhysicalMaterial cannot be exported" Diff3D.save_gltf(
-        out, Mesh(tri(), MeshPhysicalMaterial()))
+    @test_throws "save_gltf: MeshStandardMaterial.alpha_map is set; glTF has no slot for it" Diff3D.save_gltf(
+        out, Mesh(tri(), MeshStandardMaterial(alpha_map=tex)))
+    @test_throws "save_gltf: MeshToonMaterial cannot be exported" Diff3D.save_gltf(
+        out, Mesh(tri(), MeshToonMaterial()))
     @test_throws "save_gltf: back-side materials cannot be exported" Diff3D.save_gltf(
         out, Mesh(tri(), MeshStandardMaterial(side=:back)))
     @test_throws "save_gltf: wireframe materials cannot be exported" Diff3D.save_gltf(
         out, Mesh(tri(), MeshBasicMaterial(wireframe=true)))
     g = tri()
-    set_attribute!(g, :weight, [1.0, 2.0, 3.0], 1)
-    @test_throws "save_gltf: geometry attribute :weight cannot be exported" Diff3D.save_gltf(
+    set_attribute!(g, :texcoord_2, [1.0, 2.0, 3.0, 4.0, 5.0, 6.0], 2)
+    @test_throws "save_gltf: geometry attribute :texcoord_2 would be written as the glTF semantic TEXCOORD_2" Diff3D.save_gltf(
         out, Mesh(g, MeshStandardMaterial()))
     g = tri()
     g.positions[2] = NaN
