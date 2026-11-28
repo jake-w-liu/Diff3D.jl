@@ -630,3 +630,105 @@ end
         end
     end
 end
+
+# ---------------------------------------------------------------------------
+# (d) three.js Color API
+# ---------------------------------------------------------------------------
+
+# Oracle values: node with three.js r186 build/three.module.js (Color.js,
+# ColorManagement.js); the script is d/color_oracle.mjs in the audit scratch.
+color_tuple(c) = (c.r, c.g, c.b)
+
+@testset "Color hex, sRGB conversion and equality follow three.js" begin
+    # Color.setHex (Color.js:204-216) reads sRGB by default.
+    @test color_tuple(Diff3D.color_from_hex(0x336699)) ==
+          (0.033104766565152086, 0.13286832154414627, 0.31854677811435356)
+    @test color_tuple(Diff3D.color_from_hex(0x336699; colorspace=:linear)) ==
+          (0.2, 0.4, 0.6)
+    # `Math.floor(hex)` then `hex >> 16 & 255`: bits above 24 are dropped.
+    @test Diff3D.color_from_hex(0x12336699) == Diff3D.color_from_hex(0x336699)
+    @test Diff3D.color_from_hex(0xf000000000336699) == Diff3D.color_from_hex(0x336699)
+    @test Diff3D.color_from_hex(big(2)^80 + 0x336699) == Diff3D.color_from_hex(0x336699)
+    # Color.getHex (Color.js:539-551): sRGB, clamped, Math.round.
+    @test Diff3D.color_hex(Color3(0.2, 0.4, 0.6)) == 8170187
+    @test Diff3D.color_hex(Color3(0.2, 0.4, 0.6); colorspace=:linear) == 3368601
+    @test Diff3D.color_hex(Color3(-0.5, 0.5, 2.0)) == 48383
+    @test Diff3D.color_hex_string(Color3(0.001, 0.0, 1.5)) == "0300ff"
+    @test all(isapprox.(color_tuple(Diff3D.color_from_hex(Diff3D.color_hex(Color3(0.25, 0.5, 0.75)))),
+                        (0.25, 0.5, 0.75); atol=0.01))
+    # ColorManagement.js:205-215 constants.
+    @test color_tuple(Diff3D.color_convert_srgb_to_linear(Color3(0.2, 0.04045, 0.9))) ==
+          (0.033104766565152086, 0.0031308072813303342, 0.78741228939106567)
+    @test color_tuple(Diff3D.color_convert_linear_to_srgb(Color3(0.2, 0.0031308, 0.9))) ==
+          (0.48453499343780709, 0.040453576944652785, 0.95468788109385583)
+    # Color.equals uses === per channel (Color.js:875-879).
+    @test Diff3D.color_equals(Color3(0.0, 0.0, 0.0), Color3(-0.0, 0.0, 0.0))
+    @test !Diff3D.color_equals(Color3(NaN, 0.0, 0.0), Color3(NaN, 0.0, 0.0))
+    @test_throws ArgumentError Diff3D.color_from_hex(0xffffff; colorspace=:display_p3)
+end
+
+@testset "Color HSL helpers follow three.js" begin
+    # Color.setHSL (Color.js:248-276) in the working space by default.
+    @test color_tuple(Diff3D.color_from_hsl(0.3, 0.6, 0.4)) ==
+          (0.25599999999999995, 0.64000000000000012, 0.15999999999999992)
+    @test color_tuple(Diff3D.color_from_hsl(0.3, 0.6, 0.4; colorspace=:srgb)) ==
+          (0.053311270235764138, 0.36724646819968193, 0.021980947075146660)
+    # Hue wraps with euclideanModulo; s and l are clamped.
+    @test color_tuple(Diff3D.color_from_hsl(-0.7, 1.5, 0.8)) ==
+          (0.68000000000000005, 1.0, 0.60000000000000009)
+    @test color_tuple(Diff3D.color_from_hsl(0.5, 0.0, 0.25)) == (0.25, 0.25, 0.25)
+    # Color.getHSL (Color.js:567-617).
+    @test Tuple(Diff3D.color_hsl(Color3(0.2, 0.4, 0.6))) ==
+          (0.58333333333333337, 0.49999999999999994, 0.40000000000000002)
+    @test Tuple(Diff3D.color_hsl(Color3(0.9, 0.1, 0.3); colorspace=:srgb)) ==
+          (0.93541329249901206, 0.86981440356333906, 0.65194214915941351)
+    @test Tuple(Diff3D.color_hsl(Color3(0.5, 0.5, 0.5))) == (0.0, 0.0, 0.5)
+    @test Tuple(Diff3D.color_hsl(Color3(0.1, 0.8, 0.3))) ==
+          (0.38095238095238093, 0.77777777777777779, 0.45000000000000001)
+    @test Tuple(Diff3D.color_hsl(Color3(0.1, 0.2, 0.8))) ==
+          (0.64285714285714290, 0.77777777777777779, 0.45000000000000001)
+    # Color.offsetHSL, Color.lerp and Color.lerpHSL (Color.js:664-676, 778-796, 819-834).
+    @test color_tuple(Diff3D.color_offset_hsl(Color3(0.2, 0.4, 0.6), 0.1, -0.2, 0.05)) ==
+          (0.34199999999999997, 0.31500000000000006, 0.58499999999999996)
+    @test color_tuple(Diff3D.color_lerp(Color3(0.2, 0.4, 0.6), Color3(1.0, 0.0, 0.5), 0.25)) ==
+          (0.40000000000000002, 0.30000000000000004, 0.57499999999999996)
+    @test color_tuple(Diff3D.color_lerp_hsl(Color3(0.2, 0.4, 0.6), Color3(0.9, 0.1, 0.3), 0.3)) ==
+          (0.26509499999999964, 0.17630000000000001, 0.68369999999999986)
+end
+
+@testset "Color CSS styles and names follow three.js" begin
+    # Color.setStyle (Color.js:286-423, 425-445).
+    @test color_tuple(Diff3D.color_from_style("rgb(255, 0, 128)")) ==
+          (1.0, 0.0, 0.21586050010324417)
+    @test color_tuple(Diff3D.color_from_style("rgba(10,20,300,0.5)")) ==
+          (0.0030352698352941175, 0.0069954101845983935, 1.0)
+    @test color_tuple(Diff3D.color_from_style("rgb(10%, 50%, 120%)")) ==
+          (0.010022825571656560, 0.21404114047158820, 1.0)
+    @test color_tuple(Diff3D.color_from_style("hsl(120, 50%, 25%)")) ==
+          (0.014349874702952042, 0.11601613422345775, 0.014349874702952009)
+    @test color_tuple(Diff3D.color_from_style("hsla(400, 50.5%, 75%, 0.2)")) ==
+          (0.74123033174332065, 0.59049581703412979, 0.34697462822369790)
+    @test color_tuple(Diff3D.color_from_style("#f80")) == (1.0, 0.24620132669705552, 0.0)
+    @test color_tuple(Diff3D.color_from_style("#FF8000")) == (1.0, 0.21586050010324417, 0.0)
+    @test color_tuple(Diff3D.color_from_style("SkyBlue")) ==
+          (0.24228112245478564, 0.61720656241206351, 0.83076987677097147)
+    @test color_tuple(Diff3D.color_from_style("rgb(255, 0, 128)"; colorspace=:linear)) ==
+          (1.0, 0.0, 0.50196078431372548)
+    @test color_tuple(Diff3D.color_from_name("rebeccapurple")) ==
+          (0.13286832154414627, 0.033104766565152086, 0.31854677811435356)
+    # three.js warns and keeps the old color; Diff3D raises instead.
+    for bad in ("", "#ff", "cmyk(1,2,3,4)", "rgb(1,2)", "hsl(1,2,3)", "notacolor")
+        @test_throws ArgumentError Diff3D.color_from_style(bad)
+    end
+    @test_throws ArgumentError Diff3D.color_from_name("notacolor")
+    # Color.getStyle (Color.js:637-662).
+    @test Diff3D.color_style(Color3(0.2, 0.4, 0.6)) == "rgb(124,170,203)"
+    @test Diff3D.color_style(Color3(0.2, 0.4, 0.6); colorspace=:linear) ==
+          "color(srgb-linear 0.200 0.400 0.600)"
+    @test Diff3D.color_style(Color3(0.0005, 1.0625, -0.0125); colorspace=:linear) ==
+          "color(srgb-linear 0.001 1.063 -0.013)"
+    @test Diff3D.color_style(Color3(1.5, -0.2, 0.5)) == "rgb(305,-659,188)"
+    # three.js would print NaN or Infinity; Diff3D raises.
+    @test_throws ArgumentError Diff3D.color_style(Color3(NaN, 0.0, 0.0))
+    @test_throws ArgumentError Diff3D.color_hex(Color3(0.0, NaN, 0.0))
+end

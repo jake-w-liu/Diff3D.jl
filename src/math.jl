@@ -3217,6 +3217,14 @@ Linear map of `x` from the range `[a1, a2]` to `[b1, b2]` (three.js
 map_linear(x, a1, a2, b1, b2) = b1 + (x - a1) * (b2 - b1) / (a2 - a1)
 
 """
+    euclidean_modulo(n, m)
+
+`((n % m) + m) % m` with the remainder `%` of JavaScript (Julia `rem`), so the
+result has the sign of `m` (three.js `MathUtils.euclideanModulo`).
+"""
+euclidean_modulo(n::Real, m::Real) = rem(rem(n, m) + m, m)
+
+"""
     inverse_lerp(x, y, value)
 
 Fraction of the way `value` lies from `x` to `y`; zero when `x == y`
@@ -3376,4 +3384,320 @@ function Base.:*(a::Mat3, b::Mat3)
         ae[row] * be[3column + 1] + ae[row + 3] * be[3column + 2] +
             ae[row + 6] * be[3column + 3]
     end)
+end
+
+# ------------------------- three.js Color API -------------------------
+# Color3 holds linear working-space RGB, as three.js Color does under
+# ColorManagement (src/math/ColorManagement.js). Constructors and queries
+# take a `colorspace` of `:srgb` or `:linear`; their defaults follow
+# three.js: hex values and CSS strings are sRGB, HSL and RGB components are
+# in the working (linear) space. Color3 is immutable, so the three.js setters
+# are functions returning a new color.
+
+@noinline _throw_color_space(colorspace) =
+    throw(ArgumentError("color space must be :srgb or :linear, got $(repr(colorspace))"))
+
+@inline function _validated_color_space(colorspace)
+    colorspace === :srgb || colorspace === :linear || _throw_color_space(colorspace)
+    return colorspace
+end
+
+# three.js SRGBToLinear and LinearToSRGB (ColorManagement.js:205-215), with
+# their rounded constants so results match three.js bit for bit.
+@inline _threejs_srgb_to_linear(c) =
+    c < 0.04045 ? c * 0.0773993808 : (c * 0.9478672986 + 0.0521327014)^2.4
+@inline _threejs_linear_to_srgb(c) =
+    c < 0.0031308 ? c * 12.92 : 1.055 * c^0.41666 - 0.055
+
+@inline _color_map(f, c::Color3) = Color3(f(c.r), f(c.g), f(c.b))
+
+# ColorManagement.colorSpaceToWorking / workingToColorSpace.
+@inline _color_to_working(c::Color3, colorspace::Symbol) =
+    _validated_color_space(colorspace) === :srgb ? _color_map(_threejs_srgb_to_linear, c) : c
+@inline _color_from_working(c::Color3, colorspace::Symbol) =
+    _validated_color_space(colorspace) === :srgb ? _color_map(_threejs_linear_to_srgb, c) : c
+
+"""
+    color_convert_srgb_to_linear(c::Color3) -> Color3
+    color_convert_linear_to_srgb(c::Color3) -> Color3
+
+Apply three.js `SRGBToLinear` or `LinearToSRGB` to each channel (three.js
+`Color.convertSRGBToLinear` and `Color.convertLinearToSRGB`). These use the
+rounded constants of `ColorManagement.js`, unlike [`srgb_to_linear`](@ref),
+which uses the exact IEC 61966-2-1 constants.
+"""
+color_convert_srgb_to_linear(c::Color3) = _color_map(_threejs_srgb_to_linear, c)
+@doc (@doc color_convert_srgb_to_linear)
+color_convert_linear_to_srgb(c::Color3) = _color_map(_threejs_linear_to_srgb, c)
+
+"""
+    color_from_hex(hex::Integer; colorspace=:srgb) -> Color3{Float64}
+
+Color with the 24-bit `hex` value `0xRRGGBB`, given in `colorspace` and
+converted to the linear working space (three.js `Color.setHex`, whose default
+color space is sRGB). Bits above the low 24 are ignored, as three.js does.
+"""
+function color_from_hex(hex::Integer; colorspace::Symbol=:srgb)
+    value = Int(hex & 0xffffff)
+    srgb = Color3(((value >> 16) & 0xff) / 255, ((value >> 8) & 0xff) / 255,
+                  (value & 0xff) / 255)
+    return _color_to_working(srgb, colorspace)
+end
+
+# JavaScript Math.round rounds halves toward +Inf.
+@inline _js_round(x) = round(x, RoundNearestTiesUp)
+
+@noinline _throw_color_nan(what) =
+    throw(ArgumentError("$what needs channels that are not NaN"))
+
+"""
+    color_hex(c::Color3; colorspace=:srgb) -> Int
+
+`0xRRGGBB` integer of `c` in `colorspace` (three.js `Color.getHex`): each
+channel is converted from the linear working space, clamped to [0, 1] and
+rounded to 8 bits. A NaN channel raises `ArgumentError`.
+"""
+function color_hex(c::Color3; colorspace::Symbol=:srgb)
+    out = _color_from_working(c, colorspace)
+    (isnan(out.r) || isnan(out.g) || isnan(out.b)) && _throw_color_nan("color_hex")
+    byte(x) = Int(_js_round(clamp(x * 255, 0, 255)))
+    return byte(out.r) * 65536 + byte(out.g) * 256 + byte(out.b)
+end
+
+"""
+    color_hex_string(c::Color3; colorspace=:srgb) -> String
+
+Six lower-case hexadecimal digits of [`color_hex`](@ref) (three.js
+`Color.getHexString`).
+"""
+color_hex_string(c::Color3; colorspace::Symbol=:srgb) =
+    string(color_hex(c; colorspace); base=16, pad=6)
+
+# three.js hue2rgb (Color.js:34-43).
+@inline function _hue_to_rgb(p, q, t)
+    t < 0 && (t += 1)
+    t > 1 && (t -= 1)
+    t < 1 / 6 && return p + (q - p) * 6 * t
+    t < 1 / 2 && return q
+    t < 2 / 3 && return p + (q - p) * 6 * (2 / 3 - t)
+    return p
+end
+
+"""
+    color_from_hsl(h, s, l; colorspace=:linear) -> Color3
+
+Color with hue `h`, saturation `s` and lightness `l`, each in [0, 1], given in
+`colorspace` (three.js `Color.setHSL`, whose default is the working color
+space). `h` wraps with [`euclidean_modulo`](@ref); `s` and `l` are clamped.
+"""
+function color_from_hsl(h::Real, s::Real, l::Real; colorspace::Symbol=:linear)
+    hue = euclidean_modulo(h, one(h))
+    saturation = clamp(s, zero(s), one(s))
+    lightness = clamp(l, zero(l), one(l))
+    color = if saturation == 0
+        Color3(lightness, lightness, lightness)
+    else
+        p = lightness <= 0.5 ? lightness * (1 + saturation) :
+            lightness + saturation - lightness * saturation
+        q = 2 * lightness - p
+        Color3(_hue_to_rgb(q, p, hue + 1 / 3), _hue_to_rgb(q, p, hue),
+               _hue_to_rgb(q, p, hue - 1 / 3))
+    end
+    return _color_to_working(color, colorspace)
+end
+
+"""
+    color_hsl(c::Color3; colorspace=:linear) -> (h=..., s=..., l=...)
+
+Hue, saturation and lightness of `c` in `colorspace`, each in [0, 1] (three.js
+`Color.getHSL`, whose default is the working color space).
+"""
+function color_hsl(c::Color3; colorspace::Symbol=:linear)
+    color = _color_from_working(c, colorspace)
+    r, g, b = color.r, color.g, color.b
+    high = max(r, g, b)
+    low = min(r, g, b)
+    lightness = (low + high) / 2
+    if low == high
+        return (h=zero(lightness), s=zero(lightness), l=lightness)
+    end
+    delta = high - low
+    saturation = lightness <= 0.5 ? delta / (high + low) : delta / (2 - high - low)
+    hue = if high == r
+        (g - b) / delta + (g < b ? 6 : 0)
+    elseif high == g
+        (b - r) / delta + 2
+    else
+        (r - g) / delta + 4
+    end
+    return (h=hue / 6, s=saturation, l=lightness)
+end
+
+"""
+    color_offset_hsl(c::Color3, h, s, l) -> Color3
+
+`c` with `h`, `s` and `l` added to its working-space HSL components (three.js
+`Color.offsetHSL`).
+"""
+function color_offset_hsl(c::Color3, h::Real, s::Real, l::Real)
+    hsl = color_hsl(c)
+    return color_from_hsl(hsl.h + h, hsl.s + s, hsl.l + l)
+end
+
+"""
+    color_lerp(a::Color3, b::Color3, alpha) -> Color3
+
+Channel-wise linear interpolation from `a` to `b` (three.js `Color.lerp` and
+`Color.lerpColors`).
+"""
+color_lerp(a::Color3, b::Color3, alpha::Real) =
+    Color3(a.r + (b.r - a.r) * alpha, a.g + (b.g - a.g) * alpha,
+           a.b + (b.b - a.b) * alpha)
+
+"""
+    color_lerp_hsl(a::Color3, b::Color3, alpha) -> Color3
+
+Interpolate the working-space hue, saturation and lightness of `a` towards
+those of `b` (three.js `Color.lerpHSL`; the hue is interpolated linearly, not
+along the shorter arc).
+"""
+function color_lerp_hsl(a::Color3, b::Color3, alpha::Real)
+    p = color_hsl(a)
+    q = color_hsl(b)
+    # MathUtils.lerp: (1 - t) * x + t * y.
+    mix(x, y) = (1 - alpha) * x + alpha * y
+    return color_from_hsl(mix(p.h, q.h), mix(p.s, q.s), mix(p.l, q.l))
+end
+
+"""
+    color_equals(a::Color3, b::Color3) -> Bool
+
+Whether every channel compares equal with `==` (three.js `Color.equals`, which
+uses `===`: `0.0` equals `-0.0` and NaN equals nothing).
+"""
+color_equals(a::Color3, b::Color3) = a.r == b.r && a.g == b.g && a.b == b.b
+
+@noinline _throw_color_style(style, reason) =
+    throw(ArgumentError("invalid color style $(repr(style)): $reason"))
+
+# parseInt of a run of decimal digits, capped as Math.min(cap, parseInt(...)).
+@inline function _css_capped_int(digits::AbstractString, cap::Int)
+    value = tryparse(Int, digits)
+    return value === nothing ? cap : min(cap, value)
+end
+
+# The regular expressions of three.js Color.setStyle (Color.js:296-440).
+const _COLOR_STYLE_FUNCTION = r"^(\w+)\(([^\)]*)\)"
+const _COLOR_STYLE_RGB = r"^\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*(\d*\.?\d+)\s*)?$"
+const _COLOR_STYLE_RGB_PERCENT =
+    r"^\s*(\d+)\%\s*,\s*(\d+)\%\s*,\s*(\d+)\%\s*(?:,\s*(\d*\.?\d+)\s*)?$"
+const _COLOR_STYLE_HSL =
+    r"^\s*(\d*\.?\d+)\s*,\s*(\d*\.?\d+)\%\s*,\s*(\d*\.?\d+)\%\s*(?:,\s*(\d*\.?\d+)\s*)?$"
+const _COLOR_STYLE_HEX = r"^\#([A-Fa-f\d]+)$"
+
+"""
+    color_from_style(style::AbstractString; colorspace=:srgb) -> Color3{Float64}
+
+Parse a CSS color the way three.js `Color.setStyle` does: `rgb(r,g,b)` and
+`rgba(...)` with integers (capped at 255) or percentages (capped at 100%),
+`hsl(h,s%,l%)` and `hsla(...)`, `#rgb`, `#rrggbb`, and the CSS color keywords
+of [`color_from_name`](@ref). The value is read in `colorspace` (sRGB by
+default) and returned in the linear working space; an alpha component is
+ignored. Where three.js only logs a warning or leaves the color unchanged (an
+unknown model, keyword or hex length, malformed components, or an empty
+string), this raises `ArgumentError`.
+"""
+function color_from_style(style::AbstractString; colorspace::Symbol=:srgb)
+    _validated_color_space(colorspace)
+    text = String(style)
+    m = match(_COLOR_STYLE_FUNCTION, text)
+    if m !== nothing
+        model = m.captures[1]
+        components = m.captures[2]
+        if model == "rgb" || model == "rgba"
+            c = match(_COLOR_STYLE_RGB, components)
+            if c !== nothing
+                return _color_to_working(
+                    Color3(_css_capped_int(c.captures[1], 255) / 255,
+                           _css_capped_int(c.captures[2], 255) / 255,
+                           _css_capped_int(c.captures[3], 255) / 255), colorspace)
+            end
+            c = match(_COLOR_STYLE_RGB_PERCENT, components)
+            if c !== nothing
+                return _color_to_working(
+                    Color3(_css_capped_int(c.captures[1], 100) / 100,
+                           _css_capped_int(c.captures[2], 100) / 100,
+                           _css_capped_int(c.captures[3], 100) / 100), colorspace)
+            end
+        elseif model == "hsl" || model == "hsla"
+            c = match(_COLOR_STYLE_HSL, components)
+            if c !== nothing
+                return color_from_hsl(parse(Float64, c.captures[1]) / 360,
+                                      parse(Float64, c.captures[2]) / 100,
+                                      parse(Float64, c.captures[3]) / 100;
+                                      colorspace=colorspace)
+            end
+        else
+            _throw_color_style(style, "unknown color model $(model)")
+        end
+        _throw_color_style(style, "malformed $(model)() components")
+    end
+    m = match(_COLOR_STYLE_HEX, text)
+    if m !== nothing
+        hex = m.captures[1]
+        if ncodeunits(hex) == 3
+            digit(i) = parse(Int, hex[i:i]; base=16) / 15
+            return _color_to_working(Color3(digit(1), digit(2), digit(3)), colorspace)
+        elseif ncodeunits(hex) == 6
+            return color_from_hex(parse(Int, hex; base=16); colorspace=colorspace)
+        end
+        _throw_color_style(style, "a hex color needs 3 or 6 digits")
+    end
+    isempty(text) && _throw_color_style(style, "empty string")
+    return color_from_name(text; colorspace=colorspace)
+end
+
+"""
+    color_from_name(name::AbstractString; colorspace=:srgb) -> Color3{Float64}
+
+Color of a CSS color keyword such as `"skyblue"`, case-insensitive (three.js
+`Color.setColorName` with its `Color.NAMES` table), read in `colorspace` and
+returned in the linear working space. An unknown name raises `ArgumentError`.
+"""
+function color_from_name(name::AbstractString; colorspace::Symbol=:srgb)
+    _validated_color_space(colorspace)
+    hex = get(_SVG_COLOR_KEYWORDS, lowercase(String(name)), nothing)
+    hex === nothing && _throw_color_style(name, "unknown color name")
+    return color_from_hex(hex; colorspace=colorspace)
+end
+
+# Number.prototype.toFixed: the nearest multiple of 10^-digits to the exact
+# binary value, ties to the larger magnitude.
+function _js_to_fixed(x::Real, digits::Int)
+    value = Rational{BigInt}(x)
+    scaled = round(BigInt, abs(value) * big(10)^digits, RoundNearestTiesUp)
+    text = lpad(string(scaled), digits + 1, '0')
+    body = text[1:end-digits] * "." * text[end-digits+1:end]
+    return value < 0 ? "-" * body : body
+end
+
+"""
+    color_style(c::Color3; colorspace=:srgb) -> String
+
+CSS string of `c` (three.js `Color.getStyle`): `"rgb(R,G,B)"` with each sRGB
+channel times 255 rounded half up, or for `colorspace=:linear`
+`"color(srgb-linear r g b)"` with three decimals.
+"""
+function color_style(c::Color3; colorspace::Symbol=:srgb)
+    out = _color_from_working(c, colorspace)
+    if colorspace === :linear
+        isfinite(out.r) && isfinite(out.g) && isfinite(out.b) ||
+            throw(ArgumentError("color_style needs finite channels"))
+        return "color(srgb-linear $(_js_to_fixed(out.r, 3)) $(_js_to_fixed(out.g, 3)) " *
+               "$(_js_to_fixed(out.b, 3)))"
+    end
+    isfinite(out.r) && isfinite(out.g) && isfinite(out.b) ||
+        throw(ArgumentError("color_style needs finite channels"))
+    channel(x) = string(Int(_js_round(x * 255)))
+    return "rgb($(channel(out.r)),$(channel(out.g)),$(channel(out.b)))"
 end
