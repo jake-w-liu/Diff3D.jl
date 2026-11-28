@@ -84,6 +84,7 @@ mutable struct InstancedMesh <: AbstractObject3D
     instance_matrices::Vector{Mat4{Float64}}
     instance_colors::Vector{Color3{Float64}}
     draw_mode::Symbol
+    render_order::Float64  # three.js Object3D.renderOrder
 
     function InstancedMesh(position::Vec3{Float64}, rotation::Euler{Float64},
                            scale::Vec3{Float64},
@@ -94,12 +95,13 @@ mutable struct InstancedMesh <: AbstractObject3D
                            receive_shadow::Bool,
                            instance_matrices::Vector{Mat4{Float64}},
                            instance_colors::Vector{Color3{Float64}},
-                           draw_mode::Symbol)
+                           draw_mode::Symbol, render_order::Real=0.0)
         _validate_instanced_data(instance_matrices, instance_colors,
                                  "InstancedMesh")
         new(position, rotation, scale, parent, children, visible, name, id,
             geometry, material, cast_shadow, receive_shadow, instance_matrices,
-            instance_colors, _validate_instanced_draw_mode(draw_mode))
+            instance_colors, _validate_instanced_draw_mode(draw_mode),
+            Float64(render_order))
     end
 end
 
@@ -241,7 +243,11 @@ mutable struct LineSegments <: AbstractObject3D
     material::Any
     morph_target_influences::Vector{Float64}
     morph_target_names::Vector{String}
+    render_order::Float64  # three.js Object3D.renderOrder
 end
+
+# Field layout before `render_order` was added (three.js default 0).
+LineSegments(args::Vararg{Any,12}) = LineSegments(args..., 0.0)
 
 function LineSegments(geometry, material; name="LineSegments",
                       morph_target_influences=Float64[], morph_target_names=String[])
@@ -286,7 +292,11 @@ mutable struct LineLoop <: AbstractObject3D
     material::Any
     morph_target_influences::Vector{Float64}
     morph_target_names::Vector{String}
+    render_order::Float64  # three.js Object3D.renderOrder
 end
+
+# Field layout before `render_order` was added (three.js default 0).
+LineLoop(args::Vararg{Any,12}) = LineLoop(args..., 0.0)
 
 function LineLoop(geometry, material; name="LineLoop",
                   morph_target_influences=Float64[], morph_target_names=String[])
@@ -339,7 +349,11 @@ mutable struct Sprite <: AbstractObject3D
     id::Int
     material::Any
     center::Vec2{Float64}
+    render_order::Float64  # three.js Object3D.renderOrder
 end
+
+# Field layout before `render_order` was added (three.js default 0).
+Sprite(args::Vararg{Any,10}) = Sprite(args..., 0.0)
 
 @inline function _validate_sprite_center(sprite::Sprite, context::String)
     center = sprite.center
@@ -453,7 +467,11 @@ mutable struct LOD <: AbstractObject3D
     auto_update::Bool
     _camera_levels::WeakKeyDict{AbstractCamera,Int}
     _manual_level::Int
+    render_order::Float64  # three.js Object3D.renderOrder
 end
+
+# Field layout before `render_order` was added (three.js default 0).
+LOD(args::Vararg{Any,12}) = LOD(args..., 0.0)
 
 LOD(position, rotation, scale, parent, children, visible, name, id, levels) =
     LOD(position, rotation, scale, parent, children, visible, name, id, levels, true)
@@ -665,7 +683,11 @@ mutable struct Bone <: AbstractObject3D
     visible::Bool
     name::String
     id::Int
+    render_order::Float64  # three.js Object3D.renderOrder
 end
+
+# Field layout before `render_order` was added (three.js default 0).
+Bone(args::Vararg{Any,8}) = Bone(args..., 0.0)
 
 function Bone(; name="Bone")
     Bone(Vec3(), Euler(), Vec3(1.0,1.0,1.0), nothing, AbstractObject3D[],
@@ -722,7 +744,11 @@ mutable struct SkinnedMesh <: AbstractObject3D
     bind_mode::Symbol                       # :attached or :detached
     bind_matrix::Mat4{Float64}
     bind_matrix_inverse::Mat4{Float64}
+    render_order::Float64  # three.js Object3D.renderOrder
 end
+
+# Field layout before `render_order` was added (three.js default 0).
+SkinnedMesh(args::Vararg{Any,20}) = SkinnedMesh(args..., 0.0)
 
 function SkinnedMesh(geometry, material, skeleton::Skeleton,
                      skin_indices, skin_weights; name="SkinnedMesh",
@@ -1199,7 +1225,8 @@ function _skinned_render_mesh(sm::SkinnedMesh)
     scale.x < 0.0 && _mirror_skinned_proxy_geometry!(geo)
     Mesh(Vec3(), Euler(), scale, nothing, AbstractObject3D[],
          sm.visible, sm.name, sm.id, geo, sm.material,
-         nothing, sm.cast_shadow, sm.receive_shadow, Float64[], String[])
+         nothing, sm.cast_shadow, sm.receive_shadow, Float64[], String[],
+         sm.render_order, _ancestor_group_order(sm))
 end
 
 function _skinned_normal_output_length(geo::BufferGeometry)
@@ -1294,6 +1321,8 @@ function _update_skinned_render_mesh!(proxy::Mesh, sm::SkinnedMesh,
     proxy.flat_shading = nothing
     proxy.cast_shadow = sm.cast_shadow
     proxy.receive_shadow = sm.receive_shadow
+    proxy.render_order = sm.render_order
+    proxy._render_group_order = _ancestor_group_order(sm)
     empty!(proxy.morph_target_influences)
     empty!(proxy.morph_target_names)
     return proxy
@@ -1397,7 +1426,7 @@ function _morph_render_mesh(mesh::Mesh, scratch)
                 AbstractObject3D[], mesh.visible, mesh.name, mesh.id,
                 _morph_render_geometry(mesh, scratch), mesh.material,
                 mesh.flat_shading, mesh.cast_shadow, mesh.receive_shadow,
-                Float64[], String[])
+                Float64[], String[], mesh.render_order, mesh._render_group_order)
 end
 
 function _update_morph_render_mesh!(posed::Mesh, mesh::Mesh, scratch)
@@ -1413,6 +1442,8 @@ function _update_morph_render_mesh!(posed::Mesh, mesh::Mesh, scratch)
     posed.flat_shading = mesh.flat_shading
     posed.cast_shadow = mesh.cast_shadow
     posed.receive_shadow = mesh.receive_shadow
+    posed.render_order = mesh.render_order
+    posed._render_group_order = mesh._render_group_order
     return posed
 end
 
@@ -1462,4 +1493,527 @@ function compute_world_matrices(root::AbstractObject3D)
                    compute_world_matrix(parent)
     compute_world_matrices(root, parent_world, cache)
     return cache
+end
+
+# ========================== Render order ==========================
+# three.js WebGLRenderer.projectObject (src/renderers/WebGLRenderer.js:1860-1975)
+# hands every drawable the renderOrder of its nearest Group ancestor as
+# `groupOrder` (0 at the scene root), and the render lists sort by groupOrder,
+# then the drawable's own renderOrder, before depth (painterSortStable and
+# reversePainterSortStable, src/renderers/webgl/WebGLRenderLists.js:1-51).
+
+@noinline _throw_render_order(kind::Symbol) =
+    throw(ArgumentError("$kind render_order must not be NaN"))
+
+# Adding 0.0 maps -0.0 to 0.0, so keys that compare equal are also identical.
+@inline function _checked_render_order(value::Float64, kind::Symbol)
+    isnan(value) && _throw_render_order(kind)
+    return value + 0.0
+end
+
+function _ancestor_group_order(obj::AbstractObject3D)
+    parent = get_parent(obj)
+    while parent !== nothing
+        parent isa Group && return _checked_render_order(parent.render_order, :Group)
+        parent = get_parent(parent)
+    end
+    return 0.0
+end
+
+# The parent chain is abstractly typed; branch over the drawable types so the
+# Float64 field is read without boxing.
+@inline function _node_render_order(obj::AbstractObject3D)
+    value = if obj isa Mesh
+        obj.render_order
+    elseif obj isa InstancedMesh
+        obj.render_order
+    elseif obj isa Sprite
+        obj.render_order
+    elseif obj isa LineObject
+        obj.render_order
+    elseif obj isa LineSegments
+        obj.render_order
+    elseif obj isa LineLoop
+        obj.render_order
+    elseif obj isa PointsObject
+        obj.render_order
+    elseif obj isa SkinnedMesh
+        obj.render_order
+    else
+        getfield(obj, :render_order)::Float64
+    end
+    return _checked_render_order(value, nameof(typeof(obj)))
+end
+
+# A posed-skin render proxy has no parent; it records its source's group order.
+@inline function _render_group_order(obj::AbstractObject3D)
+    if obj isa Mesh
+        group = obj._render_group_order
+        group === nothing || return _checked_render_order(group, :Mesh)
+    end
+    return _ancestor_group_order(obj)
+end
+
+@inline _render_order_key(obj::AbstractObject3D) =
+    (_render_group_order(obj), _node_render_order(obj))
+
+@inline _render_order_key(obj::AbstractObject3D, sorted::Bool) =
+    sorted ? _render_order_key(obj) : (0.0, 0.0)
+
+const _DEFAULT_RENDER_ORDER_KEYS = Float64[]
+
+# Insert `key` into the ascending, duplicate-free key list stored as
+# interleaved (group order, render order) pairs in `keys[1:2count]`.
+function _insert_render_order_key!(keys::Vector{Float64}, count::Int,
+                                   key::NTuple{2,Float64})
+    position = count + 1
+    @inbounds for bucket in 1:count
+        existing = (keys[2bucket - 1], keys[2bucket])
+        existing == key && return count
+        if key < existing
+            position = bucket
+            break
+        end
+    end
+    length(keys) < 2count + 2 && resize!(keys, 2count + 2)
+    @inbounds for bucket in count:-1:position
+        keys[2bucket + 1] = keys[2bucket - 1]
+        keys[2bucket + 2] = keys[2bucket]
+    end
+    @inbounds keys[2position - 1] = key[1]
+    @inbounds keys[2position] = key[2]
+    return count + 1
+end
+
+function _collect_render_order_keys!(keys::Vector{Float64}, count::Int, objects)
+    @inbounds for object in objects
+        count = _insert_render_order_key!(keys, count, _render_order_key(object))
+    end
+    return count
+end
+
+function _has_render_order(objects)
+    @inbounds for object in objects
+        _render_order_key(object) == (0.0, 0.0) || return true
+    end
+    return false
+end
+
+"""
+Distinct `(group order, render order)` keys of the drawables in ascending
+order, as `(count, keys)` with key `i` at `keys[2i-1:2i]`. Scenes whose keys are
+all zero return `(1, _DEFAULT_RENDER_ORDER_KEYS)` without touching `scratch`;
+`scratch === nothing` allocates only when a non-zero key exists.
+"""
+function _render_order_buckets(scratch::Union{Nothing,Vector{Float64}},
+                               meshes, instanced, primitives=())
+    (_has_render_order(meshes) || _has_render_order(instanced) ||
+     _has_render_order(primitives)) || return (1, _DEFAULT_RENDER_ORDER_KEYS)
+    keys = scratch === nothing ? Float64[] : scratch
+    count = _collect_render_order_keys!(keys, 0, meshes)
+    count = _collect_render_order_keys!(keys, count, instanced)
+    count = _collect_render_order_keys!(keys, count, primitives)
+    return (count, keys)
+end
+
+@inline _in_render_order_bucket(obj::AbstractObject3D, keys::Vector{Float64},
+                                bucket::Int, count::Int) =
+    count == 1 || @inbounds(_render_order_key(obj) == (keys[2bucket - 1], keys[2bucket]))
+
+# ========================== clone / copy ==========================
+# three.js Object3D.copy (src/core/Object3D.js:1605-1652) copies the name,
+# transform, layers, visibility, shadow flags and renderOrder, then adds a
+# clone of every child when `recursive`; `clone(recursive)` is
+# `new this.constructor().copy(this, recursive)` (Object3D.js:1592-1596), so
+# the clone has a fresh id and no parent. Subclasses copy their own state and
+# share geometry, materials and skeletons by reference (Mesh.js:110-131,
+# SkinnedMesh.js:161-176, Sprite.js:216-226). Diff3D stores the three.js
+# quaternion as `rotation` and keeps the same split between copied values
+# and shared references.
+
+# Fields a copy never takes from its source: the scene-graph links and the
+# identity (three.js copy keeps `this.id`, `this.parent` and the children it
+# already has).
+const _OBJECT_COPY_LINK_FIELDS = (:parent, :children, :id)
+
+# Per-object vectors three.js copies (Mesh.js:114-118 slices
+# morphTargetInfluences; InstancedMesh.js:186-189 copies instanceMatrix and
+# clones instanceColor). The morph target names belong to the geometry's
+# dictionary in three.js, which Mesh.js:120-124 also copies.
+const _OBJECT_COPIED_VECTORS = (:morph_target_influences, :morph_target_names,
+                                :instance_matrices, :instance_colors)
+
+# A material array is sliced as well (Mesh.js:126, Line.js:107, Points.js:85).
+@inline _object_copy_value(name::Symbol, value) =
+    name in _OBJECT_COPIED_VECTORS ? copy(value) :
+    name === :material && value isa AbstractVector ? copy(value) : value
+
+function _copy_object_fields!(dest::T, source::T) where {T<:AbstractObject3D}
+    for name in fieldnames(T)
+        name in _OBJECT_COPY_LINK_FIELDS && continue
+        _object_copy_skips_field(dest, name) && continue
+        setfield!(dest, name, _object_copy_value(name, getfield(source, name)))
+    end
+    return dest
+end
+
+# Type-specific state that is not a plain field copy.
+@inline _object_copy_skips_field(::AbstractObject3D, ::Symbol) = false
+@inline _object_copy_skips_field(::LOD, name::Symbol) =
+    name === :levels || name === :_camera_levels || name === :_manual_level
+# A light's per-frame world-matrix cache belongs to that light.
+@inline _object_copy_skips_field(::AbstractLight, name::Symbol) = name === :_world_cache
+
+function _copy_object_layers!(dest::AbstractObject3D, source::AbstractObject3D)
+    mask = _object_layer_mask(source)
+    if hasproperty(dest, :layers)
+        getfield(dest, :layers).mask = mask
+    elseif mask != _DEFAULT_OBJECT_LAYER_MASK || _object_has_layer_state(dest)
+        object_layers(dest).mask = mask
+    end
+    return dest
+end
+
+function _object_has_layer_state(obj::AbstractObject3D)
+    lock(_OBJECT_LAYER_LOCK)
+    try
+        return haskey(_OBJECT_LAYER_STORE, obj)
+    finally
+        unlock(_OBJECT_LAYER_LOCK)
+    end
+end
+
+function _copy_object_children!(dest::AbstractObject3D, source::AbstractObject3D,
+                                recursive::Bool)
+    recursive || return dest
+    # Snapshot: copying an object into its own subtree must not visit the
+    # clones it adds.
+    for child in copy(get_children(source))
+        add!(dest, clone(child))
+    end
+    return dest
+end
+
+# three.js LOD.copy (src/objects/LOD.js:87-105) ignores `recursive`: it copies
+# the Object3D part without children and adds a clone of each level object at
+# the level's distance and hysteresis. Other children are not cloned.
+function _copy_object_children!(dest::LOD, source::LOD, ::Bool)
+    _validate_lod_levels(source, "LOD copy")
+    for level in copy(source.levels)
+        add_lod_level!(dest, level.distance, clone(level.object);
+                       hysteresis=level.hysteresis)
+    end
+    return dest
+end
+
+"""
+    copy!(dest::T, source::T; recursive=true) where {T<:AbstractObject3D} -> dest
+
+Copy the state of `source` into `dest` of the same node type (three.js
+`Object3D.copy` and its subclass overrides): name, position, rotation, scale,
+layers, visibility, `render_order`, shadow flags and every type-specific
+setting such as camera projection parameters, light colours and shadow
+settings, or LOD `auto_update`. `dest` keeps its id, parent and existing
+children. Geometry, material and skeleton references are shared, as in
+three.js; morph influences and instance matrices and colours are copied.
+
+With `recursive=true` a [`clone`](@ref) of every child of `source` is added to
+`dest`. An `LOD` copies like three.js `LOD.copy`: whatever `recursive` says,
+a clone of each level object is added as a level, and other children are not
+copied.
+"""
+function Base.copy!(dest::T, source::T; recursive::Bool=true) where {T<:AbstractObject3D}
+    _copy_object_fields!(dest, source)
+    _copy_object_layers!(dest, source)
+    _copy_object_children!(dest, source, recursive)
+    return dest
+end
+
+# A detached shell of `source`'s type with its own id and no children, built
+# from the full positional field list so inner-constructor validation runs.
+function _object_clone_shell(source::T) where {T<:AbstractObject3D}
+    values = ntuple(fieldcount(T)) do index
+        name = fieldname(T, index)
+        name === :parent ? nothing :
+        name === :children ? AbstractObject3D[] :
+        name === :id ? _next_id() :
+        _object_clone_shell_value(source, name, getfield(source, index))
+    end
+    return T(values...)
+end
+
+_object_clone_shell_value(::AbstractObject3D, name::Symbol, value) =
+    _object_copy_value(name, value)
+
+_object_clone_shell_value(::AbstractLight, name::Symbol, value) =
+    name === :_world_cache ? _LightWorldCache() : _object_copy_value(name, value)
+
+function _object_clone_shell_value(::LOD, name::Symbol, value)
+    name === :levels && return LODLevel[]
+    name === :_camera_levels && return WeakKeyDict{AbstractCamera,Int}()
+    name === :_manual_level && return 0
+    return _object_copy_value(name, value)
+end
+
+"""
+    clone(object; recursive=true) -> new object
+
+A new node of the same type as `object` with a fresh id, no parent, and the
+state of `object` copied into it by [`copy!`](@ref) (three.js
+`Object3D.clone`). With `recursive=true` the children are cloned too. As in
+three.js, a cloned `SkinnedMesh` keeps the skeleton of `object`, so it is still
+posed by the original bones, and geometry and materials are shared.
+"""
+function clone(source::AbstractObject3D; recursive::Bool=true)
+    dest = _object_clone_shell(source)
+    _copy_object_layers!(dest, source)
+    _copy_object_children!(dest, source, recursive)
+    return dest
+end
+
+# three.js BufferGeometry.copy (src/core/BufferGeometry.js:1357-1462) clones
+# the index and every attribute array, the groups and the draw range.
+_cloned_geometry_attributes(attributes::Dict{Symbol, BufferAttribute}) =
+    Dict{Symbol, BufferAttribute}(name => BufferAttribute(copy(attribute.data),
+                                                          attribute.item_size)
+                                  for (name, attribute) in attributes)
+
+"""
+    copy!(dest::BufferGeometry, source::BufferGeometry) -> dest
+
+Replace the contents of `dest` with copies of the position, normal, uv and
+index buffers, named attributes, groups and draw range of `source` (three.js
+`BufferGeometry.copy`). No array is shared afterwards.
+"""
+function Base.copy!(dest::BufferGeometry, source::BufferGeometry)
+    dest === source && return dest
+    dest.positions = copy(source.positions)
+    dest.normals = copy(source.normals)
+    dest.uvs = copy(source.uvs)
+    dest.indices = copy(source.indices)
+    dest.n_vertices = source.n_vertices
+    dest.n_faces = source.n_faces
+    dest.attributes = _cloned_geometry_attributes(source.attributes)
+    dest.groups = copy(source.groups)
+    dest.draw_range = source.draw_range
+    return dest
+end
+
+"""
+    clone(geometry::BufferGeometry) -> BufferGeometry
+
+A new geometry with copies of every buffer of `geometry` (three.js
+`BufferGeometry.clone`); see [`copy!`](@ref).
+"""
+clone(source::BufferGeometry) = copy!(BufferGeometry(), source)
+
+# three.js Material.copy (src/materials/Material.js:1119-1168) shares textures
+# and copies the clipping-plane array (each plane is cloned; Diff3D planes are
+# immutable values). ShaderMaterial.copy (ShaderMaterial.js:278-286) clones
+# the uniforms with UniformsUtils.cloneUniforms, which slices array values.
+_material_clone_value(value) = value
+_material_clone_value(value::Vector{<:Plane}) = copy(value)
+_material_clone_value(value::Dict{String, Any}) =
+    Dict{String, Any}(name => (uniform isa AbstractArray ? copy(uniform) : uniform)
+                      for (name, uniform) in value)
+
+"""
+    clone(material::AbstractMaterial) -> material
+
+A material of the same type and settings (three.js `Material.clone`).
+Diff3D materials are immutable, so only the mutable containers are new: the
+`clipping_planes` vector and, for a `ShaderMaterial`, the `uniforms`
+dictionary with its array values copied. Textures and other references are
+shared, as three.js `Material.copy` shares them.
+"""
+function clone(source::M) where {M<:AbstractMaterial}
+    values = ntuple(index -> _material_clone_value(getfield(source, index)),
+                    fieldcount(M))
+    return M(values...)
+end
+
+"""
+    box3_from_buffer_attribute(attribute::BufferAttribute) -> Box3
+
+Box of the first three components of every item of `attribute` (three.js
+`Box3.setFromBufferAttribute`). Items with fewer than three components take
+`0` for the missing ones; three.js instead reads the next item's values there
+(`BufferAttribute.getY`/`getZ` index past the item, BufferAttribute.js:487).
+"""
+function box3_from_buffer_attribute(attribute::BufferAttribute)
+    size = attribute.item_size
+    1 <= size || throw(ArgumentError("box3_from_buffer_attribute needs a positive item size"))
+    data = attribute.data
+    rem(length(data), size) == 0 ||
+        throw(ArgumentError("box3_from_buffer_attribute data length is not a multiple of the item size"))
+    box = Box3()
+    for start in 1:size:length(data)
+        z = zero(eltype(data))
+        box = box3_expand_by_point(box, Vec3(data[start],
+                                             size >= 2 ? data[start + 1] : z,
+                                             size >= 3 ? data[start + 2] : z))
+    end
+    return box
+end
+
+# three.js Frustum.intersectsSprite (Frustum.js:174-183): a sphere of radius
+# √2/2 (the unit quad's half diagonal) plus the anchor's distance from the
+# quad centre, around the sprite origin.
+const _SPRITE_FRUSTUM_RADIUS = 0.7071067811865476
+
+"""
+    frustum_intersects_object(frustum, object) -> Bool
+
+Whether the bounding sphere of `object`'s geometry, placed by its world matrix,
+reaches into `frustum` (three.js `Frustum.intersectsObject`). For an
+`InstancedMesh` the sphere bounds every instance, as three.js
+`InstancedMesh.computeBoundingSphere` does, and for a `SkinnedMesh` it bounds
+the posed vertices (morph targets, then skinning, in the mesh's local space),
+as three.js `SkinnedMesh.computeBoundingSphere` does. three.js computes the
+skinned sphere once and keeps it; this function uses the current pose on every
+call. The object needs a `geometry`.
+"""
+function frustum_intersects_object(f::Frustum, object::AbstractObject3D)
+    hasproperty(object, :geometry) ||
+        throw(ArgumentError("frustum_intersects_object needs an object with a geometry"))
+    geometry = getproperty(object, :geometry)
+    geometry isa BufferGeometry ||
+        throw(ArgumentError("frustum_intersects_object needs a BufferGeometry"))
+    sphere = if object isa SkinnedMesh
+        _skinned_bounding_sphere(object)
+    elseif object isa InstancedMesh
+        _instanced_bounding_sphere(compute_bounding_sphere(geometry),
+                                   object.instance_matrices)
+    else
+        compute_bounding_sphere(geometry)
+    end
+    world = compute_world_matrix(object)
+    return frustum_intersects_sphere(f, sphere_apply_matrix4(sphere, world))
+end
+
+# three.js SkinnedMesh.computeBoundingSphere (SkinnedMesh.js:138-159): an empty
+# sphere expanded by every posed vertex (SkinnedMesh.getVertexPosition: morph
+# targets, then the bone transform) in the mesh's local space.
+function _skinned_bounding_sphere(sm::SkinnedMesh)
+    sphere = BoundingSphere(Vec3(0.0, 0.0, 0.0), -1.0)
+    for point in apply_skinning(sm)
+        sphere = sphere_expand_by_point(sphere, point)
+    end
+    return sphere
+end
+
+# InstancedMesh.computeBoundingSphere (InstancedMesh.js:155-180): the union of
+# the geometry sphere transformed by each instance matrix.
+function _instanced_bounding_sphere(sphere::BoundingSphere, matrices::Vector{<:Mat4})
+    result = BoundingSphere(Vec3(0.0, 0.0, 0.0), -1.0)
+    for matrix in matrices
+        result = sphere_union(result, sphere_apply_matrix4(sphere, matrix))
+    end
+    return result
+end
+
+"""
+    frustum_intersects_sprite(frustum, sprite::Sprite) -> Bool
+
+three.js `Frustum.intersectsSprite`: a sphere of radius `√2/2` plus the
+distance of `sprite.center` from `(0.5, 0.5)`, centred on the sprite origin and
+placed by its world matrix.
+"""
+function frustum_intersects_sprite(f::Frustum, sprite::Sprite)
+    center = sprite.center
+    offset = sqrt((0.5 - center.x)^2 + (0.5 - center.y)^2)
+    sphere = BoundingSphere(Vec3(0.0, 0.0, 0.0), _SPRITE_FRUSTUM_RADIUS + offset)
+    return frustum_intersects_sphere(f, sphere_apply_matrix4(sphere,
+                                                             compute_world_matrix(sprite)))
+end
+
+# ========================== Box3 from objects ==========================
+# three.js Box3.setFromObject and Box3.expandByObject (src/math/Box3.js:139-161,
+# 303-385).
+
+"""
+    box3_expand_by_object(box, object; precise=false) -> Box3
+    box3_from_object(object; precise=false) -> Box3
+
+World-axis-aligned box of `object` and all of its descendants, joined with
+`box` (three.js `Box3.expandByObject`; `box3_from_object` starts from the empty
+box, as `Box3.setFromObject` does). Every node is visited, visible or not.
+
+For each node with a geometry, the default bounds its local box placed by the
+world matrix: the geometry's [`compute_bounding_box`](@ref) (which covers its
+morph targets), for an `InstancedMesh` the union of that box under every
+instance matrix (three.js `InstancedMesh.computeBoundingBox`), and for a
+`SkinnedMesh` the box of its posed vertices (`SkinnedMesh.computeBoundingBox`;
+three.js keeps that box from its first use, this uses the current pose). With
+`precise=true` each vertex is placed by the world matrix instead, giving a
+tighter box: a `Mesh` or `SkinnedMesh` uses its posed vertices (current morph
+influences, and skinning; three.js `Mesh.getVertexPosition`), lines and points
+their stored positions, and an `InstancedMesh` keeps the default bounds, as in
+three.js. A `Sprite` is bounded by its unit quad `[-0.5, 0.5]² × {0}`, the
+geometry three.js gives every sprite.
+"""
+function box3_expand_by_object(box::Box3, object::AbstractObject3D; precise::Bool=false)
+    result = _box3_union_object_geometry(box, object, precise)
+    for child in get_children(object)
+        result = box3_expand_by_object(result, child; precise=precise)
+    end
+    return result
+end
+
+@doc (@doc box3_expand_by_object)
+box3_from_object(object::AbstractObject3D; precise::Bool=false) =
+    box3_expand_by_object(Box3(), object; precise=precise)
+
+# three.js Sprite.js:20-37: the shared quad every sprite draws.
+const _SPRITE_QUAD_BOX = Box3(Vec3(-0.5, -0.5, 0.0), Vec3(0.5, 0.5, 0.0))
+
+function _box3_union_object_geometry(box::Box3, object::AbstractObject3D,
+                                     precise::Bool)
+    if object isa Sprite
+        return box3_union(box, box3_apply_matrix4(_SPRITE_QUAD_BOX,
+                                                  compute_world_matrix(object)))
+    end
+    object isa Union{Mesh, SkinnedMesh, InstancedMesh, LineObject, LineSegments,
+                     LineLoop, PointsObject} || return box
+    geometry = object.geometry
+    geometry isa BufferGeometry ||
+        throw(ArgumentError("box3_expand_by_object needs a BufferGeometry on $(nameof(typeof(object)))"))
+    world = compute_world_matrix(object)
+    if precise && !(object isa InstancedMesh)
+        for point in _box3_object_vertices(object, geometry)
+            box = box3_expand_by_point(box, mat4_transform_point(world, point))
+        end
+        return box
+    end
+    local_box = if object isa SkinnedMesh
+        box3_from_points(apply_skinning(object))
+    elseif object isa InstancedMesh
+        _instanced_bounding_box(compute_bounding_box(geometry), object.instance_matrices)
+    else
+        compute_bounding_box(geometry)
+    end
+    return box3_union(box, box3_apply_matrix4(local_box, world))
+end
+
+# The vertices `expandByObject(object, true)` visits: the posed positions of a
+# mesh (`Mesh.getVertexPosition` and `SkinnedMesh.getVertexPosition`), the
+# stored positions of lines and points (`Vector3.fromBufferAttribute`).
+function _box3_object_vertices(object::AbstractObject3D, geometry::BufferGeometry)
+    object isa SkinnedMesh && return apply_skinning(object)
+    _validate_geometry_vertices(geometry, "box3_expand_by_object")
+    if object isa Mesh
+        morphed = _object_morph_positions(object, geometry)
+        morphed === nothing || return morphed
+    end
+    return [get_vertex(geometry, index) for index in 1:geometry.n_vertices]
+end
+
+# three.js InstancedMesh.computeBoundingBox (InstancedMesh.js:115-144): the
+# union of the geometry box placed by each instance matrix.
+function _instanced_bounding_box(box::Box3, matrices::Vector{<:Mat4})
+    result = Box3()
+    for matrix in matrices
+        result = box3_union(result, box3_apply_matrix4(box, matrix))
+    end
+    return result
 end

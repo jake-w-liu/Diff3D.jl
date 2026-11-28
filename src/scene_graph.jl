@@ -14,7 +14,11 @@ mutable struct Object3D <: AbstractObject3D
     visible::Bool
     name::String
     id::Int
+    render_order::Float64  # three.js Object3D.renderOrder
 end
+
+# Field layout before `render_order` was added (three.js default 0).
+Object3D(args::Vararg{Any,8}) = Object3D(args..., 0.0)
 
 # Global ID counter
 const _OBJECT_ID_COUNTER = Threads.Atomic{Int}(0)
@@ -98,6 +102,16 @@ end
     isfinite(scale.x) && isfinite(scale.y) && isfinite(scale.z) ||
         _throw_object_transform(kind, :scale)
     return nothing
+end
+
+# `_validate_object_transform` without raising.
+@inline function _object_transform_finite(obj::AbstractObject3D)
+    position = get_position(obj)
+    rotation = get_rotation(obj)
+    scale = get_scale(obj)
+    return isfinite(position.x) && isfinite(position.y) && isfinite(position.z) &&
+           isfinite(rotation.x) && isfinite(rotation.y) && isfinite(rotation.z) &&
+           isfinite(scale.x) && isfinite(scale.y) && isfinite(scale.z)
 end
 
 function compute_local_matrix(obj::AbstractObject3D)
@@ -256,7 +270,11 @@ mutable struct Scene <: AbstractObject3D
     id::Int
     background::Color3{Float64}
     fog::Union{Nothing, AbstractFog}
+    render_order::Float64  # three.js Object3D.renderOrder
 end
+
+# Field layout before `render_order` was added (three.js default 0).
+Scene(args::Vararg{Any,10}) = Scene(args..., 0.0)
 
 function Scene(; background=Color3(0.0, 0.0, 0.0), fog=nothing, name="Scene")
     fog === nothing || fog isa AbstractFog ||
@@ -286,7 +304,11 @@ mutable struct Group <: AbstractObject3D
     visible::Bool
     name::String
     id::Int
+    render_order::Float64  # three.js Object3D.renderOrder
 end
+
+# Field layout before `render_order` was added (three.js default 0).
+Group(args::Vararg{Any,8}) = Group(args..., 0.0)
 
 function Group(; name="Group")
     Group(Vec3(), Euler(), Vec3(1.0, 1.0, 1.0),
@@ -319,7 +341,12 @@ mutable struct Mesh <: AbstractObject3D
     receive_shadow::Bool
     morph_target_influences::Vector{Float64}
     morph_target_names::Vector{String}
+    render_order::Float64  # three.js Object3D.renderOrder
+    _render_group_order::Union{Nothing, Float64}  # group order of a render proxy's source
 end
+
+# Field layout before `render_order` was added (three.js default 0).
+Mesh(args::Vararg{Any,15}) = Mesh(args..., 0.0, nothing)
 
 function Mesh(geometry, material; name="Mesh", flat_shading=nothing,
               cast_shadow::Bool=false, receive_shadow::Bool=false,
@@ -365,7 +392,11 @@ mutable struct LineObject <: AbstractObject3D
     material::Any
     morph_target_influences::Vector{Float64}
     morph_target_names::Vector{String}
+    render_order::Float64  # three.js Object3D.renderOrder
 end
+
+# Field layout before `render_order` was added (three.js default 0).
+LineObject(args::Vararg{Any,12}) = LineObject(args..., 0.0)
 
 function LineObject(geometry, material; name="Line",
                     morph_target_influences=Float64[], morph_target_names=String[])
@@ -409,7 +440,11 @@ mutable struct PointsObject <: AbstractObject3D
     material::Any
     morph_target_influences::Vector{Float64}
     morph_target_names::Vector{String}
+    render_order::Float64  # three.js Object3D.renderOrder
 end
+
+# Field layout before `render_order` was added (three.js default 0).
+PointsObject(args::Vararg{Any,12}) = PointsObject(args..., 0.0)
 
 function PointsObject(geometry, material; name="Points",
                       morph_target_influences=Float64[], morph_target_names=String[])

@@ -996,6 +996,20 @@ function _web_write_layer_mask(io::IO, object::AbstractObject3D, num_buf::Vector
     return nothing
 end
 
+# three.js groupOrder and renderOrder (WebGLRenderLists.js:1-51), written only
+# when non-zero; the viewer reads a missing value as 0. JSON has no infinity,
+# and 1e999 parses to one.
+function _web_write_render_order(io::IO, object::AbstractObject3D, num_buf::Vector{UInt8})
+    group, order = _render_order_key(object)
+    for (label, value) in ((",\"groupOrder\":", group), (",\"renderOrder\":", order))
+        iszero(value) && continue
+        write(io, label)
+        isinf(value) ? write(io, value > 0 ? "1e999" : "-1e999") :
+                       _js_write_num(io, value, num_buf)
+    end
+    return nothing
+end
+
 function _web_write_camera_pose_fields(io::IO, camera, num_buf::Vector{UInt8})
     write(io, ",\"localTarget\":")
     _js_write_vec(io, camera.target, num_buf)
@@ -2860,6 +2874,7 @@ function _web_write_drawable_json(io::IO, obj, world::Mat4, num_buf::Vector{UInt
     effective_visible = visibility_extra_id == transform_obj.id ? visibility_extra_value : is_visible(obj)
     write(io, effective_visible ? "true" : "false")
     _web_write_layer_mask(io, transform_obj, num_buf)
+    _web_write_render_order(io, transform_obj, num_buf)
     write(io, ",\"castShadow\":")
     write(io, object_casts_shadow(obj) ? "true" : "false")
     write(io, ",\"receiveShadow\":")
@@ -4348,7 +4363,8 @@ end
 
 function _web_write_webgl_html(io::IO, data_json::String, title::String;
                                light_caps=(dir=4, point=4, spot=4, hemi=4, rect=4),
-                               extra_rewrites=(), chrome::Bool=true)
+                               extra_rewrites=(), chrome::Bool=true,
+                               render_order::Bool=false)
     _web_validate_title(title)
     max_dir = max(1, Int(light_caps.dir))
     max_point = max(1, Int(light_caps.point))
@@ -6033,8 +6049,39 @@ function _web_write_webgl_html(io::IO, data_json::String, title::String;
             "const MAX_DIR=$max_dir, MAX_POINT=$max_point, MAX_SPOT=$max_spot, MAX_HEMI=$max_hemi, MAX_RECT=$max_rect;",
     )
     all_rewrites = isempty(extra_rewrites) ? rewrites : (rewrites..., extra_rewrites...)
+    render_order && (all_rewrites = (all_rewrites..., _WEB_RENDER_ORDER_REWRITES...))
     _web_write_rewritten(io, html, all_rewrites)
     return nothing
+end
+
+# three.js sorts both render lists by group order and renderOrder first
+# (WebGLRenderLists.js:1-51). The viewer gets that sort only when an exported
+# node has a non-zero order, so exports whose orders are all 0 keep the 2.0 page
+# byte for byte; with every order 0 both sorts give the same draw order.
+const _WEB_RENDER_ORDER_REWRITES = (
+    "  // (:31-51). Diff3D has no renderOrder or group order, and its immutable materials carry no\n  // creation id, so the shader program stands in for material.id." =>
+        "  // (:31-51), both keyed first by group order and renderOrder. Diff3D's immutable materials carry\n  // no creation id, so the shader program stands in for material.id.",
+    "  function painterSortStable(a,b){ if(" =>
+        "  function renderOrderCompare(a,b){ const ga=a.groupOrder||0, gb=b.groupOrder||0; if(ga!==gb) return ga<gb?-1:1; const ra=a.renderOrder||0, rb=b.renderOrder||0; return ra===rb?0:(ra<rb?-1:1); }\n  function painterSortStable(a,b){ const order=renderOrderCompare(a,b); if(order!==0) return order; if(",
+    "  function reversePainterSortStable(a,b){ if(" =>
+        "  function reversePainterSortStable(a,b){ const order=renderOrderCompare(a,b); if(order!==0) return order; if(",
+)
+
+# Whether any node of an exported scene has a non-zero (or NaN) render order.
+function _web_cases_have_render_order(cases::AbstractVector{WebGLExportCase})
+    for case in cases
+        _web_node_has_render_order(case.scene) && return true
+    end
+    return false
+end
+
+function _web_node_has_render_order(node::AbstractObject3D)
+    value = getfield(node, :render_order)::Float64
+    iszero(value) || return true
+    for child in get_children(node)
+        _web_node_has_render_order(child) && return true
+    end
+    return false
 end
 
 function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=4, spot=4, hemi=4, rect=4), chrome::Bool=true)
@@ -6093,7 +6140,8 @@ function save_webgl_html(path::String, cases::AbstractVector{WebGLExportCase};
     destination = abspath(path)
     mktemp(dirname(destination)) do temporary, io
         _web_write_webgl_html(io, data_marker, title; light_caps, chrome,
-                              extra_rewrites=(data_rewrite,))
+                              extra_rewrites=(data_rewrite,),
+                              render_order=_web_cases_have_render_order(cases))
         data_inserted[] || error("WebGL HTML data insertion marker missing")
         close(io)
         if isfile(destination) && !islink(destination)

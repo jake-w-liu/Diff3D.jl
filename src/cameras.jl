@@ -62,7 +62,11 @@ mutable struct PerspectiveCamera <: AbstractCamera
     film_gauge::Float64
     film_offset::Float64
     view::Union{Nothing, CameraView}
+    render_order::Float64  # three.js Object3D.renderOrder
 end
+
+# Field layout before `render_order` was added (three.js default 0).
+PerspectiveCamera(args::Vararg{Any,21}) = PerspectiveCamera(args..., 0.0)
 
 # Earlier field layouts: without `rotation_driven`, and without the film,
 # focus and view-offset fields added after it (three.js defaults).
@@ -143,6 +147,17 @@ end
     node isa InstancedMesh && return f(node)::R
     node isa LineObject && return f(node)::R
     node isa PointsObject && return f(node)::R
+    node isa LineSegments && return f(node)::R
+    node isa LineLoop && return f(node)::R
+    node isa Sprite && return f(node)::R
+    node isa LOD && return f(node)::R
+    node isa AmbientLight && return f(node)::R
+    node isa DirectionalLight && return f(node)::R
+    node isa PointLight && return f(node)::R
+    node isa SpotLight && return f(node)::R
+    node isa HemisphereLight && return f(node)::R
+    node isa RectAreaLight && return f(node)::R
+    node isa LightProbe && return f(node)::R
     return f(node)::R
 end
 
@@ -610,7 +625,11 @@ mutable struct OrthographicCamera <: AbstractCamera
     ignore_parent_scale::Bool
     rotation_driven::Bool
     view::Union{Nothing, CameraView}
+    render_order::Float64  # three.js Object3D.renderOrder
 end
+
+# Field layout before `render_order` was added (three.js default 0).
+OrthographicCamera(args::Vararg{Any,20}) = OrthographicCamera(args..., 0.0)
 
 # Earlier field layouts: without `rotation_driven`, and without `view`.
 OrthographicCamera(args::Vararg{Any,18}) = OrthographicCamera(args..., false)
@@ -791,6 +810,16 @@ parent's frame, so this equals three.js for an unparented camera or a parent
 without rotation. A target-aimed camera also stores the parent-space `target`
 (and, when `up` is given, the parent-space `up`) that reproduce this aim, so
 its view matrix equals the view implied by the new `rotation`.
+
+A target-aimed camera has two orientations. Its view comes from `position`,
+`target` and `up`; its `rotation`, and with it [`compute_world_matrix`](@ref),
+[`get_world_quaternion`](@ref) and the world transforms of its children, is
+set only by `look_at!`. Assigning `target` (or moving `position`) changes the
+view alone, so call `look_at!` afterwards when children or the world
+quaternion must follow the aim, or use `rotation_driven=true`, which has one
+orientation as in three.js. Diff3D 2.x does not derive the world matrix from
+the aim, because that would move the children of existing target-aimed
+cameras whose `rotation` differs from their view.
 """
 function look_at!(camera::AbstractCamera, target::Vec3;
                   up::Union{Nothing, Vec3}=nothing)
@@ -882,6 +911,20 @@ mutable struct StereoCamera
     eye_sep::Float64
     cameraL::PerspectiveCamera
     cameraR::PerspectiveCamera
+    aspect_multiplier::Float64  # three.js StereoCamera.aspect
+end
+
+# Field layout before `aspect_multiplier` was added (three.js default 1).
+StereoCamera(eye_sep, cameraL::PerspectiveCamera, cameraR::PerspectiveCamera) =
+    StereoCamera(eye_sep, cameraL, cameraR, 1.0)
+
+function _validated_stereo_aspect_multiplier(multiplier)
+    multiplier isa Real && !(multiplier isa Bool) ||
+        throw(ArgumentError("StereoCamera aspect_multiplier must be finite and positive"))
+    value = Float64(multiplier)
+    isfinite(value) && value > 0.0 ||
+        throw(ArgumentError("StereoCamera aspect_multiplier must be finite and positive"))
+    return value
 end
 
 function _validated_stereo_eye_sep(eye_sep)
@@ -893,11 +936,12 @@ function _validated_stereo_eye_sep(eye_sep)
     return separation
 end
 
-function StereoCamera(; eye_sep=0.064, aspect=1.0)
+function StereoCamera(; eye_sep=0.064, aspect=1.0, aspect_multiplier=1.0)
     StereoCamera(
         _validated_stereo_eye_sep(eye_sep),
         PerspectiveCamera(aspect=aspect),
         PerspectiveCamera(aspect=aspect),
+        _validated_stereo_aspect_multiplier(aspect_multiplier),
     )
 end
 
@@ -911,7 +955,11 @@ its world right axis, with parallel view directions, and uses an off-axis
 equal three.js's with the near-plane shift `±(eye_sep/2)·near/focus`. The
 shift is stored as the eyes' `film_offset` (in mm of `film_gauge`), so
 [`projection_matrix`](@ref) and every renderer reproduce it. The eyes copy
-`fov`, `aspect`, `near`, `far`, `zoom`, `focus` and `film_gauge`; as in
+`fov`, `near`, `far`, `zoom`, `focus` and `film_gauge`, and take the aspect
+ratio `camera.aspect * stereo.aspect_multiplier`, where `aspect_multiplier`
+(keyword of `StereoCamera`, default 1) is three.js `StereoCamera.aspect`, for
+example `0.5` for side-by-side output; the `aspect` keyword of `StereoCamera`
+only sets the eyes' aspect ratio before the first update. As in
 three.js, the vertical part of an enabled view offset of `camera` is kept and
 its horizontal part and film offset are replaced by the stereo frustum.
 """
@@ -942,18 +990,23 @@ function stereo_update!(s::StereoCamera, cam::PerspectiveCamera)
         mat4_get(view, 1, 3),
     )
     half = _validated_stereo_eye_sep(s.eye_sep) / 2
+    multiplier = _validated_stereo_aspect_multiplier(s.aspect_multiplier)
+    # three.js cache.aspect = camera.aspect * this.aspect (StereoCamera.js:97).
+    eye_aspect = cam.aspect * multiplier
+    isfinite(eye_aspect) && eye_aspect > 0.0 ||
+        throw(ArgumentError("StereoCamera aspect_multiplier gives an unrepresentable eye aspect"))
     # three.js shifts the near-plane window by eyeSepOnProjection =
     # (eyeSep/2)·near/focus (src/cameras/StereoCamera.js:116-143). A film
     # offset shifts it by near·film_offset/film_width, so the equivalent film
     # offset is (eyeSep/2)·film_width/focus: positive (window to the right)
     # for the left eye.
-    film_width = film_gauge * min(cam.aspect, 1.0)
+    film_width = film_gauge * min(eye_aspect, 1.0)
     film_shift = half * film_width / focus
     isfinite(film_shift) ||
         throw(ArgumentError("StereoCamera eye_sep and focus produce an unrepresentable eye frustum"))
     for (sub, sign) in ((s.cameraL, -1.0), (s.cameraR, 1.0))
         off = right * (sign * half)
-        sub.fov = cam.fov; sub.aspect = cam.aspect
+        sub.fov = cam.fov; sub.aspect = eye_aspect
         sub.near = cam.near; sub.far = cam.far; sub.zoom = zoom; sub.up = camera_up
         sub.focus = focus; sub.film_gauge = film_gauge
         sub.film_offset = -sign * film_shift

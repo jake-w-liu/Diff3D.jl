@@ -1543,10 +1543,13 @@ function _render_pooled_smooth_meshes!(rt::RenderTarget, meshes::Vector{Mesh},
                                        worlds::Vector{Mat4{Float64}}, lights,
                                        proj::Mat4, view::Mat4, near, cam_pos::Vec3,
                                        ortho_dir, scratch::RenderCache,
-                                       ylo::Int, yhi::Int)
+                                       ylo::Int, yhi::Int,
+                                       order_keys::Vector{Float64}=_DEFAULT_RENDER_ORDER_KEYS,
+                                       order_bucket::Int=1, order_count::Int=1)
     inv_log_far = rt.view_state === nothing ? 0.0 : rt.view_state.inv_log_far
     for i in eachindex(meshes)
         mesh = meshes[i]
+        _in_render_order_bucket(mesh, order_keys, order_bucket, order_count) || continue
         mat = _mesh_material(mesh)
         (_mesh_is_flat(mesh, :flat) || is_transparent_material(mat) ||
          material_wireframe(mat)) && continue
@@ -1598,32 +1601,47 @@ function render_pooled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
                                           cache.skinned, cache.skinned_meshes,
                                           cache.skinned_matrices, cache.morph_positions; layer_mask=layer_mask)
     _collect_lights_into!(cache.lights, scene, layer_mask)
-    for i in eachindex(cache.meshes)
-        mesh = cache.meshes[i]
-        mat = _mesh_material(mesh)
-        (!is_transparent_material(mat) && !material_wireframe(mat)) || continue
-        _mesh_is_flat(mesh, :flat) || continue
-        _rasterize_flat_mesh_pooled_from_mesh!(rt, mesh, cache.mesh_worlds[i],
-                                               cache.lights, proj, view, near,
-                                               camera_position, cache.tri, cache.clipped,
-                                               cache.sx, cache.sy, cache.sz, cache.colors,
-                                               1, rt.width, 1, rt.height, ortho_dir,
-                                               cache.smooth_tri, cache.smooth_clipped,
-                                               cache.smooth_iw)
+    try
+        _arm_light_world_cache!(cache.lights)
+        # Ascending (group order, render order) as `render!` draws them; the
+        # traversal order within one key is unchanged.
+        order_count, order_keys = _render_order_buckets(cache.mesh_depths, cache.meshes,
+                                                        cache.instanced)
+        for order_bucket in 1:order_count
+            for i in eachindex(cache.meshes)
+                mesh = cache.meshes[i]
+                _in_render_order_bucket(mesh, order_keys, order_bucket, order_count) ||
+                    continue
+                mat = _mesh_material(mesh)
+                (!is_transparent_material(mat) && !material_wireframe(mat)) || continue
+                _mesh_is_flat(mesh, :flat) || continue
+                _rasterize_flat_mesh_pooled_from_mesh!(rt, mesh, cache.mesh_worlds[i],
+                                                       cache.lights, proj, view, near,
+                                                       camera_position, cache.tri, cache.clipped,
+                                                       cache.sx, cache.sy, cache.sz, cache.colors,
+                                                       1, rt.width, 1, rt.height, ortho_dir,
+                                                       cache.smooth_tri, cache.smooth_clipped,
+                                                       cache.smooth_iw)
+            end
+            for (instanced_slot, im) in pairs(cache.instanced)
+                _validate_instanced_mesh(im, "render_pooled!")
+                _in_render_order_bucket(im, order_keys, order_bucket, order_count) ||
+                    continue
+                mat = _instanced_material(im)
+                (!is_transparent_material(mat) && !material_wireframe(mat)) ||
+                    continue
+                base = cache.instanced_worlds[instanced_slot]
+                _rasterize_instanced_geo_flat_pooled_from_instanced!(
+                    rt, im, instanced_slot, base, cache, proj, view, near, camera_position,
+                    ortho_dir)
+            end
+            _render_pooled_smooth_meshes!(rt, cache.meshes, cache.mesh_worlds, cache.lights,
+                                          proj, view, near, camera_position, ortho_dir, cache,
+                                          1, rt.height, order_keys, order_bucket, order_count)
+        end
+    finally
+        _disarm_light_world_cache!(cache.lights)
     end
-    for (instanced_slot, im) in pairs(cache.instanced)
-        _validate_instanced_mesh(im, "render_pooled!")
-        mat = _instanced_material(im)
-        (!is_transparent_material(mat) && !material_wireframe(mat)) ||
-            continue
-        base = cache.instanced_worlds[instanced_slot]
-        _rasterize_instanced_geo_flat_pooled_from_instanced!(
-            rt, im, instanced_slot, base, cache, proj, view, near, camera_position,
-            ortho_dir)
-    end
-    _render_pooled_smooth_meshes!(rt, cache.meshes, cache.mesh_worlds, cache.lights,
-                                  proj, view, near, camera_position, ortho_dir, cache,
-                                  1, rt.height)
     return original_target
 end
 
@@ -3443,7 +3461,9 @@ function _render_tiled_band!(rt::RenderTarget, meshes::Vector{Mesh},
                              camera_position::Vec3, proj::Mat4, view::Mat4,
                              near, ortho_dir, thread_caches::Vector{RenderCache},
                              cache_idx::Int, ylo::Int, yhi::Int,
-                             wireframe_items::Vector{_TransparentRenderItem})
+                             wireframe_items::Vector{_TransparentRenderItem},
+                             order_keys::Vector{Float64}=_DEFAULT_RENDER_ORDER_KEYS,
+                             order_count::Int=1)
     ylo > yhi && return nothing
     thread_cache = thread_caches[cache_idx]
     tri = thread_cache.tri
@@ -3453,47 +3473,54 @@ function _render_tiled_band!(rt::RenderTarget, meshes::Vector{Mesh},
     sy = thread_cache.sy
     sz = thread_cache.sz
     colorbuf = thread_cache.colors
-    for i in eachindex(meshes)
-        mesh = meshes[i]
-        mat = _mesh_material(mesh)
-        material_wireframe(mat) && continue
-        (is_transparent_material(mat) || !_mesh_is_flat(mesh, :flat)) && continue
-        _rasterize_flat_mesh_pooled_from_mesh!(rt, mesh, mesh_worlds[i],
-                                               lights, proj, view, near, camera_position,
-                                               tri, clipped, sx, sy, sz, colorbuf,
-                                               1, rt.width, ylo, yhi, ortho_dir,
-                                               thread_cache.smooth_tri,
-                                               thread_cache.smooth_clipped,
-                                               thread_cache.smooth_iw)
-    end
-    for (instanced_slot, im) in pairs(instanced)
-        _instanced_triangle_drawable(im) || continue
-        mat = _instanced_material(im)
-        is_transparent_material(mat) && continue
-        base = instanced_worlds[instanced_slot]
-        if material_wireframe(mat)
-            _render_tiled_instanced_wireframes!(
-                rt, im, instanced_slot, base, instanced_material_states,
-                proj, view, near, ylo, yhi, thread_cache, 0)
-            continue
+    # Ascending (group order, render order) as `render!` draws its opaque pass.
+    for order_bucket in 1:order_count
+        for i in eachindex(meshes)
+            mesh = meshes[i]
+            _in_render_order_bucket(mesh, order_keys, order_bucket, order_count) || continue
+            mat = _mesh_material(mesh)
+            material_wireframe(mat) && continue
+            (is_transparent_material(mat) || !_mesh_is_flat(mesh, :flat)) && continue
+            _rasterize_flat_mesh_pooled_from_mesh!(rt, mesh, mesh_worlds[i],
+                                                   lights, proj, view, near, camera_position,
+                                                   tri, clipped, sx, sy, sz, colorbuf,
+                                                   1, rt.width, ylo, yhi, ortho_dir,
+                                                   thread_cache.smooth_tri,
+                                                   thread_cache.smooth_clipped,
+                                                   thread_cache.smooth_iw)
         end
-        _rasterize_tiled_instanced_geo_flat_pooled_from_instanced!(
-            rt, im, instanced_slot, base, instanced_material_states, lights, proj,
-            view, near, camera_position, tri, clipped, sx, sy, sz, colorbuf,
-            ortho_dir, ylo, yhi, thread_cache.smooth_tri,
-            thread_cache.smooth_clipped, thread_cache.smooth_iw)
-    end
-    _render_pooled_smooth_meshes!(rt, meshes, mesh_worlds, lights, proj, view, near,
-                                  camera_position, ortho_dir, thread_cache, ylo, yhi)
-    # Same order as `render!`: opaque mesh wireframes after the smooth pass,
-    # then blended wireframes back to front.
-    for i in eachindex(meshes)
-        mesh = meshes[i]
-        mat = _mesh_material(mesh)
-        (material_wireframe(mat) && !_primitive_transparent(mat)) || continue
-        _render_wireframe_mesh_from_mesh!(rt, mesh, mesh_worlds[i],
-                                          proj, view, near, 1, rt.width,
-                                          ylo, yhi, thread_cache)
+        for (instanced_slot, im) in pairs(instanced)
+            _instanced_triangle_drawable(im) || continue
+            _in_render_order_bucket(im, order_keys, order_bucket, order_count) || continue
+            mat = _instanced_material(im)
+            is_transparent_material(mat) && continue
+            base = instanced_worlds[instanced_slot]
+            if material_wireframe(mat)
+                _render_tiled_instanced_wireframes!(
+                    rt, im, instanced_slot, base, instanced_material_states,
+                    proj, view, near, ylo, yhi, thread_cache, 0)
+                continue
+            end
+            _rasterize_tiled_instanced_geo_flat_pooled_from_instanced!(
+                rt, im, instanced_slot, base, instanced_material_states, lights, proj,
+                view, near, camera_position, tri, clipped, sx, sy, sz, colorbuf,
+                ortho_dir, ylo, yhi, thread_cache.smooth_tri,
+                thread_cache.smooth_clipped, thread_cache.smooth_iw)
+        end
+        _render_pooled_smooth_meshes!(rt, meshes, mesh_worlds, lights, proj, view, near,
+                                      camera_position, ortho_dir, thread_cache, ylo, yhi,
+                                      order_keys, order_bucket, order_count)
+        # Same order as `render!`: opaque mesh wireframes after the smooth pass,
+        # then blended wireframes back to front.
+        for i in eachindex(meshes)
+            mesh = meshes[i]
+            _in_render_order_bucket(mesh, order_keys, order_bucket, order_count) || continue
+            mat = _mesh_material(mesh)
+            (material_wireframe(mat) && !_primitive_transparent(mat)) || continue
+            _render_wireframe_mesh_from_mesh!(rt, mesh, mesh_worlds[i],
+                                              proj, view, near, 1, rt.width,
+                                              ylo, yhi, thread_cache)
+        end
     end
     for item in wireframe_items
         if item.kind == _TRANSPARENT_WIREFRAME_ITEM
@@ -3589,7 +3616,7 @@ function _tiled_transparent_wireframe_items!(items::Vector{_TransparentRenderIte
             push!(items, _TransparentRenderItem(
                 _render_sort_depth(world, view, center),
                 _TRANSPARENT_INSTANCED_WIREFRAME_ITEM, instanced_slot,
-                instance_index, im.id))
+                instance_index, im.id, _render_order_key(im)...))
         end
     end
     @inbounds for index in eachindex(meshes)
@@ -3602,7 +3629,8 @@ function _tiled_transparent_wireframe_items!(items::Vector{_TransparentRenderIte
             _render_sort_depth(
                 mesh_worlds[index], view,
                 _render_sort_center(_mesh_geometry(mesh), bounds_cache)),
-            _TRANSPARENT_WIREFRAME_ITEM, index, 0, mesh.id))
+            _TRANSPARENT_WIREFRAME_ITEM, index, 0, mesh.id,
+            _render_order_key(mesh)...))
     end
     isempty(items) || _sort_transparent_items!(items)
     return items
@@ -3699,36 +3727,43 @@ function render_tiled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
         shared_cache.transparent_items, meshes, mesh_worlds, instanced,
         instanced_worlds, view, frustum_from_matrix(proj * view),
         (shared_cache.bound_geometries, shared_cache.bounds))
-    band = cld(H, active_tiles)
-    if thread_count == 1
-        for t in 1:active_tiles
-            ylo = (t - 1) * band + 1
-            yhi = min(t * band, H)
-            cache_idx = thread_count == active_tiles ? t : 1
-            _render_tiled_band!(rt, meshes, mesh_worlds, instanced, instanced_worlds,
-                                instanced_material_states,
-                                lights, camera_position, proj, view,
-                                near, ortho_dir, thread_caches, cache_idx, ylo, yhi,
-                                wireframe_items)
-        end
-    else
-        # Each iteration owns a cache even if a shader yields and its task migrates.
-        # Contiguous bands keep each owner's writes together. Quotient/remainder
-        # partitioning avoids multiplying the tile count by the worker count.
-        bands_per_work, extra_bands = divrem(active_tiles, thread_count)
-        Threads.@threads for cache_idx in 1:thread_count
-            first_band = (cache_idx-1)*bands_per_work + min(cache_idx-1, extra_bands) + 1
-            last_band = first_band + bands_per_work - 1 + (cache_idx <= extra_bands)
-            for t in first_band:last_band
+    order_count, order_keys = _render_order_buckets(shared_cache.mesh_depths, meshes,
+                                                    instanced)
+    try
+        _arm_light_world_cache!(lights)
+        band = cld(H, active_tiles)
+        if thread_count == 1
+            for t in 1:active_tiles
                 ylo = (t - 1) * band + 1
                 yhi = min(t * band, H)
+                cache_idx = thread_count == active_tiles ? t : 1
                 _render_tiled_band!(rt, meshes, mesh_worlds, instanced, instanced_worlds,
                                     instanced_material_states,
                                     lights, camera_position, proj, view,
                                     near, ortho_dir, thread_caches, cache_idx, ylo, yhi,
-                                    wireframe_items)
+                                    wireframe_items, order_keys, order_count)
+            end
+        else
+            # Each iteration owns a cache even if a shader yields and its task migrates.
+            # Contiguous bands keep each owner's writes together. Quotient/remainder
+            # partitioning avoids multiplying the tile count by the worker count.
+            bands_per_work, extra_bands = divrem(active_tiles, thread_count)
+            Threads.@threads for cache_idx in 1:thread_count
+                first_band = (cache_idx-1)*bands_per_work + min(cache_idx-1, extra_bands) + 1
+                last_band = first_band + bands_per_work - 1 + (cache_idx <= extra_bands)
+                for t in first_band:last_band
+                    ylo = (t - 1) * band + 1
+                    yhi = min(t * band, H)
+                    _render_tiled_band!(rt, meshes, mesh_worlds, instanced, instanced_worlds,
+                                        instanced_material_states,
+                                        lights, camera_position, proj, view,
+                                        near, ortho_dir, thread_caches, cache_idx, ylo, yhi,
+                                        wireframe_items, order_keys, order_count)
+                end
             end
         end
+    finally
+        _disarm_light_world_cache!(lights)
     end
     return original_target
 end
