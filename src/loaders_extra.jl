@@ -8669,14 +8669,19 @@ mutable struct _SVGParseState
     active_uses::Vector{Int}
     # clipPath/mask elements whose content is being parsed, likewise.
     active_definitions::Vector{Int}
-    # Number of `use` instantiations so far, bounded by _SVG_MAX_USE_INSTANCES.
+    # Number of `use` instantiations so far (see `_svg_use_instance_limit`).
     use_instances::Int
 end
 
 # Every `use` re-parses the element it references, so a chain in which each
-# level uses the previous one twice doubles the work per level. A few hundred
-# bytes can then demand gigabytes; real documents stay far below this count.
-const _SVG_MAX_USE_INSTANCES = 100_000
+# level uses the previous one twice doubles the work per level and a few
+# hundred bytes can demand gigabytes. Documents that place one `use` per
+# marker have as many instances as tags, so the limit grows with the document:
+# it bounds the expansion factor, not the document size.
+const _SVG_MIN_USE_INSTANCES = 4096
+const _SVG_USE_INSTANCES_PER_TAG = 32
+_svg_use_instance_limit(state::_SVGParseState) =
+    max(_SVG_MIN_USE_INSTANCES, _SVG_USE_INSTANCES_PER_TAG * length(state.tags))
 
 const _SVG_RENDERED_TAGS = Set(["svg", "g", "defs", "clippath", "mask", "symbol",
                                 "path", "rect", "line", "circle", "ellipse",
@@ -9089,9 +9094,10 @@ function _svg_parse_range!(state::_SVGParseState, first::Int, last::Int,
                 end
                 if viewport_box !== nothing || target_tag != "symbol"
                     state.use_instances += 1
-                    state.use_instances <= _SVG_MAX_USE_INSTANCES ||
+                    state.use_instances <= _svg_use_instance_limit(state) ||
                         throw(ArgumentError(
-                            "SVG instantiates more than $(_SVG_MAX_USE_INSTANCES) use elements"))
+                            "SVG use elements expand to more than " *
+                            "$(_svg_use_instance_limit(state)) instances"))
                     push!(state.active_uses, target)
                     state.viewport = content_viewport
                     try
