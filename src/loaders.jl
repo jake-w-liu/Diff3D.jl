@@ -1994,13 +1994,16 @@ function _load_ply(path::String, name_map::Dict{String,String},
             error("PLY list property count exceeds the supported integer range")
         return Int(cnt)
     end
-    function checked_vertex_index(idx, nverts::Int)
+    # PLY elements may come in any order (PLYLoader.js reads a face element
+    # declared before the vertex element), so the upper bound of a face index
+    # is checked against the final vertex count once every element is read.
+    function checked_vertex_index(idx)
         isfinite(idx) && idx == floor(idx) ||
             error("PLY face vertex index must be an integer")
-        0 <= idx < nverts ||
-            error("PLY face vertex index $idx is outside 0:$(nverts - 1)")
-        iidx = Int(idx)
-        return iidx
+        0 <= idx || error("PLY face vertex index $idx is negative")
+        idx < ldexp(1.0, 8 * sizeof(Int) - 2) ||
+            error("PLY face vertex index $idx exceeds the supported integer range")
+        return Int(idx)
     end
     # Column of the first property among the candidate names, tried in order
     # (PLYLoader.js getAttributeDescriptor findProperty), or 0.
@@ -2154,7 +2157,6 @@ function _load_ply(path::String, name_map::Dict{String,String},
             face_hint = _ply_checked_mul(ecount, 3, "face index hint")
             sizehint!(indices, _ply_checked_add(
                 length(indices), face_hint, "face index hint"))
-            nverts = length(positions) ÷ 3
             corners = Int[]
             texcoords = Float64[]
             p = i
@@ -2189,7 +2191,7 @@ function _load_ply(path::String, name_map::Dict{String,String},
                                 typed_index = _ply_ascii_typed_value(
                                     raw_index, prop[4], "face", face_row,
                                     prop[2], k)
-                                push!(corners, checked_vertex_index(typed_index, nverts))
+                                push!(corners, checked_vertex_index(typed_index))
                             elseif prop_col == tc_col
                                 push!(texcoords, _ply_validate_ascii_property_value(
                                     body, first, last, "face", face_row,
@@ -2212,7 +2214,7 @@ function _load_ply(path::String, name_map::Dict{String,String},
                         if prop_col == list_col
                             for _ in 1:nitems
                                 val, i = read_binary(body, i, prop[4])
-                                push!(corners, checked_vertex_index(val, nverts))
+                                push!(corners, checked_vertex_index(val))
                             end
                         elseif prop_col == tc_col
                             for _ in 1:nitems
@@ -2301,6 +2303,10 @@ function _load_ply(path::String, name_map::Dict{String,String},
         error("PLY custom_property_mapping requires a vertex element")
 
     nverts = length(positions) ÷ 3
+    for idx in indices
+        idx <= nverts ||
+            error("PLY face vertex index $(idx - 1) is outside 0:$(nverts - 1)")
+    end
     nfaces = length(indices) ÷ 3
     geo = BufferGeometry(positions, have_normals ? normals : Float64[],
                          have_uv ? uvs : Float64[], indices, nverts, nfaces)
