@@ -25,6 +25,11 @@ end
     return result
 end
 
+# three.js MathUtils.DEG2RAD / RAD2DEG (MathUtils.js:1-2): the Float64 quotients
+# of Math.PI, so degree conversions round exactly like three.js.
+const _CONTROL_DEG2RAD = Float64(π) / 180.0
+const _CONTROL_RAD2DEG = 180.0 / Float64(π)
+
 const _OrbitCamera = Union{PerspectiveCamera, OrthographicCamera}
 
 _orbit_camera_kind(::PerspectiveCamera) = :PerspectiveCamera
@@ -74,7 +79,59 @@ mutable struct OrbitControls
     cursor::Vec3{Float64}
     min_target_radius::Float64
     max_target_radius::Float64
+    # three.js pointer, wheel and keyboard input (the `orbit_pointer_*`,
+    # `orbit_wheel!` and `orbit_key_*` calls): speeds, zoomToCursor, the key,
+    # mouse-button and touch mappings, and the element's client rectangle.
+    zoom_speed::Float64
+    rotate_speed::Float64
+    key_rotate_speed::Float64
+    pan_speed::Float64
+    key_pan_speed::Float64
+    zoom_to_cursor::Bool
+    keys::NamedTuple{(:left, :up, :right, :bottom), NTuple{4, String}}
+    mouse_buttons::NamedTuple{(:left, :middle, :right), NTuple{3, Symbol}}
+    touches::NamedTuple{(:one, :two), NTuple{2, Symbol}}
+    element_left::Float64
+    element_top::Float64
+    element_width::Float64
+    element_height::Float64
+    # MapControls drags the target over the plane through it orthogonal to
+    # `camera.up` for mouse pans when `screen_space_panning` is off.
+    map_panning::Bool
+    # Input state (three.js state, _pointers, _pointerPositions, _rotateStart,
+    # _panStart, _dollyStart, _panWorldStart, _controlActive, _scale,
+    # _performCursorZoom, _mouse, _dollyDirection).
+    state::Symbol
+    pointers::Vector{Int}
+    pointer_positions::Dict{Int, NTuple{2, Float64}}
+    rotate_start::NTuple{2, Float64}
+    pan_start::NTuple{2, Float64}
+    dolly_start::NTuple{2, Float64}
+    pan_world_start::Vec3{Float64}
+    control_active::Bool
+    scale::Float64
+    perform_cursor_zoom::Bool
+    mouse::NTuple{2, Float64}
+    dolly_direction::Vec3{Float64}
 end
+
+const _ORBIT_DEFAULT_KEYS = (left="ArrowLeft", up="ArrowUp", right="ArrowRight",
+                             bottom="ArrowDown")
+const _ORBIT_DEFAULT_MOUSE_BUTTONS = (left=:rotate, middle=:dolly, right=:pan)
+const _ORBIT_DEFAULT_TOUCHES = (one=:rotate, two=:dolly_pan)
+# MapControls.js constructor.
+const _MAP_DEFAULT_MOUSE_BUTTONS = (left=:pan, middle=:dolly, right=:rotate)
+const _MAP_DEFAULT_TOUCHES = (one=:pan, two=:dolly_rotate)
+
+# The field layout before the pointer, wheel and keyboard input: every input
+# setting takes its three.js default.
+OrbitControls(args::Vararg{Any, 29}) =
+    OrbitControls(args..., 1.0, 1.0, 1.0, 1.0, 7.0, false,
+                  _ORBIT_DEFAULT_KEYS, _ORBIT_DEFAULT_MOUSE_BUTTONS,
+                  _ORBIT_DEFAULT_TOUCHES, 0.0, 0.0, 0.0, 0.0, false,
+                  :none, Int[], Dict{Int, NTuple{2, Float64}}(),
+                  (0.0, 0.0), (0.0, 0.0), (0.0, 0.0), Vec3(0.0, 0.0, 0.0),
+                  false, 1.0, false, (0.0, 0.0), Vec3(0.0, 0.0, 0.0))
 
 function _checked_orbit_target_radii(min_radius, max_radius)
     min_radius isa Real && !(min_radius isa Bool) &&
@@ -197,6 +254,29 @@ the camera about `camera.up` at `auto_rotate_speed` (three.js `autoRotate`).
 Every interaction and update keeps the target between `min_target_radius` and
 `max_target_radius` from `cursor` (three.js `minTargetRadius`,
 `maxTargetRadius`, `cursor`).
+
+Pointer, wheel and keyboard input follow three.js r186 through
+[`orbit_pointer_down!`](@ref), [`orbit_pointer_move!`](@ref),
+[`orbit_pointer_up!`](@ref), [`orbit_wheel!`](@ref), [`orbit_key_down!`](@ref)
+and [`orbit_key_up!`](@ref), configured by `zoom_speed`, `rotate_speed`,
+`key_rotate_speed`, `pan_speed`, `key_pan_speed` (pixels per key press),
+`zoom_to_cursor`, `keys` (the `KeyboardEvent.code` of each arrow),
+`mouse_buttons` (`:rotate`, `:dolly`, `:pan` or `:none` for the `left`,
+`middle` and `right` buttons), `touches` (`one`: `:rotate` or `:pan`; `two`:
+`:dolly_pan` or `:dolly_rotate`; `:none` disables) and the element's client
+rectangle `element_left`, `element_top`, `element_width`, `element_height` in
+pixels, which those calls require to be positive. The extra keywords:
+
+    zoom_speed=1.0, rotate_speed=1.0, key_rotate_speed=1.0, pan_speed=1.0,
+    key_pan_speed=7.0, zoom_to_cursor=false,
+    keys=(left="ArrowLeft", up="ArrowUp", right="ArrowRight", bottom="ArrowDown"),
+    mouse_buttons=(left=:rotate, middle=:dolly, right=:pan),
+    touches=(one=:rotate, two=:dolly_pan), element_left=0.0, element_top=0.0,
+    element_width=0.0, element_height=0.0, map_panning=false
+
+(`map_panning=true` gives mouse pans the [`MapControls`](@ref) ground-plane
+drag.) [`orbit_polar_angle`](@ref), [`orbit_azimuthal_angle`](@ref) and
+[`orbit_distance`](@ref) read the current orbit.
 """
 function OrbitControls(cam::_OrbitCamera, target::Vec3{Float64};
                        enabled::Bool=true, enable_rotate::Bool=true,
@@ -210,11 +290,20 @@ function OrbitControls(cam::_OrbitCamera, target::Vec3{Float64};
                        auto_rotate::Bool=false, auto_rotate_speed::Real=2.0,
                        cursor::Vec3=Vec3(0.0, 0.0, 0.0),
                        min_target_radius::Real=0.0,
-                       max_target_radius::Real=Inf)
+                       max_target_radius::Real=Inf,
+                       zoom_speed::Real=1.0, rotate_speed::Real=1.0,
+                       key_rotate_speed::Real=1.0, pan_speed::Real=1.0,
+                       key_pan_speed::Real=7.0, zoom_to_cursor::Bool=false,
+                       keys::NamedTuple=_ORBIT_DEFAULT_KEYS,
+                       mouse_buttons::NamedTuple=_ORBIT_DEFAULT_MOUSE_BUTTONS,
+                       touches::NamedTuple=_ORBIT_DEFAULT_TOUCHES,
+                       element_left::Real=0.0, element_top::Real=0.0,
+                       element_width::Real=0.0, element_height::Real=0.0,
+                       map_panning::Bool=false)
     _prepare_camera_control_up!(cam)
     _validated_camera_view_vectors(cam, _orbit_camera_kind(cam))
     minimum_zoom, maximum_zoom = _checked_orbit_zoom_limits(min_zoom, max_zoom)
-    rotate_speed = _checked_control_scalar(
+    checked_auto_rotate_speed = _checked_control_scalar(
         auto_rotate_speed, "OrbitControls auto_rotate_speed")
     checked_cursor = _checked_control_vec3(cursor, "OrbitControls cursor")
     minimum_target_radius, maximum_target_radius =
@@ -228,16 +317,36 @@ function OrbitControls(cam::_OrbitCamera, target::Vec3{Float64};
     minimum_azimuth, maximum_azimuth =
         _checked_azimuth_limits(min_azimuth_angle, max_azimuth_angle)
     damping = _checked_damping_factor(damping_factor, "damping_factor")
-    OrbitControls(cam, checked_target, enabled, enable_rotate, enable_zoom,
-                  enable_pan, enable_damping, damping,
-                  minimum_distance, maximum_distance,
-                  minimum_polar, maximum_polar,
-                  minimum_azimuth, maximum_azimuth,
-                  0.0, 0.0, 0.0, Vec3(0.0, 0.0, 0.0), cam.position,
-                  checked_target, screen_space_panning,
-                  minimum_zoom, maximum_zoom, cam.zoom,
-                  auto_rotate, rotate_speed, checked_cursor,
-                  minimum_target_radius, maximum_target_radius)
+    oc = OrbitControls(cam, checked_target, enabled, enable_rotate, enable_zoom,
+                       enable_pan, enable_damping, damping,
+                       minimum_distance, maximum_distance,
+                       minimum_polar, maximum_polar,
+                       minimum_azimuth, maximum_azimuth,
+                       0.0, 0.0, 0.0, Vec3(0.0, 0.0, 0.0), cam.position,
+                       checked_target, screen_space_panning,
+                       minimum_zoom, maximum_zoom, cam.zoom,
+                       auto_rotate, checked_auto_rotate_speed, checked_cursor,
+                       minimum_target_radius, maximum_target_radius)
+    oc.zoom_speed = _checked_control_scalar(zoom_speed, "OrbitControls zoom_speed")
+    oc.rotate_speed = _checked_control_scalar(rotate_speed, "OrbitControls rotate_speed")
+    oc.key_rotate_speed = _checked_control_scalar(
+        key_rotate_speed, "OrbitControls key_rotate_speed")
+    oc.pan_speed = _checked_control_scalar(pan_speed, "OrbitControls pan_speed")
+    oc.key_pan_speed = _checked_control_scalar(key_pan_speed, "OrbitControls key_pan_speed")
+    oc.zoom_to_cursor = zoom_to_cursor
+    oc.keys = (left=String(keys.left), up=String(keys.up),
+               right=String(keys.right), bottom=String(keys.bottom))
+    oc.mouse_buttons = (left=Symbol(mouse_buttons.left),
+                        middle=Symbol(mouse_buttons.middle),
+                        right=Symbol(mouse_buttons.right))
+    oc.touches = (one=Symbol(touches.one), two=Symbol(touches.two))
+    oc.element_left = _checked_control_scalar(element_left, "OrbitControls element_left")
+    oc.element_top = _checked_control_scalar(element_top, "OrbitControls element_top")
+    oc.element_width = _checked_control_scalar(element_width, "OrbitControls element_width")
+    oc.element_height = _checked_control_scalar(element_height, "OrbitControls element_height")
+    oc.map_panning = map_panning
+    _validate_orbit_input(oc)
+    return oc
 end
 
 function OrbitControls(camera::PerspectiveCamera, target::Vec3{Float64},
@@ -281,16 +390,24 @@ OrbitControls(cam::_OrbitCamera; kwargs...) =
     OrbitControls(cam, _camera_control_target(cam); kwargs...)
 
 """
-    MapControls(camera[, target]; screen_space_panning=false, kwargs...)
+    MapControls(camera[, target]; screen_space_panning=false,
+                mouse_buttons=(left=:pan, middle=:dolly, right=:rotate),
+                touches=(one=:pan, two=:dolly_rotate), kwargs...)
 
 `OrbitControls` configured like three.js `MapControls`: vertical pan deltas
 move the target across the plane orthogonal to `camera.up` (the ground for a
-y-up scene) instead of along the screen's up axis. All other keywords are the
-`OrbitControls` ones.
+y-up scene) instead of along the screen's up axis, and the left mouse button
+and one finger pan. A mouse pan with `screen_space_panning=false` drags the
+point under the pointer across that plane (MapControls.js
+`_handleMouseMovePan`). All other keywords are the `OrbitControls` ones.
 """
 MapControls(cam::_OrbitCamera, target::Vec3{Float64};
-            screen_space_panning::Bool=false, kwargs...) =
-    OrbitControls(cam, target; screen_space_panning=screen_space_panning, kwargs...)
+            screen_space_panning::Bool=false,
+            mouse_buttons::NamedTuple=_MAP_DEFAULT_MOUSE_BUTTONS,
+            touches::NamedTuple=_MAP_DEFAULT_TOUCHES, kwargs...) =
+    OrbitControls(cam, target; screen_space_panning=screen_space_panning,
+                  mouse_buttons=mouse_buttons, touches=touches,
+                  map_panning=true, kwargs...)
 MapControls(cam::_OrbitCamera; kwargs...) =
     MapControls(cam, _camera_control_target(cam); kwargs...)
 
@@ -645,7 +762,9 @@ With `oc.auto_rotate` set, each call first turns the camera about `camera.up`
 by `2π/60 * auto_rotate_speed * delta_time` radians, or by
 `2π/3600 * auto_rotate_speed` when `delta_time` (seconds) is omitted, as
 three.js does per frame (`_getAutoRotationAngle`); with damping enabled that
-turn is added to the residual azimuth velocity instead.
+turn is added to the residual azimuth velocity instead. As in three.js there
+is no auto-rotation while a pointer gesture started by
+[`orbit_pointer_down!`](@ref) is in progress.
 """
 function orbit_update!(oc::OrbitControls, delta_time=nothing)
     oc.enabled || return oc
@@ -653,7 +772,8 @@ function orbit_update!(oc::OrbitControls, delta_time=nothing)
     # A frame delta must be a finite real even when auto-rotation is off.
     delta_time === nothing ||
         _checked_control_scalar(delta_time, "OrbitControls delta_time")
-    if oc.auto_rotate
+    # three.js update() auto-rotates only while no pointer gesture is active.
+    if oc.auto_rotate && oc.state === :none
         # three.js _rotateLeft(angle): sphericalDelta.theta -= angle.
         angle = _orbit_auto_rotation_angle(oc, delta_time)
         if !oc.enable_damping
@@ -709,6 +829,574 @@ function _orbit_auto_rotation_angle(oc::OrbitControls, delta_time)
     dt = _checked_control_scalar(delta_time, "OrbitControls delta_time")
     return _checked_control_scalar((2π / 60 * speed) * dt,
                                    "OrbitControls auto-rotation angle")
+end
+
+# ---- OrbitControls pointer, wheel and keyboard input (three.js r186) -------
+
+const _ORBIT_MOUSE_ACTIONS = (:rotate, :dolly, :pan, :none)
+const _ORBIT_TOUCH_ACTIONS = (:rotate, :pan, :dolly_pan, :dolly_rotate, :none)
+# OrbitControls.js _TILT_LIMIT.
+const _ORBIT_TILT_LIMIT = cos(70 * _CONTROL_DEG2RAD)
+
+function _validate_orbit_input(oc::OrbitControls)
+    _checked_control_scalar(oc.zoom_speed, "OrbitControls zoom_speed")
+    _checked_control_scalar(oc.rotate_speed, "OrbitControls rotate_speed")
+    _checked_control_scalar(oc.key_rotate_speed, "OrbitControls key_rotate_speed")
+    _checked_control_scalar(oc.pan_speed, "OrbitControls pan_speed")
+    _checked_control_scalar(oc.key_pan_speed, "OrbitControls key_pan_speed")
+    _checked_control_scalar(oc.element_left, "OrbitControls element_left")
+    _checked_control_scalar(oc.element_top, "OrbitControls element_top")
+    _checked_control_scalar(oc.element_width, "OrbitControls element_width")
+    _checked_control_scalar(oc.element_height, "OrbitControls element_height")
+    for action in oc.mouse_buttons
+        action in _ORBIT_MOUSE_ACTIONS || throw(ArgumentError(
+            "OrbitControls mouse_buttons actions must be :rotate, :dolly, :pan or :none"))
+    end
+    for action in oc.touches
+        action in _ORBIT_TOUCH_ACTIONS || throw(ArgumentError(
+            "OrbitControls touches actions must be :rotate, :pan, :dolly_pan, :dolly_rotate or :none"))
+    end
+    return nothing
+end
+
+@noinline _throw_orbit_element() = throw(ArgumentError(
+    "OrbitControls pointer and key input needs a positive element_width and element_height"))
+
+@inline function _orbit_client_size(oc::OrbitControls)
+    (oc.element_width > 0.0 && oc.element_height > 0.0) || _throw_orbit_element()
+    return oc.element_width, oc.element_height
+end
+
+"""
+    orbit_polar_angle(controls::OrbitControls)
+
+The camera's polar angle from `camera.up` about the target, in radians
+(three.js `getPolarAngle`).
+"""
+function orbit_polar_angle(oc::OrbitControls)
+    _validate_orbit_runtime(oc)
+    return _orbit_spherical(oc).phi
+end
+
+"""
+    orbit_azimuthal_angle(controls::OrbitControls)
+
+The camera's azimuth about `camera.up` around the target, in radians in
+`(-π, π]` (three.js `getAzimuthalAngle`; three.js returns the angle from its
+last update, which can lie outside that range after a rotation).
+"""
+function orbit_azimuthal_angle(oc::OrbitControls)
+    _validate_orbit_runtime(oc)
+    return _orbit_spherical(oc).theta
+end
+
+"""
+    orbit_distance(controls::OrbitControls)
+
+Distance from the camera to the orbit target (three.js `getDistance`).
+"""
+function orbit_distance(oc::OrbitControls)
+    _validate_orbit_runtime(oc)
+    return norm(oc.camera.position - oc.target)
+end
+
+# OrbitControls.js _getZoomScale, _dollyIn, _dollyOut, _rotateLeft, _rotateUp.
+_orbit_zoom_scale(oc::OrbitControls, delta) =
+    0.95 ^ (oc.zoom_speed * abs(delta * 0.01))
+_orbit_dolly_in!(oc::OrbitControls, s) = (oc.scale *= s; oc)
+_orbit_dolly_out!(oc::OrbitControls, s) = (oc.scale /= s; oc)
+_orbit_rotate_left!(oc::OrbitControls, angle) = (oc.v_azimuth -= angle; oc)
+_orbit_rotate_up!(oc::OrbitControls, angle) = (oc.v_polar -= angle; oc)
+
+# OrbitControls.js _pan: deltas in pixels (right and down positive) become a
+# world-space pan offset along the camera's x axis and its y axis (or the
+# ground direction `up × x` without screen-space panning).
+function _orbit_pan_pixels!(oc::OrbitControls, dx, dy)
+    cam = oc.camera
+    q = _camera_local_quaternion(cam)
+    x_axis = quat_rotate_vector(q, Vec3(1.0, 0.0, 0.0))
+    if cam isa PerspectiveCamera
+        _, height = _orbit_client_size(oc)
+        # Half of the fov is centre to top of screen.
+        distance = norm(cam.position - oc.target) * tan(cam.fov / 2)
+        left = 2 * dx * distance / height
+        up = 2 * dy * distance / height
+    else
+        width, height = _orbit_client_size(oc)
+        left = dx * (cam.right - cam.left) / cam.zoom / width
+        up = dy * (cam.top - cam.bottom) / cam.zoom / height
+    end
+    up_axis = oc.screen_space_panning ?
+        quat_rotate_vector(q, Vec3(0.0, 1.0, 0.0)) : cross(cam.up, x_axis)
+    pan = oc.v_pan + x_axis * (-left)
+    oc.v_pan = _checked_control_vec3(pan + up_axis * up, "OrbitControls pan velocity")
+    return oc
+end
+
+# OrbitControls.js _updateZoomParameters: pointer position in NDC and the
+# direction from the camera through it (used by zoom_to_cursor).
+function _orbit_update_zoom_parameters!(oc::OrbitControls, x, y)
+    oc.zoom_to_cursor || return oc
+    width, height = _orbit_client_size(oc)
+    mx = ((x - oc.element_left) / width) * 2 - 1
+    my = -((y - oc.element_top) / height) * 2 + 1
+    cam = oc.camera
+    point = vec3_unproject(Vec3(mx, my, 1.0), cam)
+    direction = normalize(point - cam.position)
+    oc.perform_cursor_zoom = true
+    oc.mouse = (mx, my)
+    oc.dolly_direction = _checked_control_vec3(
+        direction, "OrbitControls zoom-to-cursor direction")
+    return oc
+end
+
+# Ray.intersectPlane for the plane through `point` with normal `normal`
+# (Plane.setFromNormalAndCoplanarPoint); `nothing` when the ray misses.
+function _orbit_ray_plane(origin::Vec3, direction::Vec3, normal::Vec3, point::Vec3)
+    constant = -dot(point, normal)
+    denominator = dot(normal, direction)
+    if denominator == 0
+        return dot(normal, origin) + constant == 0 ? origin : nothing
+    end
+    t = -(dot(origin, normal) + constant) / denominator
+    return t >= 0 ? direction * t + origin : nothing
+end
+
+# Mouse NDC within the element rectangle (MapControls.js _handleMouseDownPan).
+function _orbit_pointer_ndc(oc::OrbitControls, x, y)
+    width, height = _orbit_client_size(oc)
+    return ((x - oc.element_left) / width) * 2 - 1,
+           -((y - oc.element_top) / height) * 2 + 1
+end
+
+@inline _orbit_clamp_distance(oc::OrbitControls, d) =
+    max(oc.min_distance, min(oc.max_distance, d))
+
+# One three.js OrbitControls.update() (OrbitControls.js:420-574) for the input
+# handlers: the residual rotation and pan (`v_azimuth`, `v_polar`, `v_pan`,
+# applied in full or by `damping_factor`), the pending dolly `scale`, and
+# zoom_to_cursor. Everything is computed and checked before the camera
+# changes.
+function _orbit_event_update!(oc::OrbitControls)
+    _validate_orbit_runtime(oc)
+    cam = oc.camera
+    ortho = cam isa OrthographicCamera
+    damping = oc.enable_damping
+    f = oc.damping_factor
+    q = _orbit_up_quaternion(oc)
+    s = cartesian_to_spherical(_orbit_rotate_vector(q, cam.position - oc.target))
+    v_azimuth = oc.v_azimuth
+    if oc.auto_rotate && oc.state === :none
+        v_azimuth -= _orbit_auto_rotation_angle(oc, nothing)
+    end
+    theta = s.theta + (damping ? v_azimuth * f : v_azimuth)
+    phi = s.phi + (damping ? oc.v_polar * f : oc.v_polar)
+    theta = _clamp_azimuth(theta, oc.min_azimuth_angle, oc.max_azimuth_angle)
+    phi = max(oc.min_polar_angle, min(oc.max_polar_angle, phi))
+    phi = max(1e-6, min(π - 1e-6, phi))                    # Spherical.makeSafe
+    target = oc.target + (damping ? oc.v_pan * f : oc.v_pan)
+    target = _orbit_limited_target(oc, _checked_control_vec3(target, "OrbitControls target"))
+    scale = oc.scale
+    cursor_zoom = oc.zoom_to_cursor && oc.perform_cursor_zoom
+    radius = (cursor_zoom || ortho) ? _orbit_clamp_distance(oc, s.radius) :
+        _orbit_clamp_distance(oc, s.radius * scale)
+    offset = _orbit_rotate_vector(Quaternion(-q.x, -q.y, -q.z, q.w),
+                                  spherical_to_cartesian(Spherical(radius, phi, theta)))
+    position = _checked_control_vec3(target + offset, "OrbitControls camera position")
+    zoom = cam.zoom
+    camera_target = target
+    if cursor_zoom
+        new_radius = norm(offset)
+        if ortho
+            # The pointer's world point before and after the zoom, both from
+            # the camera's pose before this update (three.js unprojects with
+            # the not yet refreshed matrixWorld).
+            zoom = _validated_camera_zoom(
+                max(oc.min_zoom, min(oc.max_zoom, cam.zoom / scale)))
+            ndc = Vec3(oc.mouse[1], oc.mouse[2], 0.0)
+            before = vec3_unproject(ndc, cam)
+            previous_zoom = cam.zoom
+            cam.zoom = zoom
+            after = try
+                vec3_unproject(ndc, cam)
+            finally
+                cam.zoom = previous_zoom
+            end
+            position = _checked_control_vec3(position - after + before,
+                                              "OrbitControls camera position")
+        else
+            previous = new_radius
+            new_radius = _orbit_clamp_distance(oc, previous * scale)
+            position = _checked_control_vec3(
+                position + oc.dolly_direction * (previous - new_radius),
+                "OrbitControls camera position")
+        end
+        # The camera keeps the orientation it took looking at the target.
+        view = mat4_look_at(target + offset, target, cam.up)
+        forward = Vec3(-mat4_get(view, 3, 1), -mat4_get(view, 3, 2),
+                       -mat4_get(view, 3, 3))
+        if oc.screen_space_panning
+            target = forward * new_radius + position
+            camera_target = position + forward * (new_radius > 0 ? new_radius : 1.0)
+        elseif abs(dot(cam.up, forward)) < _ORBIT_TILT_LIMIT
+            camera_target = target                       # object.lookAt(target)
+        else
+            hit = _orbit_ray_plane(position, forward, cam.up, target)
+            hit === nothing || (target = hit)
+            reach = dot(target - position, forward)
+            camera_target = position + forward * (reach > 0 ? reach : 1.0)
+        end
+        target = _checked_control_vec3(target, "OrbitControls target")
+        camera_target = _checked_control_vec3(camera_target, "OrbitControls camera target")
+    elseif ortho
+        zoom = _validated_camera_zoom(max(oc.min_zoom, min(oc.max_zoom, cam.zoom / scale)))
+    end
+    decay = 1.0 - f
+    oc.v_azimuth = damping ? v_azimuth * decay : 0.0
+    oc.v_polar = damping ? oc.v_polar * decay : 0.0
+    oc.v_pan = damping ? oc.v_pan * decay : Vec3(0.0, 0.0, 0.0)
+    oc.scale = 1.0
+    oc.perform_cursor_zoom = false
+    oc.target = target
+    cam.position = position
+    cam.target = camera_target
+    cam.zoom = zoom
+    _sync_camera_rotation_from_view!(cam)
+    return oc
+end
+
+function _orbit_second_pointer(oc::OrbitControls, pointer_id::Int)
+    other = pointer_id == oc.pointers[1] ? oc.pointers[2] : oc.pointers[1]
+    return oc.pointer_positions[other]
+end
+
+# The touch point of a gesture: the pointer itself, or with two pointers the
+# midpoint with the other one.
+function _orbit_touch_point(oc::OrbitControls, pointer_id::Int, x, y)
+    length(oc.pointers) == 1 && return (x, y)
+    px, py = _orbit_second_pointer(oc, pointer_id)
+    return (0.5 * (x + px), 0.5 * (y + py))
+end
+
+function _orbit_touch_distance(oc::OrbitControls, pointer_id::Int, x, y)
+    px, py = _orbit_second_pointer(oc, pointer_id)
+    dx = x - px
+    dy = y - py
+    return sqrt(dx * dx + dy * dy)
+end
+
+function _orbit_mouse_down_pan!(oc::OrbitControls, x, y)
+    oc.pan_start = (x, y)
+    oc.map_panning || return oc
+    # MapControls.js _handleMouseDownPan.
+    oc.v_pan = Vec3(0.0, 0.0, 0.0)
+    oc.screen_space_panning && return oc
+    mx, my = _orbit_pointer_ndc(oc, x, y)
+    ray = _camera_ray(oc.camera, mx, my)
+    hit = _orbit_ray_plane(ray.origin, ray.direction, oc.camera.up, oc.target)
+    hit === nothing || (oc.pan_world_start = hit)
+    return oc
+end
+
+function _orbit_touch_start!(oc::OrbitControls, pointer_id::Int, x, y)
+    oc.pointer_positions[pointer_id] = (x, y)
+    n = length(oc.pointers)
+    if n == 1
+        action = oc.touches.one
+        if action === :rotate
+            oc.enable_rotate || return oc
+            oc.rotate_start = _orbit_touch_point(oc, pointer_id, x, y)
+            oc.state = :touch_rotate
+        elseif action === :pan
+            oc.enable_pan || return oc
+            oc.pan_start = _orbit_touch_point(oc, pointer_id, x, y)
+            oc.state = :touch_pan
+        else
+            oc.state = :none
+        end
+    elseif n == 2
+        action = oc.touches.two
+        if action === :dolly_pan
+            (oc.enable_zoom || oc.enable_pan) || return oc
+            oc.enable_zoom && (oc.dolly_start = (0.0, _orbit_touch_distance(oc, pointer_id, x, y)))
+            oc.enable_pan && (oc.pan_start = _orbit_touch_point(oc, pointer_id, x, y))
+            oc.state = :touch_dolly_pan
+        elseif action === :dolly_rotate
+            (oc.enable_zoom || oc.enable_rotate) || return oc
+            oc.enable_zoom && (oc.dolly_start = (0.0, _orbit_touch_distance(oc, pointer_id, x, y)))
+            oc.enable_rotate && (oc.rotate_start = _orbit_touch_point(oc, pointer_id, x, y))
+            oc.state = :touch_dolly_rotate
+        else
+            oc.state = :none
+        end
+    else
+        oc.state = :none
+    end
+    return oc
+end
+
+function _orbit_mouse_down!(oc::OrbitControls, x, y, button::Integer, modifier::Bool)
+    action = button == 0 ? oc.mouse_buttons.left :
+             button == 1 ? oc.mouse_buttons.middle :
+             button == 2 ? oc.mouse_buttons.right : :none
+    if action === :dolly
+        oc.enable_zoom || return oc
+        # OrbitControls.js _handleMouseDownDolly passes clientX for both
+        # coordinates; kept for parity with three.js r186.
+        _orbit_update_zoom_parameters!(oc, x, x)
+        oc.dolly_start = (x, y)
+        oc.state = :dolly
+    elseif (action === :rotate && !modifier) || (action === :pan && modifier)
+        oc.enable_rotate || return oc
+        oc.rotate_start = (x, y)
+        oc.state = :rotate
+    elseif action === :rotate || action === :pan
+        oc.enable_pan || return oc
+        _orbit_mouse_down_pan!(oc, x, y)
+        oc.state = :pan
+    else
+        oc.state = :none
+    end
+    return oc
+end
+
+function _orbit_apply_rotate_delta!(oc::OrbitControls, start, finish)
+    _, height = _orbit_client_size(oc)
+    dx = (finish[1] - start[1]) * oc.rotate_speed
+    dy = (finish[2] - start[2]) * oc.rotate_speed
+    _orbit_rotate_left!(oc, 2π * dx / height)        # yes, height (three.js)
+    _orbit_rotate_up!(oc, 2π * dy / height)
+    oc.rotate_start = finish
+    return oc
+end
+
+function _orbit_apply_pan_delta!(oc::OrbitControls, start, finish)
+    _orbit_pan_pixels!(oc, (finish[1] - start[1]) * oc.pan_speed,
+                       (finish[2] - start[2]) * oc.pan_speed)
+    oc.pan_start = finish
+    return oc
+end
+
+function _orbit_mouse_move!(oc::OrbitControls, x, y)
+    state = oc.state
+    if state === :rotate
+        oc.enable_rotate || return oc
+        _orbit_apply_rotate_delta!(oc, oc.rotate_start, (x, y))
+    elseif state === :dolly
+        oc.enable_zoom || return oc
+        dy = y - oc.dolly_start[2]
+        if dy > 0
+            _orbit_dolly_out!(oc, _orbit_zoom_scale(oc, dy))
+        elseif dy < 0
+            _orbit_dolly_in!(oc, _orbit_zoom_scale(oc, dy))
+        end
+        oc.dolly_start = (x, y)
+    elseif state === :pan
+        oc.enable_pan || return oc
+        if oc.map_panning && !oc.screen_space_panning
+            # MapControls.js _handleMouseMovePan: drag the grabbed ground point.
+            mx, my = _orbit_pointer_ndc(oc, x, y)
+            ray = _camera_ray(oc.camera, mx, my)
+            hit = _orbit_ray_plane(ray.origin, ray.direction, oc.camera.up, oc.target)
+            hit === nothing && return oc
+            oc.v_pan = _checked_control_vec3(-(hit - oc.pan_world_start),
+                                             "OrbitControls pan velocity")
+        else
+            _orbit_apply_pan_delta!(oc, oc.pan_start, (x, y))
+        end
+    else
+        return oc
+    end
+    return _orbit_event_update!(oc)
+end
+
+function _orbit_touch_move_dolly!(oc::OrbitControls, pointer_id::Int, x, y)
+    px, py = _orbit_second_pointer(oc, pointer_id)
+    distance = _orbit_touch_distance(oc, pointer_id, x, y)
+    _orbit_dolly_out!(oc, (distance / oc.dolly_start[2])^oc.zoom_speed)
+    oc.dolly_start = (0.0, distance)
+    _orbit_update_zoom_parameters!(oc, (x + px) * 0.5, (y + py) * 0.5)
+    return oc
+end
+
+function _orbit_touch_move!(oc::OrbitControls, pointer_id::Int, x, y)
+    oc.pointer_positions[pointer_id] = (x, y)
+    state = oc.state
+    if state === :touch_rotate
+        oc.enable_rotate || return oc
+        _orbit_apply_rotate_delta!(oc, oc.rotate_start,
+                                   _orbit_touch_point(oc, pointer_id, x, y))
+    elseif state === :touch_pan
+        oc.enable_pan || return oc
+        _orbit_apply_pan_delta!(oc, oc.pan_start,
+                                _orbit_touch_point(oc, pointer_id, x, y))
+    elseif state === :touch_dolly_pan
+        (oc.enable_zoom || oc.enable_pan) || return oc
+        oc.enable_zoom && _orbit_touch_move_dolly!(oc, pointer_id, x, y)
+        oc.enable_pan && _orbit_apply_pan_delta!(
+            oc, oc.pan_start, _orbit_touch_point(oc, pointer_id, x, y))
+    elseif state === :touch_dolly_rotate
+        (oc.enable_zoom || oc.enable_rotate) || return oc
+        oc.enable_zoom && _orbit_touch_move_dolly!(oc, pointer_id, x, y)
+        oc.enable_rotate && _orbit_apply_rotate_delta!(
+            oc, oc.rotate_start, _orbit_touch_point(oc, pointer_id, x, y))
+    else
+        oc.state = :none
+        return oc
+    end
+    return _orbit_event_update!(oc)
+end
+
+"""
+    orbit_pointer_down!(controls::OrbitControls, x, y; button=0,
+                        pointer_type=:mouse, pointer_id=1, ctrl_key=false,
+                        meta_key=false, shift_key=false)
+
+A pointer goes down at client position `(x, y)` pixels (three.js
+`pointerdown`). A mouse button starts the gesture `mouse_buttons` assigns to
+it (`left`: button 0, `middle`: 1, `right`: 2); with Ctrl, Meta or Shift held
+a rotate button pans and a pan button rotates. With `pointer_type=:touch`,
+the first and second touches start the `touches.one` and `touches.two`
+gestures. Ignored while disabled.
+"""
+function orbit_pointer_down!(oc::OrbitControls, x, y; button::Integer=0,
+                             pointer_type::Symbol=:mouse, pointer_id::Integer=1,
+                             ctrl_key::Bool=false, meta_key::Bool=false,
+                             shift_key::Bool=false)
+    px = _checked_control_scalar(x, "OrbitControls pointer x")
+    py = _checked_control_scalar(y, "OrbitControls pointer y")
+    touch = _checked_pointer_type(pointer_type) === :touch
+    oc.enabled || return oc
+    _validate_orbit_input(oc)
+    id = Int(pointer_id)
+    id in oc.pointers && return oc
+    push!(oc.pointers, id)
+    touch && return _orbit_touch_start!(oc, id, px, py)
+    return _orbit_mouse_down!(oc, px, py, button, ctrl_key || meta_key || shift_key)
+end
+
+"""
+    orbit_pointer_move!(controls::OrbitControls, x, y; pointer_type=:mouse,
+                        pointer_id=1)
+
+A pointer moves to client position `(x, y)` pixels (three.js
+`pointermove`), continuing the active gesture: rotating by `2π * rotate_speed`
+per element height, dollying by `0.95^(zoom_speed * |Δy| / 100)` (a pinch by
+the ratio of the touch distances), or panning by `pan_speed` (a full element
+height moves the target by the visible height at its distance). Each move
+runs one update. Ignored while disabled.
+"""
+function orbit_pointer_move!(oc::OrbitControls, x, y; pointer_type::Symbol=:mouse,
+                             pointer_id::Integer=1)
+    px = _checked_control_scalar(x, "OrbitControls pointer x")
+    py = _checked_control_scalar(y, "OrbitControls pointer y")
+    touch = _checked_pointer_type(pointer_type) === :touch
+    oc.enabled || return oc
+    _validate_orbit_input(oc)
+    touch && return _orbit_touch_move!(oc, Int(pointer_id), px, py)
+    return _orbit_mouse_move!(oc, px, py)
+end
+
+"""
+    orbit_pointer_up!(controls::OrbitControls; pointer_id=1)
+
+A pointer is released or cancelled (three.js `pointerup`/`pointercancel`).
+The gesture ends when no pointer is left; with one touch left, that touch
+restarts the one-finger gesture.
+"""
+function orbit_pointer_up!(oc::OrbitControls; pointer_id::Integer=1)
+    id = Int(pointer_id)
+    delete!(oc.pointer_positions, id)
+    index = findfirst(==(id), oc.pointers)
+    index === nothing || deleteat!(oc.pointers, index)
+    if isempty(oc.pointers)
+        oc.state = :none
+    elseif length(oc.pointers) == 1
+        remaining = oc.pointers[1]
+        position = get(oc.pointer_positions, remaining, nothing)
+        if position === nothing
+            oc.state = :none
+        else
+            _orbit_touch_start!(oc, remaining, position[1], position[2])
+        end
+    end
+    return oc
+end
+
+"""
+    orbit_wheel!(controls::OrbitControls, delta_y; x=0, y=0, delta_mode=0,
+                 ctrl_key=false)
+
+A wheel step of `delta_y` (three.js `wheel`): negative values dolly in and
+positive values out by `0.95^(zoom_speed * |delta_y| / 100)`. `delta_mode` 1
+(lines) and 2 (pages) scale the step by 16 and 100; `ctrl_key` without a held
+Control key (a trackpad pinch) by 10. `(x, y)` is the pointer's client
+position, used by `zoom_to_cursor`. Ignored while disabled, while zoom is
+disabled or during a pointer gesture.
+"""
+function orbit_wheel!(oc::OrbitControls, delta_y; x=0.0, y=0.0,
+                      delta_mode::Integer=0, ctrl_key::Bool=false)
+    dy = _checked_control_scalar(delta_y, "OrbitControls wheel delta")
+    px = _checked_control_scalar(x, "OrbitControls pointer x")
+    py = _checked_control_scalar(y, "OrbitControls pointer y")
+    (oc.enabled && oc.enable_zoom && oc.state === :none) || return oc
+    _validate_orbit_input(oc)
+    delta_mode == 1 && (dy *= 16)
+    delta_mode == 2 && (dy *= 100)
+    (ctrl_key && !oc.control_active) && (dy *= 10)
+    _orbit_update_zoom_parameters!(oc, px, py)
+    if dy < 0
+        _orbit_dolly_in!(oc, _orbit_zoom_scale(oc, dy))
+    elseif dy > 0
+        _orbit_dolly_out!(oc, _orbit_zoom_scale(oc, dy))
+    end
+    return _orbit_event_update!(oc)
+end
+
+"""
+    orbit_key_down!(controls::OrbitControls, code::AbstractString;
+                    ctrl_key=false, meta_key=false, shift_key=false)
+
+A key press given by its `KeyboardEvent.code` (three.js
+`listenToKeyEvents` handling): the `keys` arrows pan by `key_pan_speed`
+pixels, or with Ctrl, Meta or Shift held rotate by `2π * key_rotate_speed`
+per element height, followed by one update. `"ControlLeft"`/`"ControlRight"`
+mark the Control key as held, which [`orbit_wheel!`](@ref) uses to tell a
+pinch from a Ctrl+wheel. Arrows are ignored while disabled.
+"""
+function orbit_key_down!(oc::OrbitControls, code::AbstractString; ctrl_key::Bool=false,
+                         meta_key::Bool=false, shift_key::Bool=false)
+    (code == "ControlLeft" || code == "ControlRight") && (oc.control_active = true)
+    oc.enabled || return oc
+    _validate_orbit_input(oc)
+    modifier = ctrl_key || meta_key || shift_key
+    keys = oc.keys
+    sign_rotate = code == keys.up || code == keys.left ? 1.0 :
+                  code == keys.bottom || code == keys.right ? -1.0 : 0.0
+    sign_rotate == 0.0 && return oc
+    vertical = code == keys.up || code == keys.bottom
+    if modifier
+        if oc.enable_rotate
+            _, height = _orbit_client_size(oc)
+            angle = sign_rotate * 2π * oc.key_rotate_speed / height
+            vertical ? _orbit_rotate_up!(oc, angle) : _orbit_rotate_left!(oc, angle)
+        end
+    elseif oc.enable_pan
+        amount = sign_rotate * oc.key_pan_speed
+        vertical ? _orbit_pan_pixels!(oc, 0.0, amount) : _orbit_pan_pixels!(oc, amount, 0.0)
+    end
+    return _orbit_event_update!(oc)
+end
+
+"""
+    orbit_key_up!(controls::OrbitControls, code::AbstractString)
+
+A key release; `"ControlLeft"`/`"ControlRight"` mark the Control key as no
+longer held (see [`orbit_key_down!`](@ref)).
+"""
+function orbit_key_up!(oc::OrbitControls, code::AbstractString)
+    (code == "ControlLeft" || code == "ControlRight") && (oc.control_active = false)
+    return oc
 end
 
 # TrackballControls: free rotation about the target via screen-space deltas.
@@ -1255,11 +1943,6 @@ function pointerlock_move!(pc::PointerLockControls, movement_x, movement_y)
 end
 
 # ---- Camera orientation as a three.js Object3D.quaternion -----------------
-
-# three.js MathUtils.DEG2RAD / RAD2DEG (MathUtils.js:1-2): the Float64 quotients
-# of Math.PI, so degree conversions round exactly like three.js.
-const _CONTROL_DEG2RAD = Float64(π) / 180.0
-const _CONTROL_RAD2DEG = 180.0 / Float64(π)
 
 # Local orientation of a camera as the quaternion three.js keeps in
 # `object.quaternion`: its rotation for a rotation-driven camera, otherwise the
