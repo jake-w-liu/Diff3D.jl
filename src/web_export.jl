@@ -4362,7 +4362,8 @@ end
 
 function _web_write_webgl_html(io::IO, data_json::String, title::String;
                                light_caps=(dir=4, point=4, spot=4, hemi=4, rect=4),
-                               extra_rewrites=(), chrome::Bool=true)
+                               extra_rewrites=(), chrome::Bool=true,
+                               render_order::Bool=false)
     _web_validate_title(title)
     max_dir = max(1, Int(light_caps.dir))
     max_point = max(1, Int(light_caps.point))
@@ -5980,15 +5981,14 @@ function _web_write_webgl_html(io::IO, data_json::String, title::String;
   function objectIsTransparent(o){ return o.transparent===true; }
   // Draw order follows three.js WebGLRenderLists.sort (:168-170): opaque items front to back by
   // painterSortStable (:1-29), transparent ones back to front by reversePainterSortStable
-  // (:31-51), both keyed first by group order and renderOrder. Diff3D's immutable materials carry
-  // no creation id, so the shader program stands in for material.id. z is the clip-space z of the
+  // (:31-51). Diff3D has no renderOrder or group order, and its immutable materials carry no
+  // creation id, so the shader program stands in for material.id. z is the clip-space z of the
   // bounding-sphere centre (a sprite's origin), as WebGLRenderer.js projectObject computes it
   // (:1890-1935); ties keep the object id order, and Array.prototype.sort is stable.
   function drawProgram(o){ return o.mode==="points"?pointProgram:(o.mode==="sprite"?spriteProgram:(o.mode==="triangles"?skinProgramFor(o,meshProgram,meshSkinProgram,meshBoneProgram):skinProgramFor(o,colorProgram,colorSkinProgram,colorBoneProgram))); }
   function renderDepth(o,pv){ const c=o.sortCenter||ORIGIN3, m=o.skin?(o.transformMatrix||o.matrix):o.matrix, x=m[0]*c[0]+m[4]*c[1]+m[8]*c[2]+m[12], y=m[1]*c[0]+m[5]*c[1]+m[9]*c[2]+m[13], z=m[2]*c[0]+m[6]*c[1]+m[10]*c[2]+m[14]; return pv[2]*x+pv[6]*y+pv[10]*z+pv[14]; }
-  function renderOrderCompare(a,b){ const ga=a.groupOrder||0, gb=b.groupOrder||0; if(ga!==gb) return ga<gb?-1:1; const ra=a.renderOrder||0, rb=b.renderOrder||0; return ra===rb?0:(ra<rb?-1:1); }
-  function painterSortStable(a,b){ const order=renderOrderCompare(a,b); if(order!==0) return order; if(a.renderProgramId!==b.renderProgramId) return a.renderProgramId-b.renderProgramId; if(a.renderVariant!==b.renderVariant) return a.renderVariant-b.renderVariant; if(a.renderZ!==b.renderZ) return a.renderZ-b.renderZ; return a.renderId-b.renderId; }
-  function reversePainterSortStable(a,b){ const order=renderOrderCompare(a,b); if(order!==0) return order; if(a.renderZ!==b.renderZ) return b.renderZ-a.renderZ; return a.renderId-b.renderId; }
+  function painterSortStable(a,b){ if(a.renderProgramId!==b.renderProgramId) return a.renderProgramId-b.renderProgramId; if(a.renderVariant!==b.renderVariant) return a.renderVariant-b.renderVariant; if(a.renderZ!==b.renderZ) return a.renderZ-b.renderZ; return a.renderId-b.renderId; }
+  function reversePainterSortStable(a,b){ if(a.renderZ!==b.renderZ) return b.renderZ-a.renderZ; return a.renderId-b.renderId; }
   function drawSceneView(state,visible,light,clip,fg,tm){ const vp=state.viewport||[0,0,canvas.width,canvas.height]; if(vp[2]<=0||vp[3]<=0) return 0; gl.viewport(vp[0],vp[1],vp[2],vp[3]); gl.scissor(vp[0],vp[1],vp[2],vp[3]); gl.enable(gl.SCISSOR_TEST); setDepthMask(true); gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT); currentDrawCamera=state.camera; currentDrawDistance=state.distance; let drawn=0; opaqueScratch.length=0; transparentScratch.length=0; const pv=M4.mul(state.proj,state.view); for(const o of visible){ const z=renderDepth(o,pv); o.renderZ=Number.isNaN(z)?0:z; o.renderId=Number(o.id)||0; if(objectIsTransparent(o)) transparentScratch.push(o); else { o.renderProgramId=linkedProgramInfo(drawProgram(o)).id; o.renderVariant=(o.instanceMatrices&&o.instanceMatrices.length?2:0)+(o.skin?1:0); opaqueScratch.push(o); } } opaqueScratch.sort(painterSortStable); transparentScratch.sort(reversePainterSortStable); for(const o of opaqueScratch){ draw(o,state,light,clip,fg,tm); drawn++; } for(const o of transparentScratch){ draw(o,state,light,clip,fg,tm); drawn++; } return drawn; }
   // A frame that throws after the early clear leaves the canvas showing only the
   // background, so the loop re-arms and retries rather than dying on one bad frame.
@@ -6048,8 +6048,39 @@ function _web_write_webgl_html(io::IO, data_json::String, title::String;
             "const MAX_DIR=$max_dir, MAX_POINT=$max_point, MAX_SPOT=$max_spot, MAX_HEMI=$max_hemi, MAX_RECT=$max_rect;",
     )
     all_rewrites = isempty(extra_rewrites) ? rewrites : (rewrites..., extra_rewrites...)
+    render_order && (all_rewrites = (all_rewrites..., _WEB_RENDER_ORDER_REWRITES...))
     _web_write_rewritten(io, html, all_rewrites)
     return nothing
+end
+
+# three.js sorts both render lists by group order and renderOrder first
+# (WebGLRenderLists.js:1-51). The viewer gets that sort only when an exported
+# node has a non-zero order, so exports whose orders are all 0 keep the 2.0 page
+# byte for byte; with every order 0 both sorts give the same draw order.
+const _WEB_RENDER_ORDER_REWRITES = (
+    "  // (:31-51). Diff3D has no renderOrder or group order, and its immutable materials carry no\n  // creation id, so the shader program stands in for material.id." =>
+        "  // (:31-51), both keyed first by group order and renderOrder. Diff3D's immutable materials carry\n  // no creation id, so the shader program stands in for material.id.",
+    "  function painterSortStable(a,b){ if(" =>
+        "  function renderOrderCompare(a,b){ const ga=a.groupOrder||0, gb=b.groupOrder||0; if(ga!==gb) return ga<gb?-1:1; const ra=a.renderOrder||0, rb=b.renderOrder||0; return ra===rb?0:(ra<rb?-1:1); }\n  function painterSortStable(a,b){ const order=renderOrderCompare(a,b); if(order!==0) return order; if(",
+    "  function reversePainterSortStable(a,b){ if(" =>
+        "  function reversePainterSortStable(a,b){ const order=renderOrderCompare(a,b); if(order!==0) return order; if(",
+)
+
+# Whether any node of an exported scene has a non-zero (or NaN) render order.
+function _web_cases_have_render_order(cases::AbstractVector{WebGLExportCase})
+    for case in cases
+        _web_node_has_render_order(case.scene) && return true
+    end
+    return false
+end
+
+function _web_node_has_render_order(node::AbstractObject3D)
+    value = getfield(node, :render_order)::Float64
+    iszero(value) || return true
+    for child in get_children(node)
+        _web_node_has_render_order(child) && return true
+    end
+    return false
 end
 
 function _webgl_html(data_json::String, title::String; light_caps=(dir=4, point=4, spot=4, hemi=4, rect=4), chrome::Bool=true)
@@ -6108,7 +6139,8 @@ function save_webgl_html(path::String, cases::AbstractVector{WebGLExportCase};
     destination = abspath(path)
     mktemp(dirname(destination)) do temporary, io
         _web_write_webgl_html(io, data_marker, title; light_caps, chrome,
-                              extra_rewrites=(data_rewrite,))
+                              extra_rewrites=(data_rewrite,),
+                              render_order=_web_cases_have_render_order(cases))
         data_inserted[] || error("WebGL HTML data insertion marker missing")
         close(io)
         if isfile(destination) && !islink(destination)

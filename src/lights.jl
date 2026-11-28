@@ -425,14 +425,22 @@ end
 # same `compute_world_matrix` value, so images are bit-identical. The scene
 # must not change while a render reads it (see the concurrency notes in the
 # manual), which is what makes the stored matrix current for the whole frame.
+#
+# Renders of one scene may run at the same time in different tasks, so arming
+# and disarming take `_LIGHT_WORLD_CACHE_LOCK` and `depth` is atomic: a lost
+# update could otherwise leave a light armed after every render ended, with a
+# matrix that goes stale when the scene changes. `matrix` is written only while
+# `depth` is 0, that is while no render reads it; shading threads read it
+# without the lock after an acquire load of `depth`.
 mutable struct _LightWorldCache
-    # Number of renders in progress that armed this light: a render nested in
-    # another one (multi-view, MSAA) arms and disarms it again.
-    depth::Int
+    # Number of renders in progress that armed this light.
+    @atomic depth::Int
     matrix::Mat4{Float64}
 end
 
 _LightWorldCache() = _LightWorldCache(0, Mat4{Float64}())
+
+const _LIGHT_WORLD_CACHE_LOCK = ReentrantLock()
 
 # ========================== AmbientLight ==========================
 
@@ -1142,7 +1150,7 @@ end
 # armed it is in progress, else computed from the parent chain.
 @inline function _light_world_matrix(light::AbstractLight)::Mat4{Float64}
     cache = getfield(light, :_world_cache)::_LightWorldCache
-    cache.depth > 0 && return cache.matrix
+    (@atomic :acquire cache.depth) > 0 && return cache.matrix
     return compute_world_matrix(light)::Mat4{Float64}
 end
 
@@ -1161,34 +1169,51 @@ end
 # transform chain is not finite stays unarmed, so the error it raises keeps
 # coming from the first shading query, as before.
 function _arm_light_world_cache!(lights::AbstractVector)
-    for light in lights
-        _arm_light_world!(light)
+    lock(_LIGHT_WORLD_CACHE_LOCK)
+    try
+        for light in lights
+            _arm_light_world!(light)
+        end
+    finally
+        unlock(_LIGHT_WORLD_CACHE_LOCK)
     end
     return lights
 end
 
+# Callers hold `_LIGHT_WORLD_CACHE_LOCK`.
 @inline function _arm_light_world!(light::AbstractLight)
     get_parent(light) === nothing && return nothing
     cache = getfield(light, :_world_cache)::_LightWorldCache
-    if cache.depth == 0
+    depth = @atomic :acquire cache.depth
+    if depth == 0
         _world_transform_chain_finite(light) || return nothing
         cache.matrix = compute_world_matrix(light)::Mat4{Float64}
     end
-    cache.depth += 1
+    @atomic :release cache.depth = depth + 1
     return nothing
 end
 
-# Undo `_arm_light_world_cache!` for the same lights when the frame ends.
+# Undo `_arm_light_world_cache!` for the same lights when the frame ends. A
+# light the frame did not arm (its render failed before arming) at worst ends
+# another render's use of the stored matrix early, which only makes that render
+# recompute the same matrix.
 function _disarm_light_world_cache!(lights::AbstractVector)
-    for light in lights
-        _disarm_light_world!(light)
+    lock(_LIGHT_WORLD_CACHE_LOCK)
+    try
+        for light in lights
+            _disarm_light_world!(light)
+        end
+    finally
+        unlock(_LIGHT_WORLD_CACHE_LOCK)
     end
     return lights
 end
 
+# Callers hold `_LIGHT_WORLD_CACHE_LOCK`.
 @inline function _disarm_light_world!(light::AbstractLight)
     cache = getfield(light, :_world_cache)::_LightWorldCache
-    cache.depth > 0 && (cache.depth -= 1)
+    depth = @atomic :acquire cache.depth
+    depth > 0 && (@atomic :release cache.depth = depth - 1)
     return nothing
 end
 

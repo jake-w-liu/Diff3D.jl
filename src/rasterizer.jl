@@ -1679,7 +1679,9 @@ end
 # (`_arm_light_world_cache!`); disarm them however the frame ends.
 function _render_camera!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
                          viewport::Union{Nothing,NTuple{4,Int}}; cache=nothing, kwargs...)
-    lights = cache === nothing ? SceneLight[] : cache.lights
+    # A cache's light list still holds the previous frame's lights; empty it so
+    # a failure before this frame collects and arms its lights disarms nothing.
+    lights = cache === nothing ? SceneLight[] : empty!(cache.lights)
     try
         return _render_camera_frame!(rt, scene, camera, viewport, lights;
                                      cache=cache, kwargs...)

@@ -1601,8 +1601,8 @@ function render_pooled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
                                           cache.skinned, cache.skinned_meshes,
                                           cache.skinned_matrices, cache.morph_positions; layer_mask=layer_mask)
     _collect_lights_into!(cache.lights, scene, layer_mask)
-    _arm_light_world_cache!(cache.lights)
     try
+        _arm_light_world_cache!(cache.lights)
         # Ascending (group order, render order) as `render!` draws them; the
         # traversal order within one key is unchanged.
         order_count, order_keys = _render_order_buckets(cache.mesh_depths, cache.meshes,
@@ -3729,8 +3729,8 @@ function render_tiled!(rt::RenderTarget, scene::Scene, camera::AbstractCamera;
         (shared_cache.bound_geometries, shared_cache.bounds))
     order_count, order_keys = _render_order_buckets(shared_cache.mesh_depths, meshes,
                                                     instanced)
-    _arm_light_world_cache!(lights)
     try
+        _arm_light_world_cache!(lights)
         band = cld(H, active_tiles)
         if thread_count == 1
             for t in 1:active_tiles

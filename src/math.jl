@@ -3863,7 +3863,8 @@ end
 end
 
 # three.js SRGBToLinear and LinearToSRGB (ColorManagement.js:205-215), with
-# their rounded constants so results match three.js bit for bit.
+# their rounded constants. Julia's `^` and V8's Math.pow can differ in the last
+# bit, so the curved branch can be 1 ulp from three.js.
 @inline _threejs_srgb_to_linear(c) =
     c < 0.04045 ? c * 0.0773993808 : (c * 0.9478672986 + 0.0521327014)^2.4
 @inline _threejs_linear_to_srgb(c) =

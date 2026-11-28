@@ -20,6 +20,9 @@ end
 
 center_color(target) = Tuple(target.color[8, 8, :])
 
+# Renders in progress that armed `light`'s per-frame world matrix.
+light_cache_depth(light) = @atomic light._world_cache.depth
+
 function cached_frame_allocations(target, scene, camera, cache; kwargs...)
     render!(target, scene, camera; cache, kwargs...)
     return @allocated render!(target, scene, camera; cache, kwargs...)
@@ -305,11 +308,27 @@ end
         html = read(path, String)
         @test !occursin("\"groupOrder\":", html)
         @test !occursin("\"renderOrder\":", html)
-        # The viewer sorts by group order, then renderOrder (WebGLRenderLists.js:1-51).
-        @test occursin("function painterSortStable(a,b){ const order=renderOrderCompare(a,b);", html)
-        @test occursin("function reversePainterSortStable(a,b){ const order=renderOrderCompare(a,b);", html)
+        # With every order 0 the page is the 2.0 page byte for byte: the viewer
+        # keeps its sort functions without the render-order keys.
+        @test !occursin("renderOrderCompare", html)
+        @test occursin("function painterSortStable(a,b){ if(a.renderProgramId!==b.renderProgramId)", html)
+        @test occursin("function reversePainterSortStable(a,b){ if(a.renderZ!==b.renderZ)", html)
         a.render_order = 2
         group.render_order = -3
+        b.render_order = -Inf
+        save_webgl_html(path, [WebGLExportCase("a", "A", "", scene)])
+        html = read(path, String)
+        # The viewer sorts by group order, then renderOrder (WebGLRenderLists.js:1-51).
+        @test occursin("function painterSortStable(a,b){ const order=renderOrderCompare(a,b); if(a.renderProgramId!==b.renderProgramId)", html)
+        @test occursin("function reversePainterSortStable(a,b){ const order=renderOrderCompare(a,b); if(a.renderZ!==b.renderZ)", html)
+        @test count("function renderOrderCompare(a,b)", html) == 1
+        # A non-zero order on a node that is not drawn (here only a group)
+        # also selects the render-order sort.
+        a.render_order = 0
+        b.render_order = 0
+        save_webgl_html(path, [WebGLExportCase("a", "A", "", scene)])
+        @test occursin("renderOrderCompare", read(path, String))
+        a.render_order = 2
         b.render_order = -Inf
         save_webgl_html(path, [WebGLExportCase("a", "A", "", scene)])
         html = read(path, String)
@@ -550,7 +569,7 @@ end
     render!(target, scene, camera; shading=:smooth)
     first_image = copy(target.color)
     # The cache only lives while a render is in progress.
-    @test light._world_cache.depth == 0
+    @test light_cache_depth(light) == 0
     # Moving the parent between frames moves the light.
     parent.position = Vec3(0.0, -3.0, 0.0)
     render!(target, scene, camera; shading=:smooth)
@@ -562,21 +581,21 @@ end
     # matches the same light computed per query (disarmed renders are the old
     # path: lights whose transform chain is not finite are never armed).
     Diff3D._arm_light_world_cache!([light])
-    @test light._world_cache.depth == 1
+    @test light_cache_depth(light) == 1
     @test Diff3D._light_world_matrix(light) === compute_world_matrix(light)
     Diff3D._disarm_light_world_cache!([light])
-    @test light._world_cache.depth == 0
+    @test light_cache_depth(light) == 0
     # An error during the frame still disarms the lights.
     bad = Mesh(BufferGeometry([0.0, 0.0, 0.0], Float64[], Float64[], [1, 2, 3], 1, 1),
                MeshBasicMaterial())
     add!(scene, bad)
     @test_throws Exception render!(target, scene, camera; shading=:smooth)
-    @test light._world_cache.depth == 0
+    @test light_cache_depth(light) == 0
     remove!(scene, bad)
     # A non-finite parent transform still raises from the shading query.
     parent.position = Vec3(NaN, 0.0, 0.0)
     @test_throws ArgumentError render!(target, scene, camera; shading=:smooth)
-    @test light._world_cache.depth == 0
+    @test light_cache_depth(light) == 0
     parent.position = Vec3(0.0, 0.0, 0.0)
     # Cached, pooled and tiled frames agree.
     cache = RenderCache()
@@ -589,7 +608,7 @@ end
     @test flat.color == reference
     render_tiled!(flat, scene, camera; tiles=2, cache=[RenderCache(), RenderCache()])
     @test flat.color == reference
-    @test light._world_cache.depth == 0
+    @test light_cache_depth(light) == 0
     if Base.JLOptions().opt_level > 0
         # Before, every shaded fragment walked the LOD parent with a dynamic
         # compute_world_matrix call that allocated; now the frame computes the
@@ -609,7 +628,58 @@ end
     light = SpotLight()
     copy = Diff3D.clone(light)
     @test copy._world_cache !== light._world_cache
-    @test copy._world_cache.depth == 0
+    @test light_cache_depth(copy) == 0
+end
+
+@testset "concurrent renders of one scene leave no light armed" begin
+    # Several tasks render the same scene (distinct targets and caches); arming
+    # and disarming are serialized and atomic, so every light ends unarmed and
+    # a later render sees a moved parent.
+    scene = Scene()
+    add!(scene, Mesh(PlaneGeometry(width=4.0, height=4.0),
+                     MeshLambertMaterial(color=Color3(0.8, 0.8, 0.8))))
+    rig = Group()
+    add!(scene, rig)
+    lights = [PointLight(intensity=5.0, position=Vec3(0.5 * index - 1.0, 0.3, 1.0))
+              for index in 1:6]
+    foreach(light -> add!(rig, light), lights)
+    camera = PerspectiveCamera()
+    camera.position = Vec3(0.0, 0.0, 3.0)
+    @sync for task_index in 1:max(4, 2 * Threads.nthreads())
+        Threads.@spawn begin
+            target = RenderTarget(4, 4)
+            cache = RenderCache()
+            for frame in 1:60
+                if isodd(frame + task_index)
+                    render!(target, scene, camera; cache=cache, shading=:smooth)
+                else
+                    render_pooled!(target, scene, camera, cache)
+                end
+            end
+        end
+    end
+    @test all(light -> light_cache_depth(light) == 0, lights)
+    rig.position = Vec3(0.0, 0.0, -0.8)
+    moved = RenderTarget(16, 16)
+    render!(moved, scene, camera; shading=:smooth)
+    for light in lights
+        light.position += rig.position
+    end
+    rig.position = Vec3(0.0, 0.0, 0.0)
+    baked = RenderTarget(16, 16)
+    render!(baked, scene, camera; shading=:smooth)
+    @test moved.color == baked.color
+    # A cached frame that fails before it collects its lights does not disarm
+    # the lights of the cache's previous frame, which another render may hold.
+    light = lights[1]
+    cache = RenderCache()
+    render!(RenderTarget(4, 4), scene, camera; cache=cache)
+    Diff3D._arm_light_world_cache!([light])
+    @test_throws ArgumentError render!(RenderTarget(4, 4), scene, camera; cache=cache,
+                                       shading=:bogus)
+    @test light_cache_depth(light) == 1
+    Diff3D._disarm_light_world_cache!([light])
+    @test light_cache_depth(light) == 0
 end
 
 @testset "view_matrix of a camera under a light, LOD, sprite or line does not allocate" begin
