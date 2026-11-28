@@ -1088,7 +1088,7 @@ end
 """Decode a JPEG/JPG file into an H×W×3 RGB array in [0,1]."""
 load_jpeg(path::String) = _decode_jpeg(read(path); label="JPEG image")
 
-# ===== KTX2 (Khronos texture container) — uncompressed decode =====
+# ===== KTX2 (Khronos texture container) — uncompressed and zlib-supercompressed decode =====
 # Basis Universal (vkFormat 0) and supercompressed payloads need a transcoder
 # and fail clearly rather than being silently approximated.
 const _KTX2_IDENTIFIER = UInt8[0xAB, 0x4B, 0x54, 0x58, 0x20, 0x32, 0x30, 0xBB,
@@ -1172,8 +1172,13 @@ function _decode_ktx2(bytes::AbstractVector{UInt8})
     kvdOffset   = _rd_le32(bytes, 57)
     kvdLength   = _rd_le32(bytes, 61)
 
-    superScheme == 0 ||
-        error("KTX2 supercompression scheme $superScheme is not supported; only uncompressed KTX2 is implemented (Basis/Zstd/Zlib need a transcoder)")
+    # KTX 2.0 supercompressionScheme values: 0 none, 1 BasisLZ, 2 Zstandard, 3 ZLIB.
+    superScheme == 1 &&
+        error("KTX2 supercompression scheme 1 (BasisLZ) is not supported; Basis Universal transcoding is not implemented")
+    superScheme == 2 &&
+        error("KTX2 supercompression scheme 2 (Zstandard) is not supported; Zstandard decoding is not implemented (three.js KTX2Loader decodes it with zstddec)")
+    superScheme in (0, 3) ||
+        error("KTX2 supercompression scheme $superScheme is not supported; only none (0) and ZLIB (3) are implemented")
     vkFormat != 0 ||
         error("KTX2 vkFormat 0 (Basis Universal) is not supported; Basis transcoding is not implemented")
     haskey(_KTX2_VKFORMATS, vkFormat) ||
@@ -1196,26 +1201,55 @@ function _decode_ktx2(bytes::AbstractVector{UInt8})
     pixel_bytes = channels * cbytes
     length(bytes) >= 104 ||                         # 80-byte header + one level entry
         error("KTX2 level index is truncated")
-    # KTX2 level data is uncompressed, so it must fit in the file. Bound the
-    # dimensions (overflow-safe) before computing `expected` — otherwise a crafted
-    # huge width/height overflows the Int64 product and defeats the size check.
-    maxpix = length(bytes) ÷ max(1, pixel_bytes)
+    # Level data must fit in the file, uncompressed or after DEFLATE's largest
+    # expansion (1032:1, zlib's deflateBound). Bound the dimensions
+    # (overflow-safe) before computing `expected`, so a crafted huge
+    # width/height can neither overflow the Int64 product nor allocate more
+    # than the file can describe.
+    max_level_bytes = superScheme == 0 ? length(bytes) :
+        _checked_mul_int(length(bytes), _KTX2_MAX_DEFLATE_RATIO, "KTX2 file")
+    maxpix = max_level_bytes ÷ max(1, pixel_bytes)
     (pixelWidth <= maxpix && pixelHeight <= maxpix && pixelWidth <= maxpix ÷ pixelHeight) ||
         error("KTX2 dimensions $(pixelWidth)x$(pixelHeight) exceed the $(length(bytes))-byte file")
     byteOffset = _rd_le64(bytes, 81)                # level 0 = full resolution
     byteLength = _rd_le64(bytes, 89)
     uncompressedByteLength = _rd_le64(bytes, 97)
-    uncompressedByteLength == byteLength ||
-        error("KTX2 level 0 uncompressedByteLength $uncompressedByteLength does not match byteLength $byteLength without supercompression")
-
     expected = pixelWidth * pixelHeight * pixel_bytes
-    byteLength == expected ||
-        error("KTX2 level 0 byteLength $byteLength does not match $(pixelWidth)x$(pixelHeight)x$channels x$cbytes = $expected uncompressed bytes")
+    if superScheme == 0
+        uncompressedByteLength == byteLength ||
+            error("KTX2 level 0 uncompressedByteLength $uncompressedByteLength does not match byteLength $byteLength without supercompression")
+        byteLength == expected ||
+            error("KTX2 level 0 byteLength $byteLength does not match $(pixelWidth)x$(pixelHeight)x$channels x$cbytes = $expected uncompressed bytes")
+    else
+        uncompressedByteLength == expected ||
+            error("KTX2 level 0 uncompressedByteLength $uncompressedByteLength does not match $(pixelWidth)x$(pixelHeight)x$channels x$cbytes = $expected bytes")
+    end
     # Overflow-safe: byteOffset/byteLength come from a u64 read (signed Int), so a
     # crafted huge offset must not make `byteOffset + byteLength` wrap past the guard.
     (0 <= byteOffset <= length(bytes) && byteLength >= 0 &&
      byteLength <= length(bytes) - byteOffset) ||
         error("KTX2 level 0 data range exceeds the file length $(length(bytes))")
+    if superScheme == 3
+        # ZLIB (RFC 1950) level data: inflate exactly `expected` bytes, with the
+        # stream's own header and Adler-32 checks.
+        stream = @view bytes[(byteOffset + 1):(byteOffset + byteLength)]
+        level = try
+            _zlib_inflate(stream, expected, nothing)
+        catch err
+            err isa ErrorException || rethrow()
+            error("KTX2 ZLIB level 0 data is invalid: $(err.msg)")
+        end
+        length(level) == expected ||
+            error("KTX2 ZLIB level 0 inflates to $(length(level)) bytes, expected $expected")
+        return _ktx2_level_image(level, 0, pixelWidth, pixelHeight, channels, kind, cbytes,
+                                 _ktx2_flips(bytes, kvdOffset, kvdLength)...)
+    end
+    return _ktx2_level_image(bytes, byteOffset, pixelWidth, pixelHeight, channels, kind,
+                             cbytes, _ktx2_flips(bytes, kvdOffset, kvdLength)...)
+end
+
+# (flip_x, flip_y) of the KTXorientation metadata.
+function _ktx2_flips(bytes::AbstractVector{UInt8}, kvdOffset::Int, kvdLength::Int)
 
     # Convert KTX's S/T orientation to the top-left, right/down array layout
     # used by the PNG/JPEG decoders. Missing metadata defaults to "rd".
@@ -1229,7 +1263,14 @@ function _decode_ktx2(bytes::AbstractVector{UInt8})
     end
     flip_x = orient !== nothing && codeunit(orient, 1) == UInt8('l')
     flip_y = orient !== nothing && codeunit(orient, 2) == UInt8('u')
+    return flip_x, flip_y
+end
 
+# The H×W×C image of row-major level data starting after `byteOffset` bytes.
+function _ktx2_level_image(bytes::AbstractVector{UInt8}, byteOffset::Int, pixelWidth::Int,
+                           pixelHeight::Int, channels::Int, kind::Symbol, cbytes::Int,
+                           flip_x::Bool, flip_y::Bool)
+    pixel_bytes = channels * cbytes
     # The level data (in bounds, checked above) is row-major; the H×W×C image
     # is column-major, so rows are stored a band at a time, column by column.
     img = Array{Float64}(undef, pixelHeight, pixelWidth, channels)
@@ -1254,16 +1295,19 @@ function _decode_ktx2(bytes::AbstractVector{UInt8})
 end
 
 const _KTX2_BAND_ROWS = 16
+const _KTX2_MAX_DEFLATE_RATIO = 1032
 
 """
     load_ktx2(path) -> Array{Float64,3}
 
-Decode an uncompressed KTX2 (Khronos texture) file into an `H×W×C` image,
-matching the layout produced by [`load_png`](@ref). Supports single-level
-8-bit R/RG/RGB/RGBA `UNORM`/`SRGB` formats (decoded to `[0, 1]`) and 16/32-bit
-`SFLOAT` formats (decoded to linear unclamped HDR values), and honors the
-`KTXorientation` metadata. Basis Universal (`vkFormat` 0) and supercompressed
-payloads require a transcoder and raise a clear error instead of guessing.
+Decode a KTX2 (Khronos texture) file into an `H×W×C` image, matching the
+layout produced by [`load_png`](@ref). Supports single-level 8-bit
+R/RG/RGB/RGBA `UNORM`/`SRGB` formats (decoded to `[0, 1]`) and 16/32-bit
+`SFLOAT` formats (decoded to linear unclamped HDR values), stored without
+supercompression or with ZLIB supercompression (scheme 3, which three.js
+`KTX2Loader` does not read), and honors the `KTXorientation` metadata. Basis
+Universal (`vkFormat` 0, BasisLZ) and Zstandard-supercompressed payloads need
+decoders Diff3D does not have and raise a clear error instead of guessing.
 """
 load_ktx2(path::String) = _decode_ktx2(read(path))
 
@@ -1722,8 +1766,11 @@ RGBELoader(path::String; colorspace::Symbol=:linear, kwargs...) =
     Texture(load_rgbe(path); colorspace=colorspace, kwargs...)
 
 # ========================== OpenEXR (scanline) ==========================
-# Supports scanline images with NONE/ZIP/ZIPS compression and HALF/FLOAT/UINT
-# pixels. Tiled, deep, multi-part, and PIZ/PXR24/B44/DWA payloads fail clearly.
+# Supports single-part scanline and tiled (level 0 of ONE_LEVEL/MIPMAP)
+# images with NONE/RLE/ZIP/ZIPS/PIZ/PXR24/B44/B44A compression and
+# HALF/FLOAT/UINT pixels. Deep, multi-part, DWAA/DWAB, RIPMAP and
+# random-order scanline files fail clearly; three.js EXRLoader reads deep,
+# multi-part and DWAA/DWAB files.
 
 const _EXR_MAGIC = 20000630                      # 0x01312f76
 

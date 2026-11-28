@@ -433,3 +433,74 @@ end
         @test !isfile(out)
     end
 end
+
+# A KTX2 file with one RGBA8 (vkFormat 37) level, as test/suite.jl builds
+# them, whose level data is `payload` with supercompression `scheme`.
+function _a3c_ktx2(width, height, payload, uncompressed_len; scheme=0, vkformat=37)
+    le32(x) = UInt8[x & 0xff, (x >> 8) & 0xff, (x >> 16) & 0xff, (x >> 24) & 0xff]
+    le64(x) = vcat(le32(x & 0xffffffff), le32((x >> 32) & 0xffffffff))
+    buf = UInt8[0xAB, 0x4B, 0x54, 0x58, 0x20, 0x32, 0x30, 0xBB, 0x0D, 0x0A, 0x1A, 0x0A]
+    for v in (vkformat, 1, width, height, 0, 0, 1, 1, scheme)
+        append!(buf, le32(v))
+    end
+    for v in (0, 0, 0, 0)                      # dfd and kvd offset/length
+        append!(buf, le32(v))
+    end
+    append!(buf, le64(0)); append!(buf, le64(0))
+    append!(buf, le64(104)); append!(buf, le64(length(payload))); append!(buf, le64(uncompressed_len))
+    return append!(buf, payload)
+end
+
+@testset "KTX2 ZLIB supercompression" begin
+    # KTX 2.0 supercompressionScheme 3 is ZLIB (RFC 1950). The stream is
+    # zlib.compress(bytes(0:23 mapped by (17i + 5) % 256), 9) from CPython.
+    raw = UInt8[(17i + 5) % 256 for i in 0:23]
+    z = UInt8[120, 218, 99, 21, 83, 183, 240, 140, 202, 174, 233, 157, 183, 254, 192, 197, 71,
+              159, 89, 68, 213, 204, 61, 34, 179, 170, 123, 0, 113, 176, 9, 205]
+    plain = Diff3D._decode_ktx2(_a3c_ktx2(3, 2, raw, 24))
+    packed = Diff3D._decode_ktx2(_a3c_ktx2(3, 2, z, 24; scheme=3))
+    @test packed == plain
+    @test size(packed) == (2, 3, 4)
+    @test round.(Int, packed[1, 1, :] .* 255) == [5, 22, 39, 56]
+    @test round.(Int, packed[2, 3, :] .* 255) == [89, 106, 123, 140]
+    mktempdir() do dir
+        path = joinpath(dir, "z.ktx2")
+        write(path, _a3c_ktx2(3, 2, z, 24; scheme=3))
+        @test load_ktx2(path) == plain
+    end
+    bad = copy(z); bad[end] ⊻= 0x01
+    @test_throws "KTX2 ZLIB level 0 data is invalid: zlib Adler-32 checksum mismatch" Diff3D._decode_ktx2(
+        _a3c_ktx2(3, 2, bad, 24; scheme=3))
+    @test_throws "uncompressedByteLength 20 does not match" Diff3D._decode_ktx2(
+        _a3c_ktx2(3, 2, z, 20; scheme=3))
+    @test_throws "KTX2 ZLIB level 0 data is invalid" Diff3D._decode_ktx2(
+        _a3c_ktx2(3, 2, z[1:20], 24; scheme=3))
+    # A stream that inflates past the declared size is cut off, not allocated.
+    @test_throws "KTX2 ZLIB level 0 data is invalid" Diff3D._decode_ktx2(
+        _a3c_ktx2(2, 2, z, 16; scheme=3))
+    # Dimensions beyond DEFLATE's 1032:1 expansion of the file are rejected
+    # before any allocation.
+    @test_throws "exceed the" Diff3D._decode_ktx2(_a3c_ktx2(60000, 60000, z, 0; scheme=3))
+    @test_throws "scheme 2 (Zstandard) is not supported" Diff3D._decode_ktx2(
+        _a3c_ktx2(3, 2, z, 24; scheme=2))
+    @test_throws "scheme 1 (BasisLZ) is not supported" Diff3D._decode_ktx2(
+        _a3c_ktx2(3, 2, z, 24; scheme=1))
+    @test_throws "scheme 7 is not supported" Diff3D._decode_ktx2(_a3c_ktx2(3, 2, z, 24; scheme=7))
+    # Random corruptions of the ZLIB file fail with an error, never a crash.
+    good = _a3c_ktx2(3, 2, z, 24; scheme=3)
+    rng_state = UInt32(12345)
+    for trial in 1:300
+        f = copy(good)
+        for _ in 1:3
+            rng_state = rng_state * UInt32(1664525) + UInt32(1013904223)
+            k = 105 + Int(rng_state % UInt32(length(z)))
+            f[k] = UInt8((rng_state >> 16) & 0xff)
+        end
+        result = try
+            Diff3D._decode_ktx2(f)
+        catch err
+            err
+        end
+        @test result isa Array{Float64,3} || result isa ErrorException
+    end
+end
