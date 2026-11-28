@@ -2578,6 +2578,22 @@ function sample_track(track::AbstractKeyframeTrack, t)
     return _track_value(track, t)
 end
 
+"""
+    AnimationClip(name, duration, tracks; loop=:repeat, repetitions=-1,
+                  clamp_when_finished=false, time_scale=1.0, blend_mode=:normal)
+    AnimationClip(name, tracks; kwargs...)
+
+Named collection of animation tracks with duration metadata (three.js
+`AnimationClip`). Without `duration` it is the latest last key, and at least
+0. `loop`, `repetitions`, `clamp_when_finished` and `time_scale` are the
+defaults an [`AnimationMixer`](@ref) plays the clip with.
+
+`blend_mode` is three.js `AnimationClip.blendMode`: `:normal` clips set the
+animated properties, `:additive` clips (see [`clip_make_additive`](@ref)) add
+offsets to them. An [`AnimationActionMixer`](@ref) action plays a clip with
+the clip's blend mode by default; `AnimationMixer`, `save_gltf` and the WebGL
+export apply clip values directly and reject additive clips.
+"""
 struct AnimationClip
     name::String
     duration::Float64
@@ -2586,6 +2602,28 @@ struct AnimationClip
     repetitions::Int
     clamp_when_finished::Bool
     time_scale::Float64
+    # three.js AnimationClip.blendMode: :normal or :additive.
+    blend_mode::Symbol
+end
+
+# The 2.0 positional form, without a blend mode, makes a normal clip.
+AnimationClip(name, duration, tracks, loop, repetitions, clamp_when_finished, time_scale) =
+    AnimationClip(name, duration, tracks, loop, repetitions, clamp_when_finished,
+                  time_scale, :normal)
+
+# three.js NormalAnimationBlendMode / AdditiveAnimationBlendMode.
+function _animation_blend_mode(mode::Symbol)
+    (mode === :normal || mode === :additive) && return mode
+    throw(ArgumentError("unsupported animation blend mode: $mode (expected :normal or :additive)"))
+end
+
+# Players that apply a clip's sampled values directly cannot show an
+# additive clip, whose values are offsets from a reference pose.
+function _require_normal_blend_clip(clip::AnimationClip, player::AbstractString)
+    clip.blend_mode === :normal || throw(ArgumentError(
+        "$player cannot play the additive clip $(repr(clip.name)); play it with " *
+        "mixer_clip_action on an AnimationActionMixer"))
+    return nothing
 end
 
 function _animation_loop_mode(loop::Symbol)
@@ -2628,7 +2666,8 @@ function AnimationClip(name::String, duration::Real,
                        loop::Symbol=:repeat,
                        repetitions::Integer=-1,
                        clamp_when_finished::Bool=false,
-                       time_scale::Real=1.0)
+                       time_scale::Real=1.0,
+                       blend_mode::Symbol=:normal)
     AnimationClip(
         name, _validated_animation_duration(duration),
         collect(AbstractKeyframeTrack, tracks),
@@ -2636,6 +2675,7 @@ function AnimationClip(name::String, duration::Real,
         _validated_animation_repetitions(repetitions),
         clamp_when_finished,
         _validated_animation_time_scale(time_scale),
+        _animation_blend_mode(blend_mode),
     )
 end
 
@@ -2643,7 +2683,8 @@ function AnimationClip(name::String, tracks::AbstractVector{<:AbstractKeyframeTr
                        loop::Symbol=:repeat,
                        repetitions::Integer=-1,
                        clamp_when_finished::Bool=false,
-                       time_scale::Real=1.0)
+                       time_scale::Real=1.0,
+                       blend_mode::Symbol=:normal)
     # three.js AnimationClip.resetDuration starts from 0, so tracks that end
     # before time zero give a zero-length clip instead of a negative one.
     duration = 0.0
@@ -2651,7 +2692,8 @@ function AnimationClip(name::String, tracks::AbstractVector{<:AbstractKeyframeTr
         isempty(track.times) || (duration = max(duration, last(track.times)))
     end
     AnimationClip(name, duration, tracks; loop=loop, repetitions=repetitions,
-                  clamp_when_finished=clamp_when_finished, time_scale=time_scale)
+                  clamp_when_finished=clamp_when_finished, time_scale=time_scale,
+                  blend_mode=blend_mode)
 end
 
 # ---- Track and clip utilities (three.js KeyframeTrack / AnimationClip /
@@ -2825,7 +2867,7 @@ end
 _clip_with(clip::AnimationClip, name::String, duration::Real, tracks) =
     AnimationClip(name, duration, tracks; loop=clip.loop, repetitions=clip.repetitions,
                   clamp_when_finished=clip.clamp_when_finished,
-                  time_scale=clip.time_scale)
+                  time_scale=clip.time_scale, blend_mode=clip.blend_mode)
 
 # three.js AnimationClip.resetDuration: the latest last key, starting from 0.
 function _clip_track_duration(tracks)
@@ -2911,6 +2953,133 @@ function clip_subclip(clip::AnimationClip, name::AbstractString, start_frame::Re
         end
     end
     return _clip_with(clip, String(name), _clip_track_duration(tracks), tracks)
+end
+
+# three.js KeyframeTrack.ValueTypeName of a track, for matching reference and
+# target tracks in clip_make_additive: morph-weight tracks are number tracks
+# there, and a number track that drives a Bool property is a 'bool' track.
+_additive_value_type(::Union{KeyframeTrack,CubicSplineKeyframeTrack}) = :vector
+_additive_value_type(::Union{QuaternionKeyframeTrack,CubicSplineQuaternionKeyframeTrack}) =
+    :quaternion
+_additive_value_type(::Union{MorphWeightsKeyframeTrack,CubicSplineMorphWeightsKeyframeTrack}) =
+    :number
+_additive_value_type(tr::NumberKeyframeTrack) =
+    tr.component == 0 && _original_property_value(tr.target, tr.property) isa Bool ?
+        :bool : :number
+
+_additive_track_name(tr::NumberKeyframeTrack) =
+    (tr.target, tr.property, tr.component, tr.morph_name)
+_additive_track_name(tr::AbstractKeyframeTrack) = (tr.target, tr.property, 0, "")
+
+function _same_additive_track_name(a::AbstractKeyframeTrack, b::AbstractKeyframeTrack)
+    na = _additive_track_name(a)
+    nb = _additive_track_name(b)
+    return na[1] === nb[1] && na[2] === nb[2] && na[3] == nb[3] && na[4] == nb[4]
+end
+
+# The reference value of `tr` at `t`: the first or last key outside the keys,
+# else the track's own interpolant with its default settings
+# (AnimationUtils.makeClipAdditive). For cubic-spline tracks this is the
+# spline value; three.js r186 slices the value out of a result buffer that
+# holds only the value there, and subtracts undefined (NaN).
+function _additive_reference_value(tr::AbstractKeyframeTrack, t::Float64)
+    t <= tr.times[1] && return tr.values[1]
+    t >= tr.times[end] && return tr.values[end]
+    return _track_value(tr, t)
+end
+
+# Normalized conjugate of a reference quaternion (Quaternion.normalize,
+# Quaternion.conjugate).
+function _additive_reference_conjugate(q::Quaternion)
+    l = sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w)
+    l == 0 && return Quaternion{Float64}(-0.0, -0.0, -0.0, 1.0)
+    l = 1 / l
+    return Quaternion{Float64}(-(q.x * l), -(q.y * l), -(q.z * l), q.w * l)
+end
+
+# Quaternion.multiplyQuaternionsFlat(reference, key).
+_additive_quaternion(r::Quaternion, q::Quaternion) = Quaternion{Float64}(
+    r.x * q.w + r.w * q.x + r.y * q.z - r.z * q.y,
+    r.y * q.w + r.w * q.y + r.z * q.x - r.x * q.z,
+    r.z * q.w + r.w * q.z + r.x * q.y - r.y * q.x,
+    r.w * q.w - r.x * q.x - r.y * q.y - r.z * q.z)
+
+_track_minus_reference(tr::KeyframeTrack, ref) =
+    KeyframeTrack(tr.target, tr.property, copy(tr.times), [v - ref for v in tr.values],
+                  tr.interpolation)
+_track_minus_reference(tr::CubicSplineKeyframeTrack, ref) =
+    CubicSplineKeyframeTrack(tr.target, tr.property, copy(tr.times),
+                             [v - ref for v in tr.values], copy(tr.in_tangents),
+                             copy(tr.out_tangents))
+_track_minus_reference(tr::NumberKeyframeTrack, ref) =
+    NumberKeyframeTrack(tr.target, tr.property, tr.component, copy(tr.times),
+                        [v - ref for v in tr.values], tr.interpolation, tr.morph_name)
+_track_minus_reference(tr::MorphWeightsKeyframeTrack, ref) =
+    MorphWeightsKeyframeTrack(tr.target, tr.property, copy(tr.times),
+                              [_morph_minus_reference(v, ref) for v in tr.values],
+                              tr.interpolation)
+_track_minus_reference(tr::CubicSplineMorphWeightsKeyframeTrack, ref) =
+    CubicSplineMorphWeightsKeyframeTrack(tr.target, tr.property, copy(tr.times),
+                                         [_morph_minus_reference(v, ref) for v in tr.values],
+                                         [copy(v) for v in tr.in_tangents],
+                                         [copy(v) for v in tr.out_tangents])
+_track_minus_reference(tr::QuaternionKeyframeTrack, ref) =
+    QuaternionKeyframeTrack(tr.target, tr.property, copy(tr.times),
+                            [_additive_quaternion(ref, q) for q in tr.values],
+                            tr.interpolation)
+# As in three.js, only the spline values are rotated, not their tangents.
+_track_minus_reference(tr::CubicSplineQuaternionKeyframeTrack, ref) =
+    CubicSplineQuaternionKeyframeTrack(tr.target, tr.property, copy(tr.times),
+                                       [_additive_quaternion(ref, q) for q in tr.values],
+                                       copy(tr.in_tangents), copy(tr.out_tangents))
+
+# Reference values are subtracted component by component, over the target
+# track's width (missing reference components count as 0).
+_morph_minus_reference(v::Vector{Float64}, ref::AbstractVector) =
+    [v[i] - (i <= length(ref) ? ref[i] : 0.0) for i in eachindex(v)]
+
+_reference_for(tr::AbstractKeyframeTrack, ref) = ref
+_reference_for(::Union{QuaternionKeyframeTrack,CubicSplineQuaternionKeyframeTrack},
+               ref::Quaternion) = _additive_reference_conjugate(ref)
+
+"""
+    clip_make_additive(clip, reference_frame=0, reference_clip=clip, fps=30) -> AnimationClip
+
+Additive copy of `clip` (three.js `AnimationUtils.makeClipAdditive`): every
+track that has a match in `reference_clip` (same target, property and
+component, and the same kind of value) holds its values relative to the
+match's value at frame `reference_frame` (time `reference_frame / fps`, with
+`fps <= 0` meaning 30). Vector, number and morph-weight keys subtract the
+reference; quaternion keys are multiplied by its normalized conjugate
+(`conj(ref) * q`; cubic-spline tangents are kept, as in three.js). Tracks
+that drive a `Bool` property are left as they are. The result has
+`blend_mode = :additive`; `clip` is not changed (three.js changes the clip
+in place).
+"""
+function clip_make_additive(clip::AnimationClip, reference_frame::Real=0,
+                            reference_clip::AnimationClip=clip, fps::Real=30)
+    frame = _checked_control_scalar(reference_frame, "clip_make_additive reference_frame")
+    rate = _checked_control_scalar(fps, "clip_make_additive fps")
+    rate <= 0 && (rate = 30.0)
+    reference_time = frame / rate
+    same = reference_clip === clip
+    tracks = collect(AbstractKeyframeTrack, clip.tracks)
+    for i in eachindex(reference_clip.tracks)
+        # three.js edits the clip in place, so a clip that is its own
+        # reference reads each reference track as edited so far.
+        ref_track = same ? tracks[i] : reference_clip.tracks[i]
+        value_type = _additive_value_type(ref_track)
+        value_type === :bool && continue
+        k = findfirst(tr -> _same_additive_track_name(tr, ref_track) &&
+                            _additive_value_type(tr) === value_type, tracks)
+        k === nothing && continue
+        ref = _reference_for(ref_track, _additive_reference_value(ref_track, reference_time))
+        tracks[k] = _track_minus_reference(tracks[k], ref)
+    end
+    return AnimationClip(clip.name, clip.duration, tracks; loop=clip.loop,
+                         repetitions=clip.repetitions,
+                         clamp_when_finished=clip.clamp_when_finished,
+                         time_scale=clip.time_scale, blend_mode=:additive)
 end
 
 """
@@ -3027,6 +3196,10 @@ The fields `time` (mixer time), `loop`, `repetitions`, `clamp_when_finished`,
 action's clip-local time is `action_time`. Unlike three.js, an enabled
 action writes its sampled values on every update, also when they did not
 change since the previous frame.
+
+`clip` must be a `:normal` clip; an additive clip (see `clip_make_additive`)
+throws `ArgumentError`. To play several clips at once, with weights, fades
+and additive layers, use [`AnimationActionMixer`](@ref).
 """
 mutable struct AnimationMixer
     clip::AnimationClip
@@ -3070,6 +3243,7 @@ end
 function _new_animation_mixer(clip::AnimationClip, loop::Symbol, repetitions::Int,
                               clamp_when_finished::Bool, time_scale::Float64,
                               zero_slope_at_start::Bool, zero_slope_at_end::Bool)
+    _require_normal_blend_clip(clip, "AnimationMixer")
     n = length(clip.tracks)
     mixer = AnimationMixer(clip, 0.0, loop, repetitions, clamp_when_finished,
                            time_scale, 0.0,
@@ -3117,8 +3291,176 @@ function AnimationMixer(clip::AnimationClip; loop::Union{Symbol,Nothing}=nothing
                          zero_slope_at_start, zero_slope_at_end)
 end
 
+# ---- Multi-action mixing (three.js AnimationMixer / AnimationAction /
+# PropertyMixer) ------------------------------------------------------------
+
+# One animated property of one object: three.js PropertyMixer with its
+# PropertyBinding. `buffer` holds `stride` values per region, in the
+# three.js layout [incoming | accu0 | accu1 | orig | additive | work].
+mutable struct _AnimationBinding
+    node::Any                       # object whose property is written
+    property::Symbol
+    component::Int                  # component (1-based) or 0 for the whole value
+    kind::Int                       # _BINDING_* below
+    stride::Int
+    buffer::Vector{Float64}
+    cumulative_weight::Float64
+    cumulative_weight_additive::Float64
+    use_count::Int
+    cache_index::Int                # position in the mixer's binding list
+    apply_offset::Int               # 0-based region offset `_binding_set!` writes from
+    # Whole influence vector a vector binding restores when its width differs
+    # from the binding's (empty otherwise).
+    original_vector::Vector{Float64}
+    # Vector tracks bound here: their keyframe vectors must not be written.
+    vector_tracks::Vector{AbstractKeyframeTrack}
+end
+
+# Weight and time-scale ramps: three.js LinearInterpolant over two
+# Float32Array keys with a Float32Array result (AnimationMixer.js
+# _lendControlInterpolant). `cached_index` is Interpolant._cachedIndex,
+# which a pooled interpolant keeps between uses.
+mutable struct _ControlInterpolant
+    t0::Float32
+    t1::Float32
+    v0::Float32
+    v1::Float32
+    cached_index::Int
+    cache_index::Int
+end
+
+"""
+    AnimationAction
+
+Handle for one clip scheduled on an [`AnimationActionMixer`](@ref), returned
+by [`mixer_clip_action`](@ref) (three.js `AnimationAction`). Its fields
+follow the three.js properties and may be changed between updates:
+
+- `weight` (1.0), `time_scale` (1.0), `time` (clip-local time, 0.0),
+  `enabled` (true), `paused` (false);
+- `loop` (`:repeat`, `:once` or `:pingpong`), `repetitions` (`-1` for
+  unlimited), `clamp_when_finished` (false), all taken from the clip;
+- `zero_slope_at_start`, `zero_slope_at_end` (true): the endings of
+  `:cubic` tracks, as for `AnimationMixer`;
+- `blend_mode` (`:normal` or `:additive`).
+
+`clip` and `mixer` are read-only. The `action_*` functions (`action_play!`,
+`action_fade_in!`, `action_cross_fade_to!`, `action_warp!`, ...) mirror the
+three.js methods.
+"""
+mutable struct AnimationAction{M}
+    mixer::M
+    clip::AnimationClip
+    blend_mode::Symbol
+    loop::Symbol
+    repetitions::Int
+    clamp_when_finished::Bool
+    zero_slope_at_start::Bool
+    zero_slope_at_end::Bool
+    time::Float64
+    time_scale::Float64
+    weight::Float64
+    enabled::Bool
+    paused::Bool
+    # three.js internals: effective values of the last update, loop count
+    # (-1 before the first time step), scheduled start, warp restore value and
+    # the fade/warp ramps lent by the mixer.
+    effective_time_scale::Float64
+    effective_weight::Float64
+    loop_count::Int
+    start_time::Union{Nothing,Float64}
+    restore_time_scale::Union{Nothing,Float64}
+    weight_interpolant::Union{Nothing,_ControlInterpolant}
+    time_scale_interpolant::Union{Nothing,_ControlInterpolant}
+    cache_index::Int                # position in the mixer's action list
+    # Interpolant settings and per-track CubicInterpolant cache, as on
+    # AnimationMixer (read by _mixer_track_value).
+    ending_start::Symbol
+    ending_end::Symbol
+    sample_time::Float64
+    track_index::Int
+    cubic_interval::Vector{Int}
+    cubic_ending_start::Vector{Symbol}
+    cubic_ending_end::Vector{Symbol}
+    # Bindings of each track (several for a morph track bound to a parent),
+    # all bindings in activation order, and per-track scratch samples.
+    track_bindings::Vector{Vector{_AnimationBinding}}
+    bindings::Vector{_AnimationBinding}
+    vector_samples::Vector{Vector{Float64}}
+end
+
+"""
+    AnimationActionMixer()
+
+Mixer that plays any number of clips at once and blends them per property,
+like a three.js `AnimationMixer` driving several actions
+(src/animation/AnimationMixer.js, AnimationAction.js, PropertyMixer.js).
+`AnimationMixer(clip)` keeps playing one clip on its own; this mixer adds the
+three.js action API on top:
+
+```julia
+mixer = AnimationActionMixer()
+walk = mixer_clip_action(mixer, walk_clip)
+run = mixer_clip_action(mixer, run_clip)
+action_play!(walk); action_play!(run)
+action_set_effective_weight!(run, 0.0)
+action_cross_fade_to!(walk, run, 0.5; warp=true)
+mixer_update!(mixer, 1 / 60)
+```
+
+[`mixer_clip_action`](@ref) returns the [`AnimationAction`](@ref) of a clip.
+Each update steps every playing action ([`action_play!`](@ref)) like
+`AnimationMixer` (loops, repetitions, clamping, cubic endings), evaluates
+fades and warps, and accumulates the weighted samples of each property
+exactly as three.js `PropertyMixer`: a weighted average of the `:normal`
+actions (vectors, scalars and morph influences lerp, quaternion tracks slerp,
+and a `NumberKeyframeTrack` that drives a `Bool` property selects like a
+three.js `BooleanKeyframeTrack`), the original value filling the weight
+missing to 1, and then the `:additive` actions added on top (quaternions
+compose). Original values are read when the first action using a property
+starts playing and restored when the last one stops. A property is written
+only when its blended value changed since the previous update.
+
+The fields `time` (mixer time) and `time_scale` may be changed between
+updates. Fade and warp ramps store their times and values as `Float32`, as
+three.js does. Two Diff3D differences: tracks are already bound to their
+targets, so the mixer has no root object and an action is looked up by clip;
+and `:rotation` (Euler) `KeyframeTrack`s blend their angles, where three.js
+`Euler.fromArray` ignores the mixer's buffer offset and writes the last
+sampled value. Material properties replace the material object when their
+blended value changes, as `AnimationMixer` does.
+"""
+mutable struct AnimationActionMixer
+    time::Float64
+    time_scale::Float64
+    accu_index::Int
+    actions::Vector{AnimationAction{AnimationActionMixer}}
+    n_active_actions::Int
+    bindings::Vector{_AnimationBinding}
+    n_active_bindings::Int
+    control_interpolants::Vector{_ControlInterpolant}
+    n_active_control_interpolants::Int
+    # three.js _actionsByClip: each clip and its latest action.
+    clips::Vector{AnimationClip}
+    clip_actions::Vector{AnimationAction{AnimationActionMixer}}
+end
+
+AnimationActionMixer() =
+    AnimationActionMixer(0.0, 1.0, 0, AnimationAction{AnimationActionMixer}[], 0,
+                         _AnimationBinding[], 0, _ControlInterpolant[], 0,
+                         AnimationClip[], AnimationAction{AnimationActionMixer}[])
+
+const _MixerAction = AnimationAction{AnimationActionMixer}
+const _ActionStepper = Union{AnimationMixer, _MixerAction}
+
+# Clip-local time of the action being stepped.
+@inline _action_local_time(mixer::AnimationMixer) = mixer.action_time
+@inline _action_local_time(action::_MixerAction) = action.time
+@inline _set_action_local_time!(mixer::AnimationMixer, t::Float64) = (mixer.action_time = t)
+@inline _set_action_local_time!(action::_MixerAction, t::Float64) = (action.time = t)
+
 # three.js AnimationAction._setEndings (AnimationAction.js:882-917).
-function _set_action_endings!(mixer::AnimationMixer, at_start::Bool, at_end::Bool,
+function _set_action_endings!(mixer::_ActionStepper, at_start::Bool, at_end::Bool,
                               pingpong::Bool)
     if pingpong
         mixer.ending_start = :zero_slope
@@ -3134,7 +3476,7 @@ end
 
 # A finishing action pauses on its last pose when clamping, otherwise it is
 # disabled (AnimationAction.js:771-772, 822-823).
-@inline function _finish_action!(mixer::AnimationMixer)
+@inline function _finish_action!(mixer::_ActionStepper)
     mixer.clamp_when_finished ? (mixer.paused = true) : (mixer.enabled = false)
     return nothing
 end
@@ -3157,10 +3499,10 @@ end
 # the clip-local time by the scaled `delta` and return the clip time to
 # sample. A zero-length repeating clip samples time 0 (three.js divides by
 # the zero duration there).
-function _update_action_time!(mixer::AnimationMixer, delta::Float64)
+function _update_action_time!(mixer::_ActionStepper, delta::Float64)
     duration = mixer.clip.duration
     loop = _animation_loop_mode(mixer.loop)
-    time = _checked_control_scalar(mixer.action_time + delta, "animation time")
+    time = _checked_control_scalar(_action_local_time(mixer) + delta, "animation time")
     loop_count = mixer.loop_count
     pingpong = loop === :pingpong
     if delta == 0.0
@@ -3177,11 +3519,11 @@ function _update_action_time!(mixer::AnimationMixer, delta::Float64)
         elseif time < 0.0
             time = 0.0
         else
-            mixer.action_time = time
+            _set_action_local_time!(mixer, time)
             return time
         end
         _finish_action!(mixer)
-        mixer.action_time = time
+        _set_action_local_time!(mixer, time)
         return time
     end
     repetitions = mixer.repetitions          # negative: unlimited (Infinity)
@@ -3197,7 +3539,7 @@ function _update_action_time!(mixer::AnimationMixer, delta::Float64)
     end
     if duration <= 0.0
         mixer.loop_count = loop_count
-        mixer.action_time = 0.0
+        _set_action_local_time!(mixer, 0.0)
         return 0.0
     end
     if time >= duration || time < 0.0
@@ -3209,7 +3551,7 @@ function _update_action_time!(mixer::AnimationMixer, delta::Float64)
             time = delta > 0.0 ? duration : 0.0
             # three.js keeps _loopCount at its previous value here, so the
             # frames after a clamped ping-pong finish can mirror the pose.
-            mixer.action_time = time
+            _set_action_local_time!(mixer, time)
         else
             if repetitions >= 0 && repetitions - loop_count == 1
                 at_start = delta < 0.0
@@ -3218,11 +3560,11 @@ function _update_action_time!(mixer::AnimationMixer, delta::Float64)
                 _set_action_endings!(mixer, false, false, pingpong)
             end
             mixer.loop_count = loop_count
-            mixer.action_time = time
+            _set_action_local_time!(mixer, time)
         end
     else
         mixer.loop_count = loop_count
-        mixer.action_time = time
+        _set_action_local_time!(mixer, time)
     end
     return pingpong && isodd(loop_count) ? duration - time : time
 end
@@ -3803,10 +4145,10 @@ end
 # outside the keys it copies the end value and forgets its interval; inside,
 # it computes its weights with the action's current endings only when the
 # sample enters a different key interval, and keeps them while it stays.
-_mixer_track_value(tr::AbstractKeyframeTrack, mixer::AnimationMixer) =
+_mixer_track_value(tr::AbstractKeyframeTrack, mixer::_ActionStepper) =
     _track_value(tr, mixer.sample_time)
 function _mixer_track_value(tr::Union{KeyframeTrack,NumberKeyframeTrack},
-                            mixer::AnimationMixer)
+                            mixer::_ActionStepper)
     tr.interpolation === :cubic || return _track_value(tr, mixer.sample_time)
     t = mixer.sample_time
     times = tr.times
@@ -4197,8 +4539,1227 @@ function mixer_set_loop!(mixer::AnimationMixer, loop::Symbol, repetitions::Integ
     return mixer
 end
 
-# ========================== Helpers ==========================
+# ---- Multi-action mixer: property bindings (three.js PropertyBinding) ------
 
+const _BINDING_VEC3 = 1          # Vec3 track on a Vec3/Color3/Vec2/scalar property
+const _BINDING_EULER = 2         # Vec3 track on :rotation (Euler angles)
+const _BINDING_SCALAR = 3        # whole-value number track
+const _BINDING_BOOL = 4          # number track on a Bool property (three.js 'bool')
+const _BINDING_COMPONENT = 5     # number track on one component of a property
+const _BINDING_MORPH = 6         # one morph influence of one node
+const _BINDING_QUATERNION = 7    # quaternion track
+const _BINDING_VECTOR = 8        # whole influence vector of one node
+
+@noinline _throw_unreadable_binding(property::Symbol) = throw(ArgumentError(
+    "animation property $property cannot be read for blending"))
+
+# PropertyBinding.getValue into the `orig` region.
+function _binding_get!(node, b::_AnimationBinding)
+    buf = b.buffer
+    o = 3 * b.stride
+    kind = b.kind
+    property = b.property
+    if kind == _BINDING_VEC3
+        v = _original_vec3_property(node, property)
+        v === nothing && _throw_unreadable_binding(property)
+        buf[o + 1] = v.x
+        buf[o + 2] = v.y
+        buf[o + 3] = v.z
+    elseif kind == _BINDING_EULER
+        r = getproperty(node, :rotation)
+        r isa Euler || _throw_unreadable_binding(property)
+        buf[o + 1] = r.x
+        buf[o + 2] = r.y
+        buf[o + 3] = r.z
+    elseif kind == _BINDING_SCALAR || kind == _BINDING_BOOL
+        v = _original_scalar(_original_property_value(node, property))
+        v === nothing && _throw_unreadable_binding(property)
+        buf[o + 1] = v
+    elseif kind == _BINDING_COMPONENT
+        value = property === :quaternion ? _target_rotation_quaternion(node) :
+            _original_property_value(node, property)
+        v = _original_component(value, b.component)
+        v === nothing && _throw_unreadable_binding(property)
+        buf[o + 1] = v
+    elseif kind == _BINDING_MORPH
+        values = getproperty(node, :morph_target_influences)
+        1 <= b.component <= length(values) || throw(ArgumentError(
+            "morph influence component $(b.component - 1) is out of range"))
+        buf[o + 1] = Float64(values[b.component])
+    elseif kind == _BINDING_QUATERNION
+        q = _rotation_track_property(property) ? _target_rotation_quaternion(node) :
+            getproperty(node, property)
+        q isa Quaternion || _throw_unreadable_binding(property)
+        buf[o + 1] = q.x
+        buf[o + 2] = q.y
+        buf[o + 3] = q.z
+        buf[o + 4] = q.w
+    else
+        values = getproperty(node, property)
+        values isa AbstractVector{<:Real} || _throw_unreadable_binding(property)
+        s = b.stride
+        n = length(values)
+        for i in 1:s
+            buf[o + i] = i <= n ? Float64(values[i]) : 0.0
+        end
+        b.original_vector = n == s ? Float64[] : collect(Float64, values)
+    end
+    return nothing
+end
+
+# PropertyBinding.setValue from the region at `b.apply_offset`, through the
+# writers AnimationMixer uses.
+function _binding_set!(node, b::_AnimationBinding)
+    buf = b.buffer
+    o = b.apply_offset
+    kind = b.kind
+    property = b.property
+    @inbounds if kind == _BINDING_VEC3
+        _write_track_value!(node, property, Vec3{Float64}(buf[o + 1], buf[o + 2], buf[o + 3]))
+    elseif kind == _BINDING_EULER
+        _write_track_value!(node, :rotation, Vec3{Float64}(buf[o + 1], buf[o + 2], buf[o + 3]))
+    elseif kind == _BINDING_SCALAR || kind == _BINDING_BOOL
+        _write_track_value!(node, property, buf[o + 1])
+    elseif kind == _BINDING_COMPONENT
+        _write_track_value!(node, property, b.component, buf[o + 1])
+    elseif kind == _BINDING_MORPH
+        _write_morph_component_value!(getproperty(node, :morph_target_influences),
+                                      b.component, buf[o + 1])
+    elseif kind == _BINDING_QUATERNION
+        _write_track_value!(node, property,
+                            Quaternion{Float64}(buf[o + 1], buf[o + 2], buf[o + 3], buf[o + 4]))
+    else
+        _binding_set_vector!(node, b, o)
+    end
+    return nothing
+end
+
+# A whole influence vector is written into the node's vector, which is
+# replaced when its length differs or it is one of the keyframe vectors of
+# a track bound here (writing into it would change the track).
+function _binding_set_vector!(node, b::_AnimationBinding, o::Int)
+    s = b.stride
+    values = getproperty(node, b.property)
+    if !(values isa Vector{Float64}) || length(values) != s ||
+       _binding_aliases_keyframes(b, values)
+        values = Vector{Float64}(undef, s)
+        setproperty!(node, b.property, values)
+    end
+    copyto!(values, 1, b.buffer, o + 1, s)
+    return nothing
+end
+
+function _binding_aliases_keyframes(b::_AnimationBinding, values::Vector{Float64})
+    for tr in b.vector_tracks
+        _morph_buffer_aliases_track(values, tr) && return true
+    end
+    return false
+end
+
+# PropertyMixer.restoreOriginalState. A vector binding whose node had a
+# vector of another width gets that vector's values back.
+function _binding_restore_original!(b::_AnimationBinding)
+    if b.kind == _BINDING_VECTOR && !isempty(b.original_vector)
+        setproperty!(b.node, b.property, copy(b.original_vector))
+        return nothing
+    end
+    b.apply_offset = 3 * b.stride
+    _binding_set!(b.node, b)
+    return nothing
+end
+
+# ---- Multi-action mixer: PropertyMixer numerics ----------------------------
+
+# three.js Quaternion.slerpFlat (src/math/Quaternion.js) on quadruples of
+# `buf` at 0-based offsets, in the same operation order.
+@inline function _slerp_flat!(buf::Vector{Float64}, dst::Int, src0::Int, src1::Int,
+                              t::Float64)
+    @inbounds begin
+        x0 = buf[src0 + 1]; y0 = buf[src0 + 2]; z0 = buf[src0 + 3]; w0 = buf[src0 + 4]
+        x1 = buf[src1 + 1]; y1 = buf[src1 + 2]; z1 = buf[src1 + 3]; w1 = buf[src1 + 4]
+        if w0 != w1 || x0 != x1 || y0 != y1 || z0 != z1
+            dot = x0 * x1 + y0 * y1 + z0 * z1 + w0 * w1
+            if dot < 0
+                x1 = -x1; y1 = -y1; z1 = -z1; w1 = -w1
+                dot = -dot
+            end
+            s = 1 - t
+            if dot < 0.9995
+                theta = acos(dot)
+                sn = sin(theta)
+                s = sin(s * theta) / sn
+                t = sin(t * theta) / sn
+                x0 = x0 * s + x1 * t
+                y0 = y0 * s + y1 * t
+                z0 = z0 * s + z1 * t
+                w0 = w0 * s + w1 * t
+            else
+                x0 = x0 * s + x1 * t
+                y0 = y0 * s + y1 * t
+                z0 = z0 * s + z1 * t
+                w0 = w0 * s + w1 * t
+                f = 1 / sqrt(x0 * x0 + y0 * y0 + z0 * z0 + w0 * w0)
+                x0 *= f; y0 *= f; z0 *= f; w0 *= f
+            end
+        end
+        buf[dst + 1] = x0; buf[dst + 2] = y0; buf[dst + 3] = z0; buf[dst + 4] = w0
+    end
+    return nothing
+end
+
+# three.js Quaternion.multiplyQuaternionsFlat: dst = src0 * src1.
+@inline function _multiply_quaternions_flat!(buf::Vector{Float64}, dst::Int, src0::Int,
+                                             src1::Int)
+    @inbounds begin
+        x0 = buf[src0 + 1]; y0 = buf[src0 + 2]; z0 = buf[src0 + 3]; w0 = buf[src0 + 4]
+        x1 = buf[src1 + 1]; y1 = buf[src1 + 2]; z1 = buf[src1 + 3]; w1 = buf[src1 + 4]
+        buf[dst + 1] = x0 * w1 + w0 * x1 + y0 * z1 - z0 * y1
+        buf[dst + 2] = y0 * w1 + w0 * y1 + z0 * x1 - x0 * z1
+        buf[dst + 3] = z0 * w1 + w0 * z1 + x0 * y1 - y0 * x1
+        buf[dst + 4] = w0 * w1 - x0 * x1 - y0 * y1 - z0 * z1
+    end
+    return nothing
+end
+
+# PropertyMixer._select / _slerp / _lerp: mix the region at `src` into the
+# region at `dst` with weight `t`.
+@inline function _binding_mix!(b::_AnimationBinding, dst::Int, src::Int, t::Float64)
+    buf = b.buffer
+    s = b.stride
+    if b.kind == _BINDING_QUATERNION
+        _slerp_flat!(buf, dst, dst, src, t)
+    elseif b.kind == _BINDING_BOOL
+        if t >= 0.5
+            @inbounds for i in 1:s
+                buf[dst + i] = buf[src + i]
+            end
+        end
+    else
+        u = 1 - t
+        @inbounds for i in 1:s
+            j = dst + i
+            buf[j] = buf[j] * u + buf[src + i] * t
+        end
+    end
+    return nothing
+end
+
+# PropertyMixer._select / _slerpAdditive / _lerpAdditive.
+@inline function _binding_mix_additive!(b::_AnimationBinding, dst::Int, src::Int,
+                                        t::Float64)
+    buf = b.buffer
+    s = b.stride
+    if b.kind == _BINDING_QUATERNION
+        work = 5 * s
+        _multiply_quaternions_flat!(buf, work, dst, src)
+        _slerp_flat!(buf, dst, dst, work, t)
+    elseif b.kind == _BINDING_BOOL
+        if t >= 0.5
+            @inbounds for i in 1:s
+                buf[dst + i] = buf[src + i]
+            end
+        end
+    else
+        @inbounds for i in 1:s
+            j = dst + i
+            buf[j] = buf[j] + buf[src + i] * t
+        end
+    end
+    return nothing
+end
+
+# PropertyMixer._setAdditiveIdentity{Numeric,Quaternion,Other}.
+function _binding_set_additive_identity!(b::_AnimationBinding)
+    buf = b.buffer
+    s = b.stride
+    add = 4 * s
+    @inbounds if b.kind == _BINDING_BOOL
+        for i in 1:s
+            buf[add + i] = buf[3 * s + i]
+        end
+    else
+        for i in 1:s
+            buf[add + i] = 0.0
+        end
+        b.kind == _BINDING_QUATERNION && (buf[add + 4] = 1.0)
+    end
+    return nothing
+end
+
+# PropertyMixer.accumulate (PropertyMixer.js accumulate).
+function _binding_accumulate!(b::_AnimationBinding, accu_index::Int, weight::Float64)
+    buf = b.buffer
+    s = b.stride
+    offset = accu_index * s + s
+    current = b.cumulative_weight
+    if current == 0
+        @inbounds for i in 1:s
+            buf[offset + i] = buf[i]
+        end
+        current = weight
+    else
+        current += weight
+        _binding_mix!(b, offset, 0, weight / current)
+    end
+    b.cumulative_weight = current
+    return nothing
+end
+
+# PropertyMixer.accumulateAdditive.
+function _binding_accumulate_additive!(b::_AnimationBinding, weight::Float64)
+    b.cumulative_weight_additive == 0 && _binding_set_additive_identity!(b)
+    _binding_mix_additive!(b, 4 * b.stride, 0, weight)
+    b.cumulative_weight_additive += weight
+    return nothing
+end
+
+# PropertyMixer.apply: fill the missing weight with the original value, add
+# the additive layer, and write the result when it differs from the
+# previous update's.
+function _binding_apply!(b::_AnimationBinding, accu_index::Int)
+    buf = b.buffer
+    s = b.stride
+    offset = accu_index * s + s
+    weight = b.cumulative_weight
+    weight_additive = b.cumulative_weight_additive
+    b.cumulative_weight = 0.0
+    b.cumulative_weight_additive = 0.0
+    weight < 1 && _binding_mix!(b, offset, 3 * s, 1 - weight)
+    weight_additive > 0 && _binding_mix_additive!(b, offset, 4 * s, 1.0)
+    @inbounds for i in (s + 1):(2 * s)
+        if buf[i] != buf[i + s]
+            b.apply_offset = offset
+            _binding_set!(b.node, b)
+            break
+        end
+    end
+    return nothing
+end
+
+# PropertyMixer.saveOriginalState.
+function _binding_save_original!(b::_AnimationBinding)
+    buf = b.buffer
+    s = b.stride
+    orig = 3 * s
+    _binding_get!(b.node, b)
+    @inbounds for i in s:(orig - 1)
+        buf[i + 1] = buf[orig + i % s + 1]
+    end
+    _binding_set_additive_identity!(b)
+    b.cumulative_weight = 0.0
+    b.cumulative_weight_additive = 0.0
+    return nothing
+end
+
+# ---- Multi-action mixer: binding tracks to properties ---------------------
+
+# (node, property, component, kind, stride) of every property a track
+# drives. Morph tracks bound to a parent drive each descendant that has
+# influences, as AnimationMixer applies them.
+const _BindingSpec = Tuple{Any,Symbol,Int,Int,Int}
+
+function _track_binding_specs(tr::Union{KeyframeTrack,CubicSplineKeyframeTrack})
+    target = tr.target
+    kind = tr.property === :rotation && hasproperty(target, :rotation) ?
+        _BINDING_EULER : _BINDING_VEC3
+    return _BindingSpec[(target, tr.property, 0, kind, 3)]
+end
+
+function _morph_component_specs!(node, tr::NumberKeyframeTrack, out::Vector{_BindingSpec})
+    found = false
+    if hasproperty(node, :morph_target_influences)
+        found = true
+        k = isempty(tr.morph_name) ? tr.component : _node_morph_name_index(node, tr.morph_name)
+        k == 0 || push!(out, (node, :morph_target_influences, k, _BINDING_MORPH, 1))
+    end
+    for child in get_children(node)
+        found |= _morph_component_specs!(child, tr, out)
+    end
+    return found
+end
+
+function _track_binding_specs(tr::NumberKeyframeTrack)
+    target = tr.target
+    if tr.property === :morph_target_influences && tr.component != 0
+        specs = _BindingSpec[]
+        _morph_component_specs!(target, tr, specs) ||
+            throw(ArgumentError("target does not expose morph target influences"))
+        return specs
+    elseif tr.component == 0
+        kind = _original_property_value(target, tr.property) isa Bool ?
+            _BINDING_BOOL : _BINDING_SCALAR
+        return _BindingSpec[(target, tr.property, 0, kind, 1)]
+    end
+    return _BindingSpec[(target, tr.property, tr.component, _BINDING_COMPONENT, 1)]
+end
+
+_track_binding_specs(tr::Union{QuaternionKeyframeTrack,CubicSplineQuaternionKeyframeTrack}) =
+    _BindingSpec[(tr.target, tr.property, 0, _BINDING_QUATERNION, 4)]
+
+function _morph_vector_specs!(node, property::Symbol, width::Int,
+                              out::Vector{_BindingSpec})
+    hasproperty(node, property) && push!(out, (node, property, 0, _BINDING_VECTOR, width))
+    for child in get_children(node)
+        _morph_vector_specs!(child, property, width, out)
+    end
+    return out
+end
+
+function _track_binding_specs(tr::_MorphWeightsTrack)
+    width = length(tr.values[1])
+    specs = _BindingSpec[]
+    if tr.property === :morph_target_influences
+        _morph_vector_specs!(tr.target, tr.property, width, specs)
+    elseif hasproperty(tr.target, tr.property)
+        push!(specs, (tr.target, tr.property, 0, _BINDING_VECTOR, width))
+    end
+    isempty(specs) && throw(ArgumentError(
+        "animation target has no property $(tr.property) for a morph-weight track"))
+    return specs
+end
+
+_binding_matches(b::_AnimationBinding, spec::_BindingSpec) =
+    b.node === spec[1] && b.property === spec[2] && b.component == spec[3] &&
+    b.kind == spec[4] && b.stride == spec[5]
+
+# three.js AnimationMixer._bindAction: each track's properties get the
+# mixer's existing PropertyMixer or a new one. New bindings are read once
+# (so an unreadable property fails here) and join the mixer only after every
+# track of the clip has bound.
+function _bind_action_tracks!(mixer::AnimationActionMixer, clip::AnimationClip)
+    added = _AnimationBinding[]
+    track_bindings = Vector{_AnimationBinding}[]
+    for tr in clip.tracks
+        bound = _AnimationBinding[]
+        for spec in _track_binding_specs(tr)
+            k = findfirst(b -> _binding_matches(b, spec), mixer.bindings)
+            b = k === nothing ? nothing : mixer.bindings[k]
+            if b === nothing
+                k = findfirst(b -> _binding_matches(b, spec), added)
+                b = k === nothing ? nothing : added[k]
+            end
+            if b === nothing
+                node, property, component, kind, stride = spec
+                b = _AnimationBinding(node, property, component, kind, stride,
+                                      zeros(6 * stride), 0.0, 0.0, 0, 0, 0, Float64[],
+                                      AbstractKeyframeTrack[])
+                _binding_get!(node, b)
+                push!(added, b)
+            end
+            if b.kind == _BINDING_VECTOR && !any(t -> t === tr, b.vector_tracks)
+                push!(b.vector_tracks, tr)
+            end
+            push!(bound, b)
+        end
+        push!(track_bindings, bound)
+    end
+    for b in added
+        push!(mixer.bindings, b)
+        b.cache_index = length(mixer.bindings)
+    end
+    return track_bindings
+end
+
+# ---- Multi-action mixer: memory manager (AnimationMixer.js) ---------------
+#
+# `actions` and `bindings` keep the active entries first, in the order three.js
+# swaps them in and out, so updates accumulate in the three.js order.
+
+_is_active_action(a::_MixerAction) = a.cache_index <= a.mixer.n_active_actions
+
+function _lend_action!(mixer::AnimationActionMixer, a::_MixerAction)
+    actions = mixer.actions
+    prev = a.cache_index
+    last_active = mixer.n_active_actions += 1
+    first_inactive = actions[last_active]
+    a.cache_index = last_active
+    actions[last_active] = a
+    first_inactive.cache_index = prev
+    actions[prev] = first_inactive
+    return nothing
+end
+
+function _take_back_action!(mixer::AnimationActionMixer, a::_MixerAction)
+    actions = mixer.actions
+    prev = a.cache_index
+    first_inactive = mixer.n_active_actions
+    mixer.n_active_actions -= 1
+    last_active = actions[first_inactive]
+    a.cache_index = first_inactive
+    actions[first_inactive] = a
+    last_active.cache_index = prev
+    actions[prev] = last_active
+    return nothing
+end
+
+function _lend_binding!(mixer::AnimationActionMixer, b::_AnimationBinding)
+    bindings = mixer.bindings
+    prev = b.cache_index
+    last_active = mixer.n_active_bindings += 1
+    first_inactive = bindings[last_active]
+    b.cache_index = last_active
+    bindings[last_active] = b
+    first_inactive.cache_index = prev
+    bindings[prev] = first_inactive
+    return nothing
+end
+
+function _take_back_binding!(mixer::AnimationActionMixer, b::_AnimationBinding)
+    bindings = mixer.bindings
+    prev = b.cache_index
+    first_inactive = mixer.n_active_bindings
+    mixer.n_active_bindings -= 1
+    last_active = bindings[first_inactive]
+    b.cache_index = first_inactive
+    bindings[first_inactive] = b
+    last_active.cache_index = prev
+    bindings[prev] = last_active
+    return nothing
+end
+
+# AnimationMixer._lendControlInterpolant: reuse a pooled ramp (keeping its
+# Interpolant._cachedIndex) or make a new one.
+function _lend_control_interpolant!(mixer::AnimationActionMixer)
+    pool = mixer.control_interpolants
+    index = mixer.n_active_control_interpolants += 1
+    if index > length(pool)
+        push!(pool, _ControlInterpolant(0.0f0, 0.0f0, 0.0f0, 0.0f0, 0, index))
+    end
+    return pool[index]
+end
+
+function _take_back_control_interpolant!(mixer::AnimationActionMixer,
+                                         ci::_ControlInterpolant)
+    pool = mixer.control_interpolants
+    prev = ci.cache_index
+    first_inactive = mixer.n_active_control_interpolants
+    mixer.n_active_control_interpolants -= 1
+    last_active = pool[first_inactive]
+    ci.cache_index = first_inactive
+    pool[first_inactive] = ci
+    last_active.cache_index = prev
+    pool[prev] = last_active
+    return nothing
+end
+
+# Key `i` (0-based) of a ramp; NaN stands for JavaScript's `undefined`
+# outside the two keys, since every comparison with either is false.
+@inline _control_time(ci::_ControlInterpolant, i::Int) =
+    i == 0 ? Float64(ci.t0) : i == 1 ? Float64(ci.t1) : NaN
+@inline _control_value(ci::_ControlInterpolant, i::Int) =
+    i == 0 ? Float64(ci.v0) : i == 1 ? Float64(ci.v1) : NaN
+
+# Interpolant.evaluate (src/math/Interpolant.js) with LinearInterpolant.
+# interpolate_ for the two keys of a ramp, including its interval cache;
+# the result is rounded to Float32 like the Float32Array result buffer.
+function _control_evaluate(ci::_ControlInterpolant, t::Float64)
+    i1 = ci.cached_index
+    t1 = _control_time(ci, i1)
+    t0 = _control_time(ci, i1 - 1)
+    found = false           # `break seek`
+    binary = false          # fall through to the binary search
+    right = 0
+    if !(t < t1)            # forward_scan
+        give_up = i1 + 2
+        scan_broken = false
+        while true
+            if isnan(t1)
+                if t < t0
+                    scan_broken = true
+                    break
+                end
+                ci.cached_index = 2
+                return Float32(_control_value(ci, 1))
+            end
+            i1 == give_up && break
+            t0 = t1
+            i1 += 1
+            t1 = _control_time(ci, i1)
+            if t < t1
+                found = true
+                break
+            end
+        end
+        if !found && !scan_broken
+            right = 2
+            binary = true
+        end
+    end
+    valid = false
+    if !found && !binary
+        if !(t >= t0)
+            t1global = _control_time(ci, 1)
+            if t < t1global
+                i1 = 2
+                t0 = t1global
+            end
+            give_up = i1 - 2
+            while true
+                if isnan(t0)
+                    ci.cached_index = 0
+                    return Float32(_control_value(ci, 0))
+                end
+                i1 == give_up && break
+                t1 = t0
+                i1 -= 1
+                t0 = _control_time(ci, i1 - 1)
+                if t >= t0
+                    found = true
+                    break
+                end
+            end
+            if !found
+                right = i1
+                i1 = 0
+                binary = true
+            end
+        else
+            valid = true
+        end
+    end
+    if binary
+        while i1 < right
+            mid = (i1 + right) >>> 1
+            if t < _control_time(ci, mid)
+                right = mid
+            else
+                i1 = mid + 1
+            end
+        end
+        t1 = _control_time(ci, i1)
+        t0 = _control_time(ci, i1 - 1)
+        if isnan(t0)
+            ci.cached_index = 0
+            return Float32(_control_value(ci, 0))
+        end
+        if isnan(t1)
+            ci.cached_index = 2
+            return Float32(_control_value(ci, 1))
+        end
+    end
+    valid || (ci.cached_index = i1)
+    weight1 = (t - t0) / (t1 - t0)
+    weight0 = 1 - weight1
+    return Float32(_control_value(ci, i1 - 1) * weight0 + _control_value(ci, i1) * weight1)
+end
+
+# ---- Multi-action mixer: action update (AnimationAction._update) -----------
+
+# Sample a track at the action's clip time into the incoming region of each
+# binding it drives.
+function _action_sample!(tr::Union{KeyframeTrack,CubicSplineKeyframeTrack},
+                         action::_MixerAction)
+    v = _mixer_track_value(tr, action)
+    @inbounds for b in action.track_bindings[action.track_index]
+        buf = b.buffer
+        buf[1] = v.x
+        buf[2] = v.y
+        buf[3] = v.z
+    end
+    return nothing
+end
+
+function _action_sample!(tr::NumberKeyframeTrack, action::_MixerAction)
+    v = Float64(_mixer_track_value(tr, action))
+    @inbounds for b in action.track_bindings[action.track_index]
+        b.buffer[1] = v
+    end
+    return nothing
+end
+
+function _action_sample!(tr::Union{QuaternionKeyframeTrack,CubicSplineQuaternionKeyframeTrack},
+                         action::_MixerAction)
+    q = _track_value(tr, action.sample_time)
+    @inbounds for b in action.track_bindings[action.track_index]
+        buf = b.buffer
+        buf[1] = q.x
+        buf[2] = q.y
+        buf[3] = q.z
+        buf[4] = q.w
+    end
+    return nothing
+end
+
+function _action_sample!(tr::_MorphWeightsTrack, action::_MixerAction)
+    out = action.vector_samples[action.track_index]
+    _sample_morph_weights!(out, tr, action.sample_time)
+    @inbounds for b in action.track_bindings[action.track_index]
+        copyto!(b.buffer, 1, out, 1, length(out))
+    end
+    return nothing
+end
+
+# AnimationAction._updateWeight.
+function _action_update_weight!(action::_MixerAction, time::Float64)
+    weight = 0.0
+    if action.enabled
+        weight = action.weight
+        ci = action.weight_interpolant
+        if ci !== nothing
+            value = Float64(_control_evaluate(ci, time))
+            weight *= value
+            if time > ci.t1
+                _action_stop_fading!(action)
+                value == 0 && (action.enabled = false)
+            end
+        end
+    end
+    action.effective_weight = weight
+    return weight
+end
+
+# AnimationAction._updateTimeScale.
+function _action_update_time_scale!(action::_MixerAction, time::Float64)
+    time_scale = 0.0
+    if !action.paused
+        time_scale = action.time_scale
+        ci = action.time_scale_interpolant
+        if ci !== nothing
+            time_scale *= Float64(_control_evaluate(ci, time))
+            if time > ci.t1
+                if time_scale == 0
+                    action.paused = true
+                else
+                    restore = action.restore_time_scale
+                    restore === nothing || (time_scale = restore)
+                    action.time_scale = time_scale
+                end
+                _action_stop_warping!(action)
+            end
+        end
+    end
+    action.effective_time_scale = time_scale
+    return time_scale
+end
+
+function _action_update!(action::_MixerAction, time::Float64, delta::Float64,
+                         direction::Float64, accu_index::Int)
+    if !action.enabled
+        _action_update_weight!(action, time)
+        return nothing
+    end
+    start_time = action.start_time
+    if start_time !== nothing
+        running = (time - start_time) * direction
+        if running < 0 || direction == 0
+            delta = 0.0
+        else
+            action.start_time = nothing
+            delta = direction * running
+        end
+    end
+    delta *= _action_update_time_scale!(action, time)
+    clip_time = _update_action_time!(action, delta)
+    weight = _action_update_weight!(action, time)
+    if weight > 0
+        action.sample_time = clip_time
+        additive = action.blend_mode === :additive
+        tracks = action.clip.tracks
+        for j in eachindex(tracks)
+            action.track_index = j
+            _action_sample!(tracks[j], action)
+            for b in action.track_bindings[j]
+                if additive
+                    _binding_accumulate_additive!(b, weight)
+                else
+                    _binding_accumulate!(b, accu_index, weight)
+                end
+            end
+        end
+    end
+    return nothing
+end
+
+@noinline _throw_action_setting(name::String) =
+    throw(ArgumentError("AnimationAction $name must be finite"))
+
+# Settings a caller may have changed between updates, checked before an
+# update changes anything.
+function _validate_action_settings(action::_MixerAction)
+    _animation_loop_mode(action.loop)
+    _animation_blend_mode(action.blend_mode)
+    isfinite(action.weight) || _throw_action_setting("weight")
+    isfinite(action.time_scale) || _throw_action_setting("time_scale")
+    isfinite(action.time) || _throw_action_setting("time")
+    start_time = action.start_time
+    start_time === nothing || isfinite(start_time) || _throw_action_setting("start time")
+    return nothing
+end
+
+function _mixer_actions_step!(mixer::AnimationActionMixer, delta::Float64)
+    for i in 1:mixer.n_active_actions
+        _validate_action_settings(mixer.actions[i])
+    end
+    time = _checked_control_scalar(mixer.time + delta, "AnimationActionMixer updated time")
+    mixer.time = time
+    direction = sign(delta)
+    accu_index = mixer.accu_index = xor(mixer.accu_index, 1)
+    actions = mixer.actions
+    for i in 1:mixer.n_active_actions
+        _action_update!(actions[i], time, delta, direction, accu_index)
+    end
+    bindings = mixer.bindings
+    for i in 1:mixer.n_active_bindings
+        _binding_apply!(bindings[i], accu_index)
+    end
+    return mixer
+end
+
+# ---- Multi-action mixer: public API ----------------------------------------
+
+"""
+    mixer_update!(mixer::AnimationActionMixer, dt) -> mixer
+
+Advance the mixer time by `dt * mixer.time_scale`, step every playing
+action by that amount (scaled by its own time scale and warp, delayed by
+`action_start_at!`), evaluate fades, and write the blended value of every
+animated property that changed (three.js `AnimationMixer.update`).
+"""
+function mixer_update!(mixer::AnimationActionMixer, dt)
+    delta = _checked_control_scalar(dt, "mixer_update!: dt")
+    time_scale = _validated_animation_time_scale(mixer.time_scale)
+    scaled = _checked_control_scalar(delta * time_scale, "AnimationActionMixer scaled delta")
+    _checked_control_scalar(mixer.time, "AnimationActionMixer current time")
+    return _mixer_actions_step!(mixer, scaled)
+end
+
+"""
+    mixer_set_time!(mixer::AnimationActionMixer, t) -> mixer
+
+Set the mixer time and the time of every action to 0, then update by `t`
+(three.js `AnimationMixer.setTime`; `t` is scaled by `mixer.time_scale`).
+Loop counts, fades and warps are kept.
+"""
+function mixer_set_time!(mixer::AnimationActionMixer, t)
+    delta = _checked_control_scalar(t, "mixer_set_time!: time")
+    time_scale = _validated_animation_time_scale(mixer.time_scale)
+    scaled = _checked_control_scalar(delta * time_scale, "AnimationActionMixer scaled delta")
+    for i in 1:mixer.n_active_actions
+        _validate_action_settings(mixer.actions[i])
+    end
+    mixer.time = 0.0
+    for action in mixer.actions
+        action.time = 0.0
+    end
+    return _mixer_actions_step!(mixer, scaled)
+end
+
+"""
+    mixer_clip_action(mixer, clip; blend_mode=clip.blend_mode) -> AnimationAction
+
+The action that plays `clip` on `mixer` (three.js `AnimationMixer.clipAction`):
+the clip's existing action when its blend mode is `blend_mode`, otherwise a
+new, stopped action. A new action takes `loop`, `repetitions`,
+`clamp_when_finished` and `time_scale` from the clip; start it with
+[`action_play!`](@ref). Throws `ArgumentError` when a track's property cannot
+be read or written by the mixer.
+"""
+function mixer_clip_action(mixer::AnimationActionMixer, clip::AnimationClip;
+                           blend_mode::Symbol=clip.blend_mode)
+    mode = _animation_blend_mode(blend_mode)
+    k = findfirst(c -> c === clip, mixer.clips)
+    if k !== nothing
+        existing = mixer.clip_actions[k]
+        existing.blend_mode === mode && return existing
+    end
+    track_bindings = _bind_action_tracks!(mixer, clip)
+    n = length(clip.tracks)
+    flat = _AnimationBinding[]
+    for bound in track_bindings
+        append!(flat, bound)
+    end
+    action = _MixerAction(mixer, clip, mode, clip.loop, clip.repetitions,
+                          clip.clamp_when_finished, true, true, 0.0, clip.time_scale, 1.0,
+                          true, false, clip.time_scale, 1.0, -1, nothing, nothing,
+                          nothing, nothing, 0,
+                          # AnimationAction's interpolant settings start at
+                          # ZeroCurvatureEnding until its first time step.
+                          :zero_curvature, :zero_curvature, 0.0, 0, zeros(Int, n),
+                          fill(:zero_curvature, n), fill(:zero_curvature, n),
+                          track_bindings, flat, [Float64[] for _ in 1:n])
+    push!(mixer.actions, action)
+    action.cache_index = length(mixer.actions)
+    if k === nothing
+        push!(mixer.clips, clip)
+        push!(mixer.clip_actions, action)
+    else
+        mixer.clip_actions[k] = action
+    end
+    return action
+end
+
+"""
+    mixer_existing_action(mixer, clip) -> Union{AnimationAction,Nothing}
+
+The latest action `mixer_clip_action` made for `clip` on `mixer`, or
+`nothing` (three.js `AnimationMixer.existingAction`).
+"""
+function mixer_existing_action(mixer::AnimationActionMixer, clip::AnimationClip)
+    k = findfirst(c -> c === clip, mixer.clips)
+    return k === nothing ? nothing : mixer.clip_actions[k]
+end
+
+"""
+    mixer_stop_all_action!(mixer) -> mixer
+
+Stop every playing action of `mixer` (three.js `AnimationMixer.stopAllAction`).
+"""
+function mixer_stop_all_action!(mixer::AnimationActionMixer)
+    for i in mixer.n_active_actions:-1:1
+        action_stop!(mixer.actions[i])
+    end
+    return mixer
+end
+
+"""
+    action_play!(action) -> action
+
+Schedule `action` on its mixer (three.js `AnimationAction.play`). Properties
+no other playing action animates save their current value as the original.
+Playing a playing action does nothing.
+"""
+function action_play!(action::_MixerAction)
+    _is_active_action(action) && return action
+    mixer = action.mixer
+    # Read every new original before changing any state, so a property that
+    # became unreadable leaves the mixer as it was.
+    for b in action.bindings
+        b.use_count == 0 && _binding_save_original!(b)
+    end
+    for b in action.bindings
+        b.use_count == 0 && _lend_binding!(mixer, b)
+        b.use_count += 1
+    end
+    _lend_action!(mixer, action)
+    return action
+end
+
+"""
+    action_stop!(action) -> action
+
+Unschedule `action` and reset it (three.js `AnimationAction.stop`). Properties
+no other playing action animates get their original value back.
+"""
+function action_stop!(action::_MixerAction)
+    if _is_active_action(action)
+        mixer = action.mixer
+        for b in action.bindings
+            b.use_count -= 1
+            if b.use_count == 0
+                _binding_restore_original!(b)
+                _take_back_binding!(mixer, b)
+            end
+        end
+        _take_back_action!(mixer, action)
+    end
+    return action_reset!(action)
+end
+
+"""
+    action_reset!(action) -> action
+
+Restart `action` (three.js `AnimationAction.reset`): enabled, unpaused, time
+0, loop count forgotten, scheduled start, fade and warp cancelled.
+"""
+function action_reset!(action::_MixerAction)
+    action.paused = false
+    action.enabled = true
+    action.time = 0.0
+    action.loop_count = -1
+    action.start_time = nothing
+    _action_stop_fading!(action)
+    _action_stop_warping!(action)
+    return action
+end
+
+"""
+    action_is_running(action) -> Bool
+
+Whether `action` is advancing (three.js `AnimationAction.isRunning`): playing,
+enabled, not paused, nonzero `time_scale` and not waiting for its start time.
+"""
+action_is_running(action::_MixerAction) =
+    action.enabled && !action.paused && action.time_scale != 0 &&
+    action.start_time === nothing && _is_active_action(action)
+
+"""
+    action_is_scheduled(action) -> Bool
+
+Whether `action` is playing, that is played and not stopped (three.js
+`AnimationAction.isScheduled`).
+"""
+action_is_scheduled(action::_MixerAction) = _is_active_action(action)
+
+"""
+    action_start_at!(action, mixer_time) -> action
+
+Hold `action` until the mixer time reaches `mixer_time` (three.js
+`AnimationAction.startAt`).
+"""
+function action_start_at!(action::_MixerAction, mixer_time::Real)
+    action.start_time = _checked_control_scalar(mixer_time, "action_start_at! time")
+    return action
+end
+
+"""
+    action_set_loop!(action, loop[, repetitions]) -> action
+
+Set the loop mode (`:repeat`, `:once` or `:pingpong`) and repetitions (`-1`,
+the default, for unlimited) of `action` (three.js `AnimationAction.setLoop`).
+"""
+function action_set_loop!(action::_MixerAction, loop::Symbol, repetitions::Integer=-1)
+    mode = _animation_loop_mode(loop)
+    action.repetitions = _validated_animation_repetitions(repetitions)
+    action.loop = mode
+    return action
+end
+
+"""
+    action_set_effective_weight!(action, weight) -> action
+
+Set `action.weight` and its effective weight (0 while disabled), cancelling
+a fade (three.js `AnimationAction.setEffectiveWeight`).
+"""
+function action_set_effective_weight!(action::_MixerAction, weight::Real)
+    w = _checked_control_scalar(weight, "action_set_effective_weight! weight")
+    action.weight = w
+    action.effective_weight = action.enabled ? w : 0.0
+    return _action_stop_fading!(action)
+end
+
+"""
+    action_effective_weight(action) -> Float64
+
+The weight `action` contributed in the last update, fades included (three.js
+`AnimationAction.getEffectiveWeight`).
+"""
+action_effective_weight(action::_MixerAction) = action.effective_weight
+
+"""
+    action_set_effective_time_scale!(action, time_scale) -> action
+
+Set `action.time_scale` and its effective time scale (0 while paused),
+cancelling a warp (three.js `AnimationAction.setEffectiveTimeScale`).
+"""
+function action_set_effective_time_scale!(action::_MixerAction, time_scale::Real)
+    s = _checked_control_scalar(time_scale, "action_set_effective_time_scale! time_scale")
+    action.time_scale = s
+    action.effective_time_scale = action.paused ? 0.0 : s
+    return _action_stop_warping!(action)
+end
+
+"""
+    action_effective_time_scale(action) -> Float64
+
+The time scale `action` advanced with in the last update, warps included
+(three.js `AnimationAction.getEffectiveTimeScale`).
+"""
+action_effective_time_scale(action::_MixerAction) = action.effective_time_scale
+
+"""
+    action_set_duration!(action, duration) -> action
+
+Set `time_scale` so one loop of the clip lasts `duration` seconds, cancelling
+a warp (three.js `AnimationAction.setDuration`).
+"""
+function action_set_duration!(action::_MixerAction, duration::Real)
+    d = _checked_control_scalar(duration, "action_set_duration! duration")
+    s = action.clip.duration / d
+    isfinite(s) || throw(ArgumentError(
+        "action_set_duration!: clip duration / duration must be finite"))
+    action.time_scale = s
+    return _action_stop_warping!(action)
+end
+
+"""
+    action_sync_with!(action, other) -> action
+
+Copy the time and time scale of `other` into `action`, cancelling a warp
+(three.js `AnimationAction.syncWith`).
+"""
+function action_sync_with!(action::_MixerAction, other::_MixerAction)
+    action.time = other.time
+    action.time_scale = other.time_scale
+    return _action_stop_warping!(action)
+end
+
+function _schedule_fading!(action::_MixerAction, duration::Real, weight_now::Float32,
+                           weight_then::Float32, label::String)
+    d = _checked_control_scalar(duration, label)
+    mixer = action.mixer
+    now = mixer.time
+    ci = action.weight_interpolant
+    if ci === nothing
+        ci = _lend_control_interpolant!(mixer)
+        action.weight_interpolant = ci
+    end
+    ci.t0 = Float32(now)
+    ci.v0 = weight_now
+    ci.t1 = Float32(now + d)
+    ci.v1 = weight_then
+    return action
+end
+
+"""
+    action_fade_in!(action, duration) -> action
+
+Ramp the weight factor of `action` from 0 to 1 over the next `duration`
+seconds of mixer time (three.js `AnimationAction.fadeIn`).
+"""
+action_fade_in!(action::_MixerAction, duration::Real) =
+    _schedule_fading!(action, duration, 0.0f0, 1.0f0, "action_fade_in! duration")
+
+"""
+    action_fade_out!(action, duration) -> action
+
+Ramp the weight factor of `action` from 1 to 0 over the next `duration`
+seconds of mixer time; at the end the action is disabled (three.js
+`AnimationAction.fadeOut`).
+"""
+action_fade_out!(action::_MixerAction, duration::Real) =
+    _schedule_fading!(action, duration, 1.0f0, 0.0f0, "action_fade_out! duration")
+
+function _action_stop_fading!(action::_MixerAction)
+    ci = action.weight_interpolant
+    if ci !== nothing
+        action.weight_interpolant = nothing
+        _take_back_control_interpolant!(action.mixer, ci)
+    end
+    return action
+end
+
+"""
+    action_stop_fading!(action) -> action
+
+Cancel a fade of `action` (three.js `AnimationAction.stopFading`).
+"""
+action_stop_fading!(action::_MixerAction) = _action_stop_fading!(action)
+
+function _action_stop_warping!(action::_MixerAction)
+    ci = action.time_scale_interpolant
+    if ci !== nothing
+        action.time_scale_interpolant = nothing
+        _take_back_control_interpolant!(action.mixer, ci)
+    end
+    action.restore_time_scale = nothing
+    return action
+end
+
+"""
+    action_stop_warping!(action) -> action
+
+Cancel a warp of `action` (three.js `AnimationAction.stopWarping`).
+"""
+action_stop_warping!(action::_MixerAction) = _action_stop_warping!(action)
+
+# The Float32 ramp values a warp from `start` to `stop` stores: the time
+# scales relative to the action's `time_scale`.
+function _warp_values(action::_MixerAction, start::Float64, stop::Float64)
+    v0 = Float32(start / action.time_scale)
+    v1 = Float32(stop / action.time_scale)
+    (isfinite(v0) && isfinite(v1)) || throw(ArgumentError(
+        "action warp: the time scales divided by time_scale = $(action.time_scale) " *
+        "must be finite Float32 values"))
+    return v0, v1
+end
+
+function _warp!(action::_MixerAction, v0::Float32, v1::Float32, duration::Float64)
+    mixer = action.mixer
+    now = mixer.time
+    ci = action.time_scale_interpolant
+    if ci === nothing
+        ci = _lend_control_interpolant!(mixer)
+        action.time_scale_interpolant = ci
+    end
+    ci.t0 = Float32(now)
+    ci.t1 = Float32(now + duration)
+    ci.v0 = v0
+    ci.v1 = v1
+    return action
+end
+
+"""
+    action_warp!(action, start_time_scale, end_time_scale, duration) -> action
+
+Ramp the time scale of `action` from `start_time_scale` to `end_time_scale`
+over the next `duration` seconds of mixer time; at the end `time_scale`
+becomes the final value, or the action pauses if that is 0 (three.js
+`AnimationAction.warp`). The ramp is relative to the current `time_scale`,
+which must not be 0.
+"""
+function action_warp!(action::_MixerAction, start_time_scale::Real,
+                      end_time_scale::Real, duration::Real)
+    start = _checked_control_scalar(start_time_scale, "action_warp! start_time_scale")
+    stop = _checked_control_scalar(end_time_scale, "action_warp! end_time_scale")
+    d = _checked_control_scalar(duration, "action_warp! duration")
+    v0, v1 = _warp_values(action, start, stop)
+    return _warp!(action, v0, v1, d)
+end
+
+"""
+    action_halt!(action, duration) -> action
+
+Slow `action` to a stop over `duration` seconds and pause it (three.js
+`AnimationAction.halt`).
+"""
+action_halt!(action::_MixerAction, duration::Real) =
+    action_warp!(action, action.effective_time_scale, 0.0, duration)
+
+"""
+    action_cross_fade_from!(action, fade_out_action, duration; warp=false) -> action
+
+Fade `fade_out_action` out and `action` in over `duration` seconds (three.js
+`AnimationAction.crossFadeFrom`). With `warp`, the time scales also ramp so
+the two clips' durations meet: `fade_out_action` from 1 to the duration
+ratio, `action` from the inverse ratio to 1, after which both get their
+previous `time_scale` back.
+"""
+function action_cross_fade_from!(action::_MixerAction, fade_out_action::_MixerAction,
+                                 duration::Real; warp::Bool=false)
+    fade_out_action.mixer === action.mixer || throw(ArgumentError(
+        "action_cross_fade_from!: both actions must belong to the same mixer"))
+    d = _checked_control_scalar(duration, "action_cross_fade_from! duration")
+    if warp
+        fade_in_duration = action.clip.duration
+        fade_out_duration = fade_out_action.clip.duration
+        start_end_ratio = fade_out_duration / fade_in_duration
+        end_start_ratio = fade_in_duration / fade_out_duration
+        out_v0, out_v1 = _warp_values(fade_out_action, 1.0, start_end_ratio)
+        in_v0, in_v1 = _warp_values(action, end_start_ratio, 1.0)
+    end
+    action_fade_out!(fade_out_action, d)
+    action_fade_in!(action, d)
+    if warp
+        fade_out_action.restore_time_scale = fade_out_action.time_scale
+        action.restore_time_scale = action.time_scale
+        _warp!(fade_out_action, out_v0, out_v1, d)
+        _warp!(action, in_v0, in_v1, d)
+    end
+    return action
+end
+
+"""
+    action_cross_fade_to!(action, fade_in_action, duration; warp=false) -> action
+
+Fade `action` out and `fade_in_action` in (three.js
+`AnimationAction.crossFadeTo`); see [`action_cross_fade_from!`](@ref).
+Returns `fade_in_action`, as three.js does.
+"""
+action_cross_fade_to!(action::_MixerAction, fade_in_action::_MixerAction, duration::Real;
+                      warp::Bool=false) =
+    action_cross_fade_from!(fade_in_action, action, duration; warp=warp)
+
+function Base.show(io::IO, action::_MixerAction)
+    print(io, "AnimationAction(", repr(action.clip.name), ", ", action.blend_mode,
+          _is_active_action(action) ? ", playing" : ", stopped", ")")
+end
+
+function Base.show(io::IO, mixer::AnimationActionMixer)
+    print(io, "AnimationActionMixer(time=", mixer.time, ", ", length(mixer.actions),
+          " actions, ", mixer.n_active_actions, " playing)")
+end
+
+# ========================== Helpers ==========================
 function _line_geo(positions::Vector{Float64})
     length(positions) % 3 == 0 ||
         throw(ArgumentError("helper line position length must be divisible by 3"))
