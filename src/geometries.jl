@@ -719,6 +719,118 @@ function _has_active_morph_influences(influences::AbstractVector{<:Real})
     return false
 end
 
+"""
+    compute_morphed_attributes(object) -> NamedTuple
+
+Port of three.js `BufferGeometryUtils.computeMorphedAttributes`: the positions
+and normals of `object` (a `Mesh` or `SkinnedMesh`) after its morph targets
+(`morph_target_influences` times the relative `morphPosition<i>` /
+`morphNormal<i>` attributes) and, for a `SkinnedMesh`, after
+`applyBoneTransform` in the mesh's local space. Returns
+`(position_attribute, normal_attribute, morphed_position_attribute,
+morphed_normal_attribute)`, each a 3-component [`BufferAttribute`](@ref): the
+first two copy the geometry's attributes.
+
+As in three.js, only vertices referenced by triangles inside the draw range
+(and, when `object.material` is a vector, inside each draw group) are written;
+every other vertex stays `(0, 0, 0)`. Triangles start every third draw entry
+from the draw-range start, so an unaligned draw range reads the entries three
+at a time from there. Skinning follows `SkinnedMesh.applyBoneTransform`
+(bind matrix, weighted bone transforms, inverse bind matrix) and, like
+three.js, sends normals through the same point transform, so posed normals
+include bone translation. The geometry needs vertex normals.
+"""
+function compute_morphed_attributes(object)
+    geo = object.geometry
+    geo isa BufferGeometry ||
+        throw(ArgumentError("compute_morphed_attributes needs a BufferGeometry"))
+    _validate_geometry_vertices(geo, "compute_morphed_attributes")
+    n = geo.n_vertices
+    length(geo.normals) >= 3n ||
+        throw(ArgumentError("compute_morphed_attributes needs vertex normals, as three.js does"))
+    influences = hasproperty(object, :morph_target_influences) ?
+                 object.morph_target_influences : Float64[]
+    _validate_morph_influences(influences)
+    _validate_morph_position_targets(geo, influences)
+    _validate_morph_vec3_targets(geo, influences, Val(:normal))
+    skin = object isa SkinnedMesh ? _morphed_skin_palette(object) : nothing
+    total = isempty(geo.indices) ? n : length(geo.indices)
+    for idx in geo.indices
+        1 <= idx <= n || throw(ArgumentError("geometry indices must be within 1:n_vertices"))
+    end
+    # Draw range and groups as 0-based [start, end) draw entries, widened so
+    # counts up to typemax(Int) cannot overflow and clamped to the entry count:
+    # a triangle starting at or past `total` reads no entries.
+    range_start, range_end = geo.draw_range === nothing ? (Int128(0), Int128(total)) :
+        (Int128(geo.draw_range[1]) - 1, Int128(geo.draw_range[1]) - 1 + geo.draw_range[2])
+    clamp_entry(x) = Int(clamp(x, 0, total))
+    spans = if object.material isa AbstractVector
+        [(clamp_entry(max(3 * (Int128(start) - 1), range_start)),
+          clamp_entry(min(3 * (Int128(start) - 1 + count), range_end)))
+         for (start, count, _) in geo.groups]
+    else
+        [(clamp_entry(range_start), clamp_entry(min(Int128(total), range_end)))]
+    end
+    morphed_positions = zeros(3n)
+    morphed_normals = zeros(3n)
+    done = falses(n)
+    for (first_entry, end_entry) in spans, i in first_entry:3:(end_entry - 1), entry in i:(i + 2)
+        entry < total || continue
+        v = isempty(geo.indices) ? entry + 1 : geo.indices[entry + 1]
+        done[v] && continue
+        done[v] = true
+        p = _morphed_vertex(geo.positions, geo, influences, _morph_position_symbol, v)
+        q = _morphed_vertex(geo.normals, geo, influences, _morph_normal_symbol, v)
+        if skin !== nothing
+            p = _morphed_bone_transform(object, skin, v, p)
+            q = _morphed_bone_transform(object, skin, v, q)
+        end
+        morphed_positions[3v - 2] = p.x; morphed_positions[3v - 1] = p.y; morphed_positions[3v] = p.z
+        morphed_normals[3v - 2] = q.x; morphed_normals[3v - 1] = q.y; morphed_normals[3v] = q.z
+    end
+    return (position_attribute=BufferAttribute(geo.positions[1:3n], 3),
+            normal_attribute=BufferAttribute(geo.normals[1:3n], 3),
+            morphed_position_attribute=BufferAttribute(morphed_positions, 3),
+            morphed_normal_attribute=BufferAttribute(morphed_normals, 3))
+end
+
+# _calculateMorphedAttributeData: the base value plus the summed weighted deltas.
+function _morphed_vertex(data::Vector{Float64}, geo::BufferGeometry, influences, symbol, v::Int)
+    base = Vec3(data[3v - 2], data[3v - 1], data[3v])
+    morph = Vec3(0.0, 0.0, 0.0)
+    for (ti, weight) in enumerate(influences)
+        w = _morph_active_weight(weight, ti)
+        w == 0.0 && continue
+        name = symbol(ti)
+        has_attribute(geo, name) || continue
+        attr = get_attribute(geo, name)
+        k = (v - 1) * attr.item_size
+        morph += Vec3(_morph_attribute_value(attr, k + 1, name),
+                      _morph_attribute_value(attr, k + 2, name),
+                      _morph_attribute_value(attr, k + 3, name)) * w
+    end
+    return base + morph
+end
+
+# Per bone, boneMatrixWorld * boneInverse (SkinnedMesh.applyBoneTransform).
+function _morphed_skin_palette(sm)
+    _validate_skinned_mesh(sm, "compute_morphed_attributes")
+    skel = sm.skeleton
+    return [compute_world_matrix(skel.bones[i]) * skel.bind_inverses[i] for i in eachindex(skel.bones)]
+end
+
+function _morphed_bone_transform(sm, palette, v::Int, p::Vec3{Float64})
+    base = mat4_transform_point(sm.bind_matrix, p)
+    acc = Vec3(0.0, 0.0, 0.0)
+    idx = sm.skin_indices[v]
+    weights = sm.skin_weights[v]
+    for k in 1:4
+        weights[k] == 0 && continue
+        acc += mat4_transform_point(palette[idx[k]], base) * weights[k]
+    end
+    return mat4_transform_point(_skinned_bind_matrix_inverse(sm), acc)
+end
+
 @inline _geometry_vertex(geo::BufferGeometry, morphed_positions::Nothing, i::Int) =
     get_vertex(geo, i)
 @inline _geometry_vertex(geo::BufferGeometry, morphed_positions::AbstractVector, i::Int) =

@@ -830,7 +830,7 @@ Implementations: [`LineCurve`](@ref), [`LineCurve3`](@ref),
 [`QuadraticBezierCurve`](@ref), [`QuadraticBezierCurve3`](@ref),
 [`CubicBezierCurve`](@ref), [`CubicBezierCurve3`](@ref),
 [`EllipseCurve`](@ref) (and [`ArcCurve`](@ref)), [`SplineCurve`](@ref),
-[`CatmullRomCurve`](@ref), and the composite [`CurvePath`](@ref),
+[`CatmullRomCurve`](@ref), [`NURBSCurve`](@ref), and the composite [`CurvePath`](@ref),
 [`Path`](@ref) and [`Shape`](@ref).
 """
 abstract type Curve{P} end
@@ -2225,7 +2225,7 @@ end
 
 # ========================== NURBS / Parametric Geometry ==========================
 
-struct NURBSCurve
+struct NURBSCurve <: Curve{Vec3{Float64}}
     degree::Int
     knots::Vector{Float64}
     control_points::Vector{Vec4{Float64}}
@@ -2665,6 +2665,58 @@ end
 
 function nurbs_point(curve::NURBSCurve, t::Real)
     return _nurbs_point(curve, t, _nurbs_basis_scratch(curve.degree))
+end
+
+# NURBSCurve is a Curve (three.js NURBSCurve extends Curve): get_point is
+# nurbs_point, so get_point_at, get_spaced_points, compute_frenet_frames,
+# TubeGeometry and ExtrudeGeometry paths accept it.
+get_point(c::NURBSCurve, t::Real) = nurbs_point(c, _curve_t(t))
+
+# three.js NURBSCurve.getTangent: the normalized first derivative of the
+# rational curve (NURBSUtils.calcNURBSDerivatives with nd = 1), at the
+# parameter get_point uses; for clamped knot vectors that is three.js's u.
+# A vanishing or non-finite derivative falls back to Curve.getTangent's
+# finite difference.
+function get_tangent(c::NURBSCurve, t::Real)
+    t = _curve_t(t)
+    p = c.degree
+    n = length(c.control_points)
+    if p > 0
+        knots = c.knots
+        u = _nurbs_parameter(t, knots, p, n, "NURBS curve parameter t")
+        span = _nurbs_span(p, knots, n, u)
+        scratch = _nurbs_basis_scratch(p)
+        _nurbs_basis_with_status!(scratch, span, u, p, knots)
+        basis = scratch[1:(p + 1)]
+        _nurbs_basis_with_status!(scratch, span, u, p - 1, knots)
+        lower = scratch[1:p]
+        a = Vec3(0.0, 0.0, 0.0); da = Vec3(0.0, 0.0, 0.0)
+        w = 0.0; dw = 0.0
+        for j in 0:p
+            i = span - p + j
+            # N'_{i,p} = p N_{i,p-1} / (u_{i+p} - u_i) - p N_{i+1,p-1} / (u_{i+p+1} - u_{i+1})
+            d = 0.0
+            if j >= 1
+                den = knots[i + p + 1] - knots[i + 1]
+                iszero(den) || (d += lower[j] / den)
+            end
+            if j <= p - 1
+                den = knots[i + p + 2] - knots[i + 2]
+                iszero(den) || (d -= lower[j + 1] / den)
+            end
+            d *= p
+            cp = c.control_points[i + 1]
+            xyz = Vec3(cp.x, cp.y, cp.z)
+            a += xyz * (basis[j + 1] * cp.w)
+            da += xyz * (d * cp.w)
+            w += basis[j + 1] * cp.w
+            dw += d * cp.w
+        end
+        derivative = (da - a * (dw / w)) / w
+        len = sqrt(_curve_dot(derivative, derivative))
+        isfinite(len) && len > 0.0 && return derivative / len
+    end
+    return invoke(get_tangent, Tuple{Curve,Real}, c, t)
 end
 
 function _nurbs_point(surface::NURBSSurface, u::Real, v::Real,
@@ -4236,9 +4288,74 @@ function _extrude_path_geometry(shape_in::AbstractVector{<:Vec2},
                                 path_in::AbstractVector{<:Vec3}, holes_in)
     outer = _extrude_clean_shape(shape_in)
     holes = _shape_clean_holes(holes_in)
-    shape, ranges = _extrude_loops(outer, holes)
     path, closed, eps = _extrude_clean_path(path_in)
     tangents = _extrude_path_tangents(path, closed, eps)
+    nr = length(path)
+    frame_n = Vector{Vec3{Float64}}(undef, nr)
+    frame_b = Vector{Vec3{Float64}}(undef, nr)
+    T = tangents[1]
+    refv = abs(T.y) < 0.99 ? Vec3(0.0, 1.0, 0.0) : Vec3(1.0, 0.0, 0.0)
+    N = normalize(cross(refv, T))
+    B = cross(T, N)
+    twist = 0.0
+    if closed
+        # Like three.js computeFrenetFrames(…, closed=true), spread the
+        # transport holonomy over the loop so the wrap-around ring matches.
+        Nt, Bt = N, B
+        for i in 2:nr
+            Nt, Bt = _tube_transport(Nt, Bt, tangents[i])
+        end
+        N_end, _ = _tube_transport(Nt, Bt, tangents[1])
+        twist = acos(clamp(dot(N, N_end), -1.0, 1.0)) / nr
+        dot(tangents[1], cross(N, N_end)) > 0 && (twist = -twist)
+    end
+    @inbounds for i in 1:nr
+        T = tangents[i]
+        if i > 1
+            projected = N - T * dot(N, T)
+            N = norm(projected) > eps ? normalize(projected) : normalize(cross(B, T))
+            B = cross(T, N)
+        end
+        Nr, Br = N, B
+        if twist != 0.0
+            Nr = _tube_rotate(N, T, twist * (i - 1))
+            Br = cross(T, Nr)
+        end
+        frame_n[i] = Nr
+        frame_b[i] = Br
+    end
+    return _extrude_sweep_geometry(outer, holes, path, closed, tangents, frame_n, frame_b)
+end
+
+# A 3D Curve extrude_path, sampled as three.js ExtrudeGeometry samples it:
+# get_spaced_points(path, steps) with compute_frenet_frames(path, steps,
+# closed). A closed CatmullRomCurve repeats its first sample last, so its rings
+# wrap around instead of being capped.
+function _extrude_path_geometry(shape_in::AbstractVector{<:Vec2}, curve::Curve{Vec3{Float64}},
+                                holes_in, steps)
+    outer = _extrude_clean_shape(shape_in)
+    holes = _shape_clean_holes(holes_in)
+    n = _geometry_positive_int(steps, "ExtrudeGeometry steps")
+    closed = curve isa CatmullRomCurve && curve.closed
+    closed && n < 3 &&
+        throw(ArgumentError("ExtrudeGeometry needs steps >= 3 to sweep a closed curve"))
+    points, frames = _extrude_curve_samples(curve, n)
+    nr = closed ? n : n + 1
+    finite3(v) = isfinite(v.x) && isfinite(v.y) && isfinite(v.z)
+    all(k -> finite3(frames.tangents[k]) && finite3(frames.normals[k]) &&
+             finite3(frames.binormals[k]), 1:nr) ||
+        throw(ArgumentError("ExtrudeGeometry extrude_path curve has a degenerate tangent"))
+    return _extrude_sweep_geometry(outer, holes, points[1:nr], closed, frames.tangents[1:nr],
+                                   frames.normals[1:nr], frames.binormals[1:nr])
+end
+
+# Profile rings swept along `path` with frames (frame_n, frame_b): ring `i`
+# places shape point (x, y) at path[i] + x * frame_n[i] + y * frame_b[i],
+# shares vertices between wall quads (smooth normals) and caps an open path.
+function _extrude_sweep_geometry(outer, holes, path::Vector{Vec3{Float64}}, closed::Bool,
+                                 tangents::Vector{Vec3{Float64}},
+                                 frame_n::Vector{Vec3{Float64}}, frame_b::Vector{Vec3{Float64}})
+    shape, ranges = _extrude_loops(outer, holes)
     shape_normals = isempty(holes) ? _extrude_shape_vertex_normals(shape) :
         reduce(vcat, (_extrude_shape_vertex_normals(shape[r]) for r in ranges))
     cap_triangles = closed ? NTuple{3,Int}[] : _shape_triangulate(outer, holes)
@@ -4266,40 +4383,9 @@ function _extrude_path_geometry(shape_in::AbstractVector{<:Vec2},
     uvs = Vector{Float64}(undef, uv_len)
     indices = Vector{Int}(undef, index_len)
 
-    T = tangents[1]
-    refv = abs(T.y) < 0.99 ? Vec3(0.0, 1.0, 0.0) : Vec3(1.0, 0.0, 0.0)
-    N = normalize(cross(refv, T))
-    B = cross(T, N)
-    first_N = N
-    first_B = B
-    last_N = N
-    last_B = B
-    twist = 0.0
-    if closed
-        # Like three.js computeFrenetFrames(…, closed=true), spread the
-        # transport holonomy over the loop so the wrap-around ring matches.
-        Nt, Bt = N, B
-        for i in 2:nr
-            Nt, Bt = _tube_transport(Nt, Bt, tangents[i])
-        end
-        N_end, _ = _tube_transport(Nt, Bt, tangents[1])
-        twist = acos(clamp(dot(N, N_end), -1.0, 1.0)) / nr
-        dot(tangents[1], cross(N, N_end)) > 0 && (twist = -twist)
-    end
     @inbounds for i in 1:nr
-        T = tangents[i]
-        if i > 1
-            projected = N - T * dot(N, T)
-            N = norm(projected) > eps ? normalize(projected) : normalize(cross(B, T))
-            B = cross(T, N)
-        end
-        i == 1 && (first_N = N; first_B = B)
-        i == nr && (last_N = N; last_B = B)
-        Nr, Br = N, B
-        if twist != 0.0
-            Nr = _tube_rotate(N, T, twist * (i - 1))
-            Br = cross(T, Nr)
-        end
+        Nr = frame_n[i]
+        Br = frame_b[i]
         for j in 1:np
             pt = shape[j]
             normal2 = shape_normals[j]
@@ -4344,7 +4430,7 @@ function _extrude_path_geometry(shape_in::AbstractVector{<:Vec2},
         cap_normal = -tangents[1]
         @inbounds for j in 1:np
             pt = shape[j]
-            p = path[1] + first_N * pt.x + first_B * pt.y
+            p = path[1] + frame_n[1] * pt.x + frame_b[1] * pt.y
             _geometry_check_position(p.x, p.y, p.z, "ExtrudeGeometry")
             vi = start + j
             pbase = 3vi - 2
@@ -4369,7 +4455,7 @@ function _extrude_path_geometry(shape_in::AbstractVector{<:Vec2},
         cap_normal = tangents[end]
         @inbounds for j in 1:np
             pt = shape[j]
-            p = path[nr] + last_N * pt.x + last_B * pt.y
+            p = path[nr] + frame_n[nr] * pt.x + frame_b[nr] * pt.y
             _geometry_check_position(p.x, p.y, p.z, "ExtrudeGeometry")
             vi = start + j
             pbase = 3vi - 2
@@ -4506,8 +4592,14 @@ Extrude the planar polygon `shape`, minus optional `holes`, along +z from
 `bevel_thickness` beyond each cap grow the outline by up to `bevel_size`,
 starting `bevel_offset` from it (three.js `getBevelVec` offsets). Caps use
 world `(x, y)` UVs and side walls three.js `WorldUVGenerator` UVs. With
-`extrude_path` the profile is swept along that polyline instead; as in three.js
-path extrusion, bevels are not applied there and every path point is a step.
+`extrude_path` the profile is swept along that polyline (a vector of `Vec3`
+points, every point a step) or 3D [`Curve`](@ref) instead, placing shape point
+`(x, y)` at `x` along the frame normal and `y` along the binormal; as in
+three.js path extrusion, bevels are not applied. A curve is sampled as three.js
+does, at `get_spaced_points(extrude_path, steps)` with
+[`compute_frenet_frames`](@ref) (closed for a closed
+[`CatmullRomCurve`](@ref), whose rings then wrap around without caps where
+three.js caps both ends). Rings share vertices, with smooth normals.
 
 Unlike three.js, `bevel_enabled` defaults to `false`.
 
@@ -4537,6 +4629,11 @@ function ExtrudeGeometry(shape::Vector{<:Vec2}; depth=1.0, extrude_path=nothing,
         hole_loops = Vector{Vec2{Float64}}[_earcut_path_points(h, "ExtrudeGeometry hole points")
                                            for h in holes]
         return _extrude_threejs_geometry(((outer, hole_loops),), opt, extrude_path)
+    end
+    if extrude_path isa Curve
+        extrude_path isa Curve{Vec3{Float64}} ||
+            throw(ArgumentError("ExtrudeGeometry extrude_path curve must be a 3D Curve"))
+        return _extrude_path_geometry(shape, extrude_path, holes, steps)
     end
     extrude_path !== nothing && return _extrude_path_geometry(shape, extrude_path, holes)
     depth = _geometry_finite_float(depth, "ExtrudeGeometry depth")
