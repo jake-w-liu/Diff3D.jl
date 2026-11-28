@@ -4768,13 +4768,17 @@ end
 # The points three.js samples from `new Shape(points)` / `new Path(points)`:
 # Path.setFromPoints builds line curves and CurvePath.getPoints drops exactly
 # repeated consecutive points (CurvePath.js:197-201); one point makes no curve.
+# Points compare as Vector2.equals does, by numeric value (-0.0 equals 0.0);
+# `==` on Vec2 is `===`, which would keep a signed-zero duplicate.
+_vector2_equals(a::Vec2, b::Vec2) = a.x == b.x && a.y == b.y
+
 function _earcut_path_points(points::AbstractVector{<:Vec2}, label::String)
     out = Vec2{Float64}[]
     length(points) >= 2 || return out
     sizehint!(out, length(points))
     for p in points
         q = Vec2{Float64}(_geometry_finite_float(p.x, label), _geometry_finite_float(p.y, label))
-        (!isempty(out) && out[end] == q) && continue
+        (!isempty(out) && _vector2_equals(out[end], q)) && continue
         push!(out, q)
     end
     return out
@@ -4822,7 +4826,7 @@ end
 
 function _shape_remove_dup_end!(points::Vector{Vec2{Float64}})
     l = length(points)
-    (l > 2 && points[l] == points[1]) && pop!(points)
+    (l > 2 && _vector2_equals(points[l], points[1])) && pop!(points)
     return points
 end
 

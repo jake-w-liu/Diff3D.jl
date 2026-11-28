@@ -83,6 +83,19 @@ end
     @test_throws ArgumentError ShapeGeometry(outer; triangulation=:fast)
     # a one-point hole makes an empty three.js Path, which earcut cannot take
     @test_throws ArgumentError ShapeGeometry(outer; holes=[[Vec2(5.0, 5.0)]], triangulation=:earcut)
+    # Repeated points are dropped by value as Vector2.equals compares them,
+    # so -0.0 equals 0.0. node: three.js ShapeGeometry of the same shapes.
+    sz = ShapeGeometry([Vec2(0.0, 0.0), Vec2(4.0, 0.0), Vec2(4.0, 4.0), Vec2(0.0, 4.0), Vec2(-0.0, 4.0), Vec2(-0.0, 2.0)];
+                       holes=[[Vec2(1.0, 1.0), Vec2(-0.0, 1.0), Vec2(1.0, 1.0), Vec2(1.0, 2.0), Vec2(2.0, 2.0)]],
+                       triangulation=:earcut)
+    @test sz.n_vertices == 10
+    @test sz.indices .- 1 == [9, 8, 4, 9, 4, 3, 1, 8, 7, 5, 9, 3, 1, 7, 6, 5, 3, 2, 2, 1, 6, 6, 5, 2]
+    @test sz.positions == Float64[0, 2, 0, 0, 4, 0, 4, 4, 0, 4, 0, 0, 0, 0, 0, 2, 2, 0, 1, 2, 0, 1, 1, 0, 0, 1, 0, 1, 1, 0]
+    # ... and a last point equal to the first by value closes the outline
+    closing = ShapeGeometry([Vec2(-0.0, 0.0), Vec2(4.0, 0.0), Vec2(4.0, 4.0), Vec2(0.0, -0.0)]; triangulation=:earcut)
+    @test closing.n_vertices == 3
+    @test closing.indices .- 1 == [1, 0, 2]
+    @test closing.positions == Float64[0, 0, 0, 4, 4, 0, 4, 0, 0]
 end
 
 @testset "ExtrudeGeometry triangulation=:earcut matches three.js" begin
@@ -716,6 +729,44 @@ end
     @test worst_time < 30
 end
 
+@testset "TTFLoader WOFF decompresses only the tables it reads, up to 256 MiB" begin
+    # opentype.js parseBuffer inflates only the tables it parses, so a WOFF
+    # whose unread table holds a corrupt (or huge) zlib stream still loads.
+    ttf = _tf_synth_ttf()
+    n = (Int(ttf[5]) << 8) | ttf[6]
+    tables = Pair{String,Vector{UInt8}}[]
+    for i in 0:(n - 1)
+        rec = 12 + 16i
+        off = _tf_rd32(ttf, rec + 8)
+        push!(tables, String(ttf[rec + 1:rec + 4]) => ttf[off + 1:off + _tf_rd32(ttf, rec + 12)])
+    end
+    push!(tables, "zzzz" => zeros(UInt8, 4096))
+    woff = _tf_woff(_tf_sfnt(UInt8[0, 1, 0, 0], tables))
+    m = (Int(woff[13]) << 8) | woff[14]
+    record(tag) = 44 + 20 * only(i for i in 0:(m - 1) if woff[44 + 20i + 1:44 + 20i + 4] == codeunits(tag))
+    rec = record("zzzz")
+    off = _tf_rd32(woff, rec + 4)
+    comp = _tf_rd32(woff, rec + 8)
+    @test comp < _tf_rd32(woff, rec + 12)          # stored compressed
+    corrupt = copy(woff)
+    corrupt[off + 1:off + comp] .= 0xff
+    summary(f) = Dict(k => (g.advance_width, g.x_min, g.x_max, g.outline) for (k, g) in f.glyphs)
+    expected = summary(Diff3D.load_ttf(ttf))
+    @test summary(Diff3D.load_ttf(corrupt)) == expected
+    # A table that is read may not claim more than 256 MiB once inflated:
+    # the cap is checked before any inflation.
+    oversized = copy(woff)
+    post = record("post")
+    oversized[post + 13:post + 16] = _tf_be32(2^28 + 1)
+    err = try
+        Diff3D.load_ttf(oversized)
+        nothing
+    catch e
+        e
+    end
+    @test err isa ArgumentError && occursin("more than 268435456 bytes", err.msg)
+end
+
 # --- (b) curves, curve extrude paths and computeMorphedAttributes -----------
 # Oracle values from three.js r186 under node: examples/jsm/curves/NURBSCurve.js
 # (getPoint/getTangent/getLength), Curve.getSpacedPoints/computeFrenetFrames,
@@ -893,3 +944,4 @@ _tf_morph_error(r, o) = max(maximum(abs.(r.morphed_position_attribute.data .- o.
     bad = _tf_morph_geometry(true); bad.indices[1] = 7
     @test_throws ArgumentError Diff3D.compute_morphed_attributes(_tf_morph_mesh(bad))
 end
+

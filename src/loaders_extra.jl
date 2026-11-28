@@ -4578,6 +4578,14 @@ function _ttf_table_directory(data::Vector{UInt8})
     return flavor, tables, data
 end
 
+# The tables load_ttf reads; a WOFF file's other tables are not decompressed
+# (opentype.js decompresses only the tables it parses).
+const _TTF_READ_TABLES = ("head", "hhea", "maxp", "hmtx", "cmap", "name", "post", "glyf", "loca", "CFF ")
+# Decompressed WOFF tables may hold at most 256 MiB in all. A DEFLATE stream
+# can expand about 1000-fold and origLength is attacker-controlled up to
+# 4 GiB per table; the largest real fonts hold a few tens of MiB of tables.
+const _TTF_MAX_WOFF_BYTES = 1 << 28
+
 # WOFF 1.0 (opentype.js parseWOFFTableEntries / uncompressTable): tables whose
 # compressed length is below their original length are zlib streams. The
 # tables are copied into a new buffer that the readers address as usual.
@@ -4602,6 +4610,9 @@ function _ttf_woff_directory(data::Vector{UInt8})
         offset = _ttf_u32(data, whole, rec + 4)
         comp_length = _ttf_u32(data, whole, rec + 8)
         orig_length = _ttf_u32(data, whole, rec + 12)
+        tag in _TTF_READ_TABLES || continue
+        length(out) + orig_length <= _TTF_MAX_WOFF_BYTES ||
+            _ttf_error("WOFF tables decompress to more than $(_TTF_MAX_WOFF_BYTES) bytes")
         if comp_length < orig_length
             comp_length >= 2 || _ttf_error("WOFF table $(repr(tag)) is too short")
             _ttf_check(data, whole, offset, comp_length, "WOFF table $(repr(tag))")
@@ -5024,7 +5035,8 @@ reversed once per code point (so an even count restores the original order
 without `z`), and a CFF glyph reached from several code points takes its
 charstring width instead of the `hmtx` advance.
 
-WOFF 1.0 files are decompressed as opentype.js does. Font collections
+WOFF 1.0 files are decompressed as opentype.js does; the tables read may
+hold at most 256 MiB decompressed. Font collections
 (`.ttc`), WOFF2 and fonts with other `cmap` formats are rejected, as are fonts
 without the `head`, `hhea`, `maxp`, `hmtx`, `cmap`, `name` and `post` tables
 three.js reads. Truncated or corrupt data raises an `ArgumentError`, and so do
