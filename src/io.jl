@@ -562,6 +562,13 @@ function save_png16(filename::String, img::AbstractArray)
     return filename
 end
 
+# A finite non-negative number in PDF syntax (ISO 32000-1 section 7.3.3:
+# decimal digits only).
+function _pdf_number(x::Float64)
+    text = string(x)
+    return occursin('e', text) ? Printf.@sprintf("%.2f", x) : text
+end
+
 """
     save_pdf(filename, img; dpi=144)
 
@@ -578,7 +585,10 @@ function save_pdf(filename::String, img::AbstractArray; dpi::Real=144)
     (isfinite(pw) && isfinite(ph) && pw > 0.0 && ph > 0.0) ||
         throw(ArgumentError(
             "save_pdf page dimensions must be finite and positive at the requested dpi"))
-    content = "q $pw 0 0 $ph 0 0 cm /Im0 Do Q"
+    # PDF numbers have no exponent form; Julia prints 1.0e6 and above with one.
+    pw_text = _pdf_number(pw)
+    ph_text = _pdf_number(ph)
+    content = "q $pw_text 0 0 $ph_text 0 0 cm /Im0 Do Q"
     rgb_len = H * W * 3
     off = Vector{Int}(undef, 5)
 
@@ -586,7 +596,7 @@ function save_pdf(filename::String, img::AbstractArray; dpi::Real=144)
         write(io, "%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")
         off[1] = position(io); write(io, "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n")
         off[2] = position(io); write(io, "2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n")
-        off[3] = position(io); write(io, "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 $pw $ph] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>\nendobj\n")
+        off[3] = position(io); write(io, "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 $pw_text $ph_text] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>\nendobj\n")
         off[4] = position(io)
         write(io, "4 0 obj\n<< /Type /XObject /Subtype /Image /Width $W /Height $H /ColorSpace /DeviceRGB /BitsPerComponent 8 /Length $rgb_len >>\nstream\n")
         _pdf_write_rgb_stream(io, img, H, W, C, isgray2d, isu8)

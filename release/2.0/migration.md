@@ -18,7 +18,7 @@ lists the differences that remain on purpose.
 | `HemisphereLight` `ground_color` | black | white | pass `ground_color=Color3(0, 0, 0)` |
 | `RectAreaLight` `width`, `height` | 1 | 10 | pass `width=1, height=1` |
 | `edges_geometry` `threshold_angle` | 0.349 rad | 1° | pass `threshold_angle=0.349` |
-| `ParametricGeometry` `slices`, `stacks` | 20 | 8 | pass `slices=20, stacks=20` |
+| `ParametricGeometry` `slices`, `stacks` | 20 | 8 | `ParametricGeometry(fn, 20, 20)` |
 | `PointLightHelper` size and color | 0.5, yellow | 1, the light's color | `PointLightHelper(light, 0.5; color=...)` |
 | `DirectionalLightHelper`, `SpotLightHelper` color | yellow | the light's color | pass `color=...` |
 | `GridHelper`, `PolarGridHelper` color | uniform gray 0.5 | three.js two-tone vertex colors | pass `color=Color3(0.5, 0.5, 0.5)` |

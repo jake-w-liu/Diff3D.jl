@@ -124,9 +124,15 @@ three.js r186 on purpose:
   it). The shadow bias is a positive depth offset with default `3e-3` and a
   default PCF radius of 0. `shadow_normal_bias` offsets along the shaded normal.
 - Textures: `Texture` keeps its own defaults for wrap mode, color space and
-  minification filter, and `DataTexture` rows run bottom to top. Cube textures
+  minification filter, and the first row of a `DataTexture` array is the top
+  of the image (in three.js, with `flipY = false`, it is the bottom). Cube textures
   are not mirrored in X, so `light_probe_from_cube_texture` coefficients 4, 5
   and 8 have the opposite sign to three.js for the same images.
+- Cameras and lights keep their 1.x construction defaults: `PerspectiveCamera`
+  has a 45° field of view and `far = 1000` (three.js: 50° and 2000),
+  `OrthographicCamera` has `far = 1000` (three.js: 2000), both start at
+  position `(0, 0, 5)` (three.js: the origin), and a `RectAreaLight` starts at
+  `(0, 1, 0)` (three.js: the origin).
 - Raycasting: point and line thresholds, and a point hit's `distance_to_ray`,
   are measured in world space. Sphere tests treat a negative radius as empty.
 - Animation: one `AnimationMixer` drives one clip and uses a single

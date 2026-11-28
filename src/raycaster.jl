@@ -389,8 +389,10 @@ function _ray_segment_distance(o::Vec3, d::Vec3, a::Vec3, b::Vec3)
     if denom > eps(Float64) * (C + one(C))
         s_seg = (E - B * D) / denom        # = (A*E - B*D)/denom with A = 1
     else
-        # Ray parallel to the segment: project the origin onto the segment line.
-        s_seg = C > 0 ? E / C : zero(C)
+        # Ray parallel to the segment: every point of the overlap is equally
+        # close, and three.js `Ray.distanceSqToSegment` (Ray.js:274-277)
+        # reports the segment end farthest along the ray.
+        s_seg = B < 0 ? zero(C) : one(C)
     end
     s_seg = clamp(s_seg, zero(s_seg), one(s_seg))
     # Closest ray parameter for the clamped segment point. If it falls behind
@@ -444,8 +446,10 @@ function _ray_segment_distance(
             segment_parameter =
                 _float_representation_ratio(numerator, denominator)
         else
-            segment_parameter = _float_representation_ratio(
-                segment_offset, segment_squared)
+            # Parallel: the segment end farthest along the ray, as three.js
+            # `Ray.distanceSqToSegment` does (Ray.js:274-277).
+            along = _float_representation_ratio(direction_segment, segment_squared)
+            segment_parameter = along < zero(T) ? zero(T) : one(T)
         end
         segment_parameter =
             clamp(segment_parameter, zero(T), one(T))

@@ -23,19 +23,25 @@ recorded on a task-local tape while a gradient pass is active; other `Real`
 types promote to `ADVar`. At nonsmooth points the recorded derivative is a
 selected branch derivative (for example, `min`/`max` ties select the first
 argument), which can differ from ForwardDiff's choice there.
+
+Comparisons use the value alone. `iszero` and `isone` are also `false` for any
+value that depends on a differentiated input, as for a `ForwardDiff.Dual` with
+nonzero partials, so generic code that skips work for a scalar equal to 0 or 1
+(`mul!`, `lmul!`, `normalize`) keeps its derivative.
 """
 mutable struct ADVar <: Real
     val::Float64
     adj::Float64                 # accumulated adjoint (∂output/∂this)
     p1::Float64
     p2::Float64
+    dep::Bool                    # depends on a differentiated input
     a1::ADVar
     a2::ADVar
-    ADVar(val::Float64, ::Tuple{}, ::Tuple{}) = new(val, 0.0, 0.0, 0.0)
+    ADVar(val::Float64, ::Tuple{}, ::Tuple{}) = new(val, 0.0, 0.0, 0.0, false)
     ADVar(val::Float64, a::Tuple{ADVar}, p::Tuple{Any}) =
-        new(val, 0.0, p[1], 0.0, a[1])
+        new(val, 0.0, p[1], 0.0, a[1].dep, a[1])
     ADVar(val::Float64, a::Tuple{ADVar,ADVar}, p::Tuple{Any,Any}) =
-        new(val, 0.0, p[1], p[2], a[1], a[2])
+        new(val, 0.0, p[1], p[2], a[1].dep | a[2].dep, a[1], a[2])
 end
 
 @inline _primal_value(value::ADVar) = value.val
@@ -98,6 +104,14 @@ end
 
 _ad_constant(x::Real) = ADVar(Float64(x), (), ())
 
+# A recorded leaf whose value depends on the differentiated inputs: a gradient
+# input, or an output of a fused operation whose pullback reaches them.
+@inline function _ad_dependent_leaf(val::Float64)
+    v = _ad_record(val, (), ())
+    v.dep = true
+    return v
+end
+
 # Whether this task is inside a reverse pass that records operations.
 @inline _ad_recording() = !isempty(_ad_tape_stack())
 
@@ -121,6 +135,9 @@ ADVar(x::ADVar) = x
 Base.convert(::Type{ADVar}, x::Real) = x isa ADVar ? x : ADVar(x)
 Base.convert(::Type{ADVar}, x::ADVar) = x
 Base.promote_rule(::Type{ADVar}, ::Type{<:Real}) = ADVar
+# Base declares promote_rule(BigFloat, <:Real) = BigFloat, which would disagree
+# with the rule above and make promote_type recurse without end.
+Base.promote_rule(::Type{BigFloat}, ::Type{ADVar}) = ADVar
 Base.promote_rule(
     ::Type{ADVar},
     ::Type{ForwardDiff.Dual{Tag,V,N}},
@@ -151,7 +168,7 @@ Base.hash(x::ADVar, h::UInt) = hash(x.val, h)
 # to ForwardDiff's generic rule: it promotes the Dual's value and partials to
 # ADVar, preserving both the forward partial and the reverse tape.
 for op in (:+, :-, :*, :/, :^, :(==), :<, :<=, :>, :>=,
-           :isless, :min, :max, :hypot, :mod, :rem)
+           :isless, :isequal, :min, :max, :hypot, :mod, :rem)
     @eval begin
         Base.$op(a::ADVar, b::ForwardDiff.Dual) =
             invoke(Base.$op, Tuple{Real,ForwardDiff.Dual}, a, b)
@@ -298,6 +315,10 @@ function Base.:^(a::ADVar, p::Real)
     derivative = _power_base_derivative(a.val, p, value)
     _ad_record(value, (a,), (derivative,))
 end
+# A BigFloat exponent or base would make the primal a BigFloat; ADVar values
+# are Float64, so the power is taken at Float64 precision.
+Base.:^(a::ADVar, p::BigFloat) = a^Float64(p)
+Base.:^(a::BigFloat, b::ADVar) = Float64(a)^b
 function Base.:^(a::Real, b::ADVar)
     af = Float64(a)
     v = af^b.val
@@ -446,6 +467,29 @@ Base.min(a::ADVar, b::Real) = (bf = Float64(b); _ad_min_first(a.val, bf) ?
 Base.min(a::Real, b::ADVar) = (af = Float64(a); _ad_min_first(af, b.val) ?
     _ad_constant(min(af, b.val)) : _ad_record(min(af, b.val), (b,), (1.0,)))
 
+# Three-argument hypot. Base's generic method scales by the largest magnitude
+# and returns it when `iszero`; that test must look at the value, because a
+# zero that depends on a differentiated input is not `iszero` (see below) and
+# the division would then be 0/0. At the origin the result keeps the
+# derivative of the largest-magnitude argument, a one-sided derivative.
+function _ad_hypot3(a, b, c)
+    # An infinite argument wins over NaN, as for Float64.
+    (isinf(_primal_value(a)) || isinf(_primal_value(b)) || isinf(_primal_value(c))) &&
+        return _ad_constant(Inf)
+    scale = max(abs(a), abs(b), abs(c))
+    scale_value = _primal_value(scale)
+    (iszero(scale_value) || !isfinite(scale_value)) && return scale + zero(scale_value)
+    x = a / scale
+    y = b / scale
+    z = c / scale
+    return sqrt(x * x + y * y + z * z) * scale
+end
+for (A, B, C) in ((:ADVar, :ADVar, :ADVar), (:ADVar, :ADVar, :Real), (:ADVar, :Real, :ADVar),
+                  (:Real, :ADVar, :ADVar), (:ADVar, :Real, :Real), (:Real, :ADVar, :Real),
+                  (:Real, :Real, :ADVar))
+    @eval Base.hypot(a::$A, b::$B, c::$C) = _ad_hypot3(a, b, c)
+end
+
 # ---- comparisons (decided by the value; no gradient) ----
 Base.:<(a::ADVar, b::ADVar)  = a.val < b.val
 Base.:<=(a::ADVar, b::ADVar) = a.val <= b.val
@@ -471,6 +515,17 @@ Base.isless(a::ADVar, b::AbstractFloat) = isless(a.val, Float64(b))
 Base.isless(a::AbstractFloat, b::ADVar) = isless(Float64(a), b.val)
 Base.isfinite(a::ADVar) = isfinite(a.val)
 Base.isnan(a::ADVar) = isnan(a.val)
+# `hash` uses the value, so `isequal` must follow Float64's `isequal` (signed
+# zeros differ, NaN equals NaN) rather than `==`.
+Base.isequal(a::ADVar, b::ADVar) = isequal(a.val, b.val)
+Base.isequal(a::ADVar, b::Real) = isequal(a.val, b)
+Base.isequal(a::Real, b::ADVar) = isequal(a, b.val)
+Base.isequal(a::ADVar, b::AbstractFloat) = isequal(a.val, b)
+Base.isequal(a::AbstractFloat, b::ADVar) = isequal(a, b.val)
+# A value that depends on a differentiated input is never "the constant" 0 or
+# 1, so value-based shortcuts in generic code cannot drop its tape edge.
+Base.iszero(a::ADVar) = !a.dep && iszero(a.val)
+Base.isone(a::ADVar) = !a.dep && isone(a.val)
 
 # ---- identities / rounding (discrete results carry no gradient) ----
 Base.zero(::Type{ADVar}) = _ad_constant(0.0)
@@ -556,6 +611,24 @@ function Base.tand(x::ADVar)
     t = tand(x.val)
     return _ad_record(t, (x,), (deg2rad(1.0 + t * t),))
 end
+# Base composes cotd, acot, acsch and asech from a reciprocal, whose chained
+# partials underflow or overflow where the derivative itself is finite.
+function Base.cotd(x::ADVar)
+    c = cotd(x.val)
+    return _ad_record(c, (x,), (-deg2rad(1.0 + c * c),))
+end
+# d/dx acot(x) = -1 / (1 + x²), evaluated without overflowing x².
+@inline function _acot_derivative(x::Float64)
+    abs(x) <= 1.0 && return -1.0 / (1.0 + x * x)
+    r = 1.0 / x
+    return -(r * r) / (1.0 + r * r)
+end
+Base.acot(x::ADVar) = _ad_record(acot(x.val), (x,), (_acot_derivative(x.val),))
+# d/dx acsch(x) = -1 / (|x| sqrt(1 + x²)) and d/dx asech(x) = -1 / (x sqrt(1 - x²)).
+Base.acsch(x::ADVar) = _ad_record(
+    acsch(x.val), (x,), (-inv(abs(x.val)) / hypot(1.0, x.val),))
+Base.asech(x::ADVar) = _ad_record(
+    asech(x.val), (x,), (-inv(x.val) / (sqrt(1.0 - x.val) * sqrt(1.0 + x.val)),))
 
 # ---- π-scaled trigonometry ----
 Base.sinpi(x::ADVar) = _ad_record(sinpi(x.val), (x,), (π * cospi(x.val),))
@@ -615,7 +688,7 @@ function _reverse_value_gradient(f, x::AbstractVector{<:Real})
         inputs = Vector{ADVar}(undef, n)
         input_index = 1
         @inbounds for i in eachindex(x)
-            inputs[input_index] = ADVar(Float64(x[i]))   # leaf (recorded on `tape`)
+            inputs[input_index] = _ad_dependent_leaf(Float64(x[i]))   # recorded on `tape`
             input_index += 1
         end
         y = f(inputs)
