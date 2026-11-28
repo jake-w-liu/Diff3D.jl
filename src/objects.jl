@@ -1619,3 +1619,210 @@ end
 @inline _in_render_order_bucket(obj::AbstractObject3D, keys::Vector{Float64},
                                 bucket::Int, count::Int) =
     count == 1 || @inbounds(_render_order_key(obj) == (keys[2bucket - 1], keys[2bucket]))
+
+# ========================== clone / copy ==========================
+# three.js Object3D.copy (src/core/Object3D.js:1605-1652) copies the name,
+# transform, layers, visibility, shadow flags and renderOrder, then adds a
+# clone of every child when `recursive`; `clone(recursive)` is
+# `new this.constructor().copy(this, recursive)` (Object3D.js:1592-1596), so
+# the clone has a fresh id and no parent. Subclasses copy their own state and
+# share geometry, materials and skeletons by reference (Mesh.js:110-131,
+# SkinnedMesh.js:161-176, Sprite.js:216-226). Diff3D stores the three.js
+# quaternion as `rotation` and keeps the same split between copied values
+# and shared references.
+
+# Fields a copy never takes from its source: the scene-graph links and the
+# identity (three.js copy keeps `this.id`, `this.parent` and the children it
+# already has).
+const _OBJECT_COPY_LINK_FIELDS = (:parent, :children, :id)
+
+# Per-object vectors three.js copies (Mesh.js:114-118 slices
+# morphTargetInfluences; InstancedMesh.js:186-189 copies instanceMatrix and
+# clones instanceColor). The morph target names belong to the geometry's
+# dictionary in three.js, which Mesh.js:120-124 also copies.
+const _OBJECT_COPIED_VECTORS = (:morph_target_influences, :morph_target_names,
+                                :instance_matrices, :instance_colors)
+
+# A material array is sliced as well (Mesh.js:126, Line.js:107, Points.js:85).
+@inline _object_copy_value(name::Symbol, value) =
+    name in _OBJECT_COPIED_VECTORS ? copy(value) :
+    name === :material && value isa AbstractVector ? copy(value) : value
+
+function _copy_object_fields!(dest::T, source::T) where {T<:AbstractObject3D}
+    for name in fieldnames(T)
+        name in _OBJECT_COPY_LINK_FIELDS && continue
+        _object_copy_skips_field(dest, name) && continue
+        setfield!(dest, name, _object_copy_value(name, getfield(source, name)))
+    end
+    return dest
+end
+
+# Type-specific state that is not a plain field copy.
+@inline _object_copy_skips_field(::AbstractObject3D, ::Symbol) = false
+@inline _object_copy_skips_field(::LOD, name::Symbol) =
+    name === :levels || name === :_camera_levels || name === :_manual_level
+
+function _copy_object_layers!(dest::AbstractObject3D, source::AbstractObject3D)
+    mask = _object_layer_mask(source)
+    if hasproperty(dest, :layers)
+        getfield(dest, :layers).mask = mask
+    elseif mask != _DEFAULT_OBJECT_LAYER_MASK || _object_has_layer_state(dest)
+        object_layers(dest).mask = mask
+    end
+    return dest
+end
+
+function _object_has_layer_state(obj::AbstractObject3D)
+    lock(_OBJECT_LAYER_LOCK)
+    try
+        return haskey(_OBJECT_LAYER_STORE, obj)
+    finally
+        unlock(_OBJECT_LAYER_LOCK)
+    end
+end
+
+function _copy_object_children!(dest::AbstractObject3D, source::AbstractObject3D,
+                                recursive::Bool)
+    recursive || return dest
+    # Snapshot: copying an object into its own subtree must not visit the
+    # clones it adds.
+    for child in copy(get_children(source))
+        add!(dest, clone(child))
+    end
+    return dest
+end
+
+# three.js LOD.copy (src/objects/LOD.js:87-105) ignores `recursive`: it copies
+# the Object3D part without children and adds a clone of each level object at
+# the level's distance and hysteresis. Other children are not cloned.
+function _copy_object_children!(dest::LOD, source::LOD, ::Bool)
+    _validate_lod_levels(source, "LOD copy")
+    for level in copy(source.levels)
+        add_lod_level!(dest, level.distance, clone(level.object);
+                       hysteresis=level.hysteresis)
+    end
+    return dest
+end
+
+"""
+    copy!(dest::T, source::T; recursive=true) where {T<:AbstractObject3D} -> dest
+
+Copy the state of `source` into `dest` of the same node type (three.js
+`Object3D.copy` and its subclass overrides): name, position, rotation, scale,
+layers, visibility, `render_order`, shadow flags and every type-specific
+setting such as camera projection parameters, light colours and shadow
+settings, or LOD `auto_update`. `dest` keeps its id, parent and existing
+children. Geometry, material and skeleton references are shared, as in
+three.js; morph influences and instance matrices and colours are copied.
+
+With `recursive=true` a [`clone`](@ref) of every child of `source` is added to
+`dest`. An `LOD` copies like three.js `LOD.copy`: whatever `recursive` says,
+a clone of each level object is added as a level, and other children are not
+copied.
+"""
+function Base.copy!(dest::T, source::T; recursive::Bool=true) where {T<:AbstractObject3D}
+    _copy_object_fields!(dest, source)
+    _copy_object_layers!(dest, source)
+    _copy_object_children!(dest, source, recursive)
+    return dest
+end
+
+# A detached shell of `source`'s type with its own id and no children, built
+# from the full positional field list so inner-constructor validation runs.
+function _object_clone_shell(source::T) where {T<:AbstractObject3D}
+    values = ntuple(fieldcount(T)) do index
+        name = fieldname(T, index)
+        name === :parent ? nothing :
+        name === :children ? AbstractObject3D[] :
+        name === :id ? _next_id() :
+        _object_clone_shell_value(source, name, getfield(source, index))
+    end
+    return T(values...)
+end
+
+_object_clone_shell_value(::AbstractObject3D, name::Symbol, value) =
+    _object_copy_value(name, value)
+
+function _object_clone_shell_value(::LOD, name::Symbol, value)
+    name === :levels && return LODLevel[]
+    name === :_camera_levels && return WeakKeyDict{AbstractCamera,Int}()
+    name === :_manual_level && return 0
+    return _object_copy_value(name, value)
+end
+
+"""
+    clone(object; recursive=true) -> new object
+
+A new node of the same type as `object` with a fresh id, no parent, and the
+state of `object` copied into it by [`copy!`](@ref) (three.js
+`Object3D.clone`). With `recursive=true` the children are cloned too. As in
+three.js, a cloned `SkinnedMesh` keeps the skeleton of `object`, so it is still
+posed by the original bones, and geometry and materials are shared.
+"""
+function clone(source::AbstractObject3D; recursive::Bool=true)
+    dest = _object_clone_shell(source)
+    _copy_object_layers!(dest, source)
+    _copy_object_children!(dest, source, recursive)
+    return dest
+end
+
+# three.js BufferGeometry.copy (src/core/BufferGeometry.js:1357-1462) clones
+# the index and every attribute array, the groups and the draw range.
+_cloned_geometry_attributes(attributes::Dict{Symbol, BufferAttribute}) =
+    Dict{Symbol, BufferAttribute}(name => BufferAttribute(copy(attribute.data),
+                                                          attribute.item_size)
+                                  for (name, attribute) in attributes)
+
+"""
+    copy!(dest::BufferGeometry, source::BufferGeometry) -> dest
+
+Replace the contents of `dest` with copies of the position, normal, uv and
+index buffers, named attributes, groups and draw range of `source` (three.js
+`BufferGeometry.copy`). No array is shared afterwards.
+"""
+function Base.copy!(dest::BufferGeometry, source::BufferGeometry)
+    dest === source && return dest
+    dest.positions = copy(source.positions)
+    dest.normals = copy(source.normals)
+    dest.uvs = copy(source.uvs)
+    dest.indices = copy(source.indices)
+    dest.n_vertices = source.n_vertices
+    dest.n_faces = source.n_faces
+    dest.attributes = _cloned_geometry_attributes(source.attributes)
+    dest.groups = copy(source.groups)
+    dest.draw_range = source.draw_range
+    return dest
+end
+
+"""
+    clone(geometry::BufferGeometry) -> BufferGeometry
+
+A new geometry with copies of every buffer of `geometry` (three.js
+`BufferGeometry.clone`); see [`copy!`](@ref).
+"""
+clone(source::BufferGeometry) = copy!(BufferGeometry(), source)
+
+# three.js Material.copy (src/materials/Material.js:1119-1168) shares textures
+# and copies the clipping-plane array (each plane is cloned; Diff3D planes are
+# immutable values). ShaderMaterial.copy (ShaderMaterial.js:278-286) clones
+# the uniforms with UniformsUtils.cloneUniforms, which slices array values.
+_material_clone_value(value) = value
+_material_clone_value(value::Vector{<:Plane}) = copy(value)
+_material_clone_value(value::Dict{String, Any}) =
+    Dict{String, Any}(name => (uniform isa AbstractArray ? copy(uniform) : uniform)
+                      for (name, uniform) in value)
+
+"""
+    clone(material::AbstractMaterial) -> material
+
+A material of the same type and settings (three.js `Material.clone`).
+Diff3D materials are immutable, so only the mutable containers are new: the
+`clipping_planes` vector and, for a `ShaderMaterial`, the `uniforms`
+dictionary with its array values copied. Textures and other references are
+shared, as three.js `Material.copy` shares them.
+"""
+function clone(source::M) where {M<:AbstractMaterial}
+    values = ntuple(index -> _material_clone_value(getfield(source, index)),
+                    fieldcount(M))
+    return M(values...)
+end

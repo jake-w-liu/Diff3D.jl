@@ -318,3 +318,207 @@ end
         @test occursin("\"name\":\"b\",\"mode\":\"triangles\",\"visible\":true,\"layerMask\":1,\"groupOrder\":-3,\"renderOrder\":-1e999,", html)
     end
 end
+
+# ---------------------------------------------------------------------------
+# (b) Object3D clone / copy
+# ---------------------------------------------------------------------------
+
+@testset "clone gives a fresh, detached copy of every node type" begin
+    geometry = BoxGeometry()
+    material = MeshLambertMaterial(color=Color3(0.2, 0.4, 0.6))
+    bone = Bone()
+    skeleton = Skeleton([bone])
+    nodes = Any[Object3D(), Scene(background=Color3(0.1, 0.2, 0.3)), Group(),
+                Mesh(geometry, material; morph_target_influences=[0.25],
+                     morph_target_names=["a"], cast_shadow=true),
+                LineObject(geometry, LineBasicMaterial()),
+                PointsObject(geometry, PointsMaterial()),
+                InstancedMesh(geometry, material, 2),
+                LineSegments(geometry, LineBasicMaterial()),
+                LineLoop(geometry, LineBasicMaterial()),
+                Sprite(SpriteMaterial(); center=Vec2(0.25, 0.75)), LOD(), bone,
+                SkinnedMesh(geometry, material, skeleton,
+                            fill((1, 1, 1, 1), geometry.n_vertices),
+                            fill((1.0, 0.0, 0.0, 0.0), geometry.n_vertices)),
+                AmbientLight(intensity=0.3),
+                DirectionalLight(cast_shadow=true, shadow_bias=0.01,
+                                 shadow_pcf_radius=2, shadow_intensity=0.5),
+                PointLight(distance=4.0, decay=1.0), SpotLight(angle=0.4, penumbra=0.2),
+                HemisphereLight(ground_color=Color3(0.5, 0.25, 0.0)),
+                RectAreaLight(width=3.0, height=2.0), LightProbe(Color3(0.1, 0.1, 0.1)),
+                PerspectiveCamera(fov=0.7, aspect=1.5, near=0.5, far=50.0, zoom=2.0),
+                OrthographicCamera(left=-2.0, right=3.0, zoom=1.5)]
+    for node in nodes
+        node.name = "source"
+        node.position = Vec3(1.0, -2.0, 3.0)
+        node.rotation = Euler(0.1, 0.2, 0.3, :ZXY)
+        node.scale = Vec3(2.0, 1.0, 0.5)
+        node.visible = false
+        node.render_order = 4
+        layers_set!(object_layers(node), 3)
+        parent = Group()
+        add!(parent, node)
+        child = Object3D()
+        add!(node, child)
+
+        copy = Diff3D.clone(node)
+        @test typeof(copy) === typeof(node)
+        @test copy !== node && copy.id != node.id
+        @test copy.parent === nothing && get_parent(node) === parent
+        @test copy.name == "source" && copy.visible == false
+        @test copy.position === node.position && copy.rotation === node.rotation &&
+              copy.scale === node.scale
+        @test copy.render_order === 4.0
+        @test object_layers(copy).mask == UInt32(1) << 3
+        object_layers(copy).mask = UInt32(1)
+        @test object_layers(node).mask == UInt32(1) << 3
+        if node isa LOD
+            # LOD.copy (LOD.js:87-105) clones levels only.
+            @test isempty(copy.children)
+        else
+            @test length(copy.children) == 1
+            @test copy.children[1] !== child && copy.children[1].parent === copy
+            @test copy.children[1].id != child.id
+        end
+        shallow = Diff3D.clone(node; recursive=false)
+        @test isempty(shallow.children)
+        # Every remaining field matches, by value or by shared reference.
+        for name in fieldnames(typeof(node))
+            name in (:parent, :children, :id, :levels, :_camera_levels,
+                     :_world_cache) && continue
+            @test isequal(getfield(copy, name), getfield(node, name))
+        end
+    end
+end
+
+@testset "clone shares geometry, materials and skeletons like three.js" begin
+    geometry = BoxGeometry()
+    material = MeshBasicMaterial()
+    mesh = Mesh(geometry, material; morph_target_influences=[0.5])
+    copy = Diff3D.clone(mesh)
+    # Mesh.js:126-127: same geometry and material objects.
+    @test copy.geometry === geometry && copy.material === material
+    # Mesh.js:116: morphTargetInfluences are sliced, not shared.
+    @test copy.morph_target_influences == [0.5]
+    @test copy.morph_target_influences !== mesh.morph_target_influences
+
+    instances = InstancedMesh(geometry, material, 2)
+    set_instance_matrix!(instances, 1, mat4_translation(1.0, 0.0, 0.0))
+    copy = Diff3D.clone(instances)
+    # InstancedMesh.js:186-189 copies the instance matrix and colour buffers.
+    @test copy.instance_matrices == instances.instance_matrices
+    @test copy.instance_matrices !== instances.instance_matrices
+    @test copy.instance_colors !== instances.instance_colors
+    set_instance_matrix!(copy, 1, mat4_translation(5.0, 0.0, 0.0))
+    @test get_instance_matrix(instances, 1) == mat4_translation(1.0, 0.0, 0.0)
+
+    # SkinnedMesh.js:165-169: bind mode and matrices copied, skeleton shared,
+    # so a cloned rig is still posed by the original bones.
+    root = Group()
+    bone = Bone()
+    add!(root, bone)
+    skeleton = Skeleton([bone])
+    skinned = SkinnedMesh(geometry, material, skeleton,
+                          fill((1, 1, 1, 1), geometry.n_vertices),
+                          fill((1.0, 0.0, 0.0, 0.0), geometry.n_vertices);
+                          bind_mode=:detached)
+    add!(root, skinned)
+    rig = Diff3D.clone(root)
+    cloned_skin = rig.children[2]
+    @test cloned_skin.skeleton === skeleton
+    @test cloned_skin.bind_mode === :detached
+    @test cloned_skin.bind_matrix == skinned.bind_matrix
+    @test rig.children[1] !== bone
+end
+
+@testset "copy! copies state into an existing node" begin
+    source = PerspectiveCamera(fov=0.9, aspect=2.0, near=1.0, far=10.0)
+    source.position = Vec3(0.0, 1.0, 2.0)
+    source.target = Vec3(1.0, 1.0, 0.0)
+    set_view_offset!(source, 100.0, 100.0, 10.0, 20.0, 50.0, 50.0)
+    child = Object3D()
+    add!(source, child)
+    dest = PerspectiveCamera()
+    keep = Object3D()
+    add!(dest, keep)
+    parent = Group()
+    add!(parent, dest)
+    id = dest.id
+    @test copy!(dest, source) === dest
+    # Object3D.copy keeps the id, parent and existing children (Object3D.js:1605-1652).
+    @test dest.id == id && dest.parent === parent
+    @test dest.children[1] === keep && length(dest.children) == 2
+    @test dest.children[2] !== child
+    @test projection_matrix(dest) == projection_matrix(source)
+    # `parent` has the identity transform, so the copied aim gives the same view.
+    @test view_matrix(dest) == view_matrix(source)
+    copy!(dest, source; recursive=false)
+    @test length(dest.children) == 2
+    # Copying a node into itself does not recurse into the children it adds.
+    group = Group()
+    add!(group, Object3D())
+    copy!(group, group)
+    @test length(group.children) == 2
+
+    lod = LOD()
+    near = Mesh(BoxGeometry(), MeshBasicMaterial())
+    far = Mesh(BoxGeometry(), MeshBasicMaterial())
+    add_lod_level!(lod, 0.0, near)
+    add_lod_level!(lod, 10.0, far; hysteresis=0.1)
+    add!(lod, Object3D())
+    lod.auto_update = false
+    copied = Diff3D.clone(lod)
+    @test length(copied.levels) == 2 && length(copied.children) == 2
+    @test copied.levels[2].distance == 10.0 && copied.levels[2].hysteresis == 0.1
+    @test copied.levels[1].object !== near && copied.levels[1].object.parent === copied
+    @test copied.auto_update == false
+    @test lod_select(copied, 20.0) === copied.levels[2].object
+end
+
+@testset "clone of geometries and materials" begin
+    geometry = BoxGeometry()
+    geometry.attributes[:color] = BufferAttribute(fill(0.5, 3 * geometry.n_vertices), 3)
+    geometry.groups = [(1, 2, 0)]
+    geometry.draw_range = (1, 6)
+    copy = Diff3D.clone(geometry)
+    # BufferGeometry.copy (BufferGeometry.js:1357-1462) clones every attribute array.
+    @test copy !== geometry
+    for name in (:positions, :normals, :uvs, :indices, :groups)
+        @test getfield(copy, name) == getfield(geometry, name)
+        @test getfield(copy, name) !== getfield(geometry, name)
+    end
+    @test copy.draw_range == (1, 6)
+    @test copy.attributes[:color].data == geometry.attributes[:color].data
+    @test copy.attributes[:color].data !== geometry.attributes[:color].data
+    target = BufferGeometry()
+    @test copy!(target, geometry) === target
+    @test target.positions == geometry.positions && target.positions !== geometry.positions
+
+    texture = Texture(fill(0.5, 2, 2, 3))
+    material = MeshBasicMaterial(map=texture, clipping_planes=[Plane(Vec3(1.0, 0.0, 0.0), 0.0)])
+    copy = Diff3D.clone(material)
+    @test typeof(copy) === typeof(material)
+    for name in fieldnames(MeshBasicMaterial)
+        @test isequal(getfield(copy, name), getfield(material, name))
+    end
+    # Material.copy (Material.js:1119-1168) shares textures and copies the
+    # clipping-plane list.
+    @test copy.map === texture
+    @test copy.clipping_planes == material.clipping_planes
+    @test copy.clipping_planes !== material.clipping_planes
+    for original in (MeshLambertMaterial(), MeshPhongMaterial(), MeshStandardMaterial(),
+                     MeshPhysicalMaterial(), MeshToonMaterial(), MeshMatcapMaterial(),
+                     MeshDepthMaterial(), MeshNormalMaterial(), LineBasicMaterial(),
+                     LineDashedMaterial(), PointsMaterial(), SpriteMaterial())
+        cloned = Diff3D.clone(original)
+        @test typeof(cloned) === typeof(original)
+        @test all(isequal(getfield(cloned, name), getfield(original, name))
+                  for name in fieldnames(typeof(original)))
+    end
+    # ShaderMaterial.copy clones the uniforms (UniformsUtils.cloneUniforms
+    # slices arrays).
+    shader = ShaderMaterial(uniforms=Dict{String,Any}("weights" => [1.0, 2.0], "k" => 3.0))
+    cloned = Diff3D.clone(shader)
+    @test cloned.uniforms == shader.uniforms && cloned.uniforms !== shader.uniforms
+    @test cloned.uniforms["weights"] !== shader.uniforms["weights"]
+end
