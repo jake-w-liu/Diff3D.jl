@@ -808,13 +808,30 @@ end
     square = [Vec2(-1.0, -1.0), Vec2(1.0, -1.0), Vec2(1.0, 1.0), Vec2(-1.0, 1.0)]
     hole = [Vec2(-0.3, -0.3), Vec2(-0.3, 0.3), Vec2(0.3, 0.3), Vec2(0.3, -0.3)]
     loop = [Vec3(2cos(t), 2sin(t), 0.2sin(3t)) for t in range(0, 2pi; length=25)]
-    h(g) = bytes2hex(sha256(vcat(reinterpret(UInt8, g.positions), reinterpret(UInt8, g.normals),
-                                 reinterpret(UInt8, g.uvs), reinterpret(UInt8, g.indices))))
-    # hashes of the v2.0.0 (6b7e848) output
-    @test h(ExtrudeGeometry(star; extrude_path=helix)) ==
-          "43826329d9e6441d86892cc4bf4613ede0153d1609627fd8ca2ee8eb74299ee5"
-    @test h(ExtrudeGeometry(square; holes=[hole], extrude_path=loop)) ==
-          "c476f23e0a094cb2d13af61c83d955a6675c5f59f70e3bceabfbaf1fc50a5481"
+    zig = [Vec3(0.0, 0, 0), Vec3(1.0, 0, 0), Vec3(1.0, 1, 0), Vec3(1.0, 1, 1), Vec3(0.0, 1, 1)]
+    # Counts, index-weighted index sum, and plain and index-weighted sums of
+    # positions, normals and uvs: any reordering or value change above ~1e-10
+    # shows. The buffers are byte-identical to v2.0.0 on a given Julia, but sin,
+    # cos and friends differ by an ulp between Julia 1.10 and 1.13, hence the
+    # tolerance instead of a byte hash.
+    checksums(g) = (g.n_vertices, g.n_faces, sum(k * i for (k, i) in enumerate(g.indices)),
+        [f(v) for v in (g.positions, g.normals, g.uvs)
+              for f in (v -> sum(v), v -> sum(k * x for (k, x) in enumerate(v)))]...)
+    # v2.0.0 (6b7e848) values, computed on Julia 1.10.12
+    expected = [
+        (420, 796, 773827205, 821.6813487046278, 648780.9515647277, 3.0718200903607054,
+         3005.0056086681757, 379.9999999999998, 180112.19528199025),
+        (192, 384, 82772640, -3.4139358007223564e-14, -41006.578399062535, 1.4432899320127035e-15,
+         -193.45525928081537, 180.0, 41296.0),
+        (70, 96, 1713730, 100.0, 11886.958681254078, -20.0, -3424.810453671209,
+         47.50000000000001, 2918.8619486569437)]
+    for (g, e) in zip((ExtrudeGeometry(star; extrude_path=helix),
+                       ExtrudeGeometry(square; holes=[hole], extrude_path=loop),
+                       ExtrudeGeometry(star; extrude_path=zig)), expected)
+        c = checksums(g)
+        @test c[1:3] == e[1:3]
+        @test all(isapprox(c[k], e[k]; rtol=1e-12, atol=1e-9) for k in 4:9)
+    end
 end
 
 const _tf_MORPH_POS = [0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0.5, 0.5, 1, 2, 2, 2.0]
