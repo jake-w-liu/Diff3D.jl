@@ -1088,7 +1088,7 @@ end
 """Decode a JPEG/JPG file into an H×W×3 RGB array in [0,1]."""
 load_jpeg(path::String) = _decode_jpeg(read(path); label="JPEG image")
 
-# ===== KTX2 (Khronos texture container) — uncompressed decode =====
+# ===== KTX2 (Khronos texture container) — uncompressed and zlib-supercompressed decode =====
 # Basis Universal (vkFormat 0) and supercompressed payloads need a transcoder
 # and fail clearly rather than being silently approximated.
 const _KTX2_IDENTIFIER = UInt8[0xAB, 0x4B, 0x54, 0x58, 0x20, 0x32, 0x30, 0xBB,
@@ -1172,8 +1172,13 @@ function _decode_ktx2(bytes::AbstractVector{UInt8})
     kvdOffset   = _rd_le32(bytes, 57)
     kvdLength   = _rd_le32(bytes, 61)
 
-    superScheme == 0 ||
-        error("KTX2 supercompression scheme $superScheme is not supported; only uncompressed KTX2 is implemented (Basis/Zstd/Zlib need a transcoder)")
+    # KTX 2.0 supercompressionScheme values: 0 none, 1 BasisLZ, 2 Zstandard, 3 ZLIB.
+    superScheme == 1 &&
+        error("KTX2 supercompression scheme 1 (BasisLZ) is not supported; Basis Universal transcoding is not implemented")
+    superScheme == 2 &&
+        error("KTX2 supercompression scheme 2 (Zstandard) is not supported; Zstandard decoding is not implemented (three.js KTX2Loader decodes it with zstddec)")
+    superScheme in (0, 3) ||
+        error("KTX2 supercompression scheme $superScheme is not supported; only none (0) and ZLIB (3) are implemented")
     vkFormat != 0 ||
         error("KTX2 vkFormat 0 (Basis Universal) is not supported; Basis transcoding is not implemented")
     haskey(_KTX2_VKFORMATS, vkFormat) ||
@@ -1196,26 +1201,55 @@ function _decode_ktx2(bytes::AbstractVector{UInt8})
     pixel_bytes = channels * cbytes
     length(bytes) >= 104 ||                         # 80-byte header + one level entry
         error("KTX2 level index is truncated")
-    # KTX2 level data is uncompressed, so it must fit in the file. Bound the
-    # dimensions (overflow-safe) before computing `expected` — otherwise a crafted
-    # huge width/height overflows the Int64 product and defeats the size check.
-    maxpix = length(bytes) ÷ max(1, pixel_bytes)
+    # Level data must fit in the file, uncompressed or after DEFLATE's largest
+    # expansion (1032:1, zlib's deflateBound). Bound the dimensions
+    # (overflow-safe) before computing `expected`, so a crafted huge
+    # width/height can neither overflow the Int64 product nor allocate more
+    # than the file can describe.
+    max_level_bytes = superScheme == 0 ? length(bytes) :
+        _checked_mul_int(length(bytes), _KTX2_MAX_DEFLATE_RATIO, "KTX2 file")
+    maxpix = max_level_bytes ÷ max(1, pixel_bytes)
     (pixelWidth <= maxpix && pixelHeight <= maxpix && pixelWidth <= maxpix ÷ pixelHeight) ||
         error("KTX2 dimensions $(pixelWidth)x$(pixelHeight) exceed the $(length(bytes))-byte file")
     byteOffset = _rd_le64(bytes, 81)                # level 0 = full resolution
     byteLength = _rd_le64(bytes, 89)
     uncompressedByteLength = _rd_le64(bytes, 97)
-    uncompressedByteLength == byteLength ||
-        error("KTX2 level 0 uncompressedByteLength $uncompressedByteLength does not match byteLength $byteLength without supercompression")
-
     expected = pixelWidth * pixelHeight * pixel_bytes
-    byteLength == expected ||
-        error("KTX2 level 0 byteLength $byteLength does not match $(pixelWidth)x$(pixelHeight)x$channels x$cbytes = $expected uncompressed bytes")
+    if superScheme == 0
+        uncompressedByteLength == byteLength ||
+            error("KTX2 level 0 uncompressedByteLength $uncompressedByteLength does not match byteLength $byteLength without supercompression")
+        byteLength == expected ||
+            error("KTX2 level 0 byteLength $byteLength does not match $(pixelWidth)x$(pixelHeight)x$channels x$cbytes = $expected uncompressed bytes")
+    else
+        uncompressedByteLength == expected ||
+            error("KTX2 level 0 uncompressedByteLength $uncompressedByteLength does not match $(pixelWidth)x$(pixelHeight)x$channels x$cbytes = $expected bytes")
+    end
     # Overflow-safe: byteOffset/byteLength come from a u64 read (signed Int), so a
     # crafted huge offset must not make `byteOffset + byteLength` wrap past the guard.
     (0 <= byteOffset <= length(bytes) && byteLength >= 0 &&
      byteLength <= length(bytes) - byteOffset) ||
         error("KTX2 level 0 data range exceeds the file length $(length(bytes))")
+    if superScheme == 3
+        # ZLIB (RFC 1950) level data: inflate exactly `expected` bytes, with the
+        # stream's own header and Adler-32 checks.
+        stream = @view bytes[(byteOffset + 1):(byteOffset + byteLength)]
+        level = try
+            _zlib_inflate(stream, expected, nothing)
+        catch err
+            err isa ErrorException || rethrow()
+            error("KTX2 ZLIB level 0 data is invalid: $(err.msg)")
+        end
+        length(level) == expected ||
+            error("KTX2 ZLIB level 0 inflates to $(length(level)) bytes, expected $expected")
+        return _ktx2_level_image(level, 0, pixelWidth, pixelHeight, channels, kind, cbytes,
+                                 _ktx2_flips(bytes, kvdOffset, kvdLength)...)
+    end
+    return _ktx2_level_image(bytes, byteOffset, pixelWidth, pixelHeight, channels, kind,
+                             cbytes, _ktx2_flips(bytes, kvdOffset, kvdLength)...)
+end
+
+# (flip_x, flip_y) of the KTXorientation metadata.
+function _ktx2_flips(bytes::AbstractVector{UInt8}, kvdOffset::Int, kvdLength::Int)
 
     # Convert KTX's S/T orientation to the top-left, right/down array layout
     # used by the PNG/JPEG decoders. Missing metadata defaults to "rd".
@@ -1229,7 +1263,14 @@ function _decode_ktx2(bytes::AbstractVector{UInt8})
     end
     flip_x = orient !== nothing && codeunit(orient, 1) == UInt8('l')
     flip_y = orient !== nothing && codeunit(orient, 2) == UInt8('u')
+    return flip_x, flip_y
+end
 
+# The H×W×C image of row-major level data starting after `byteOffset` bytes.
+function _ktx2_level_image(bytes::AbstractVector{UInt8}, byteOffset::Int, pixelWidth::Int,
+                           pixelHeight::Int, channels::Int, kind::Symbol, cbytes::Int,
+                           flip_x::Bool, flip_y::Bool)
+    pixel_bytes = channels * cbytes
     # The level data (in bounds, checked above) is row-major; the H×W×C image
     # is column-major, so rows are stored a band at a time, column by column.
     img = Array{Float64}(undef, pixelHeight, pixelWidth, channels)
@@ -1254,16 +1295,19 @@ function _decode_ktx2(bytes::AbstractVector{UInt8})
 end
 
 const _KTX2_BAND_ROWS = 16
+const _KTX2_MAX_DEFLATE_RATIO = 1032
 
 """
     load_ktx2(path) -> Array{Float64,3}
 
-Decode an uncompressed KTX2 (Khronos texture) file into an `H×W×C` image,
-matching the layout produced by [`load_png`](@ref). Supports single-level
-8-bit R/RG/RGB/RGBA `UNORM`/`SRGB` formats (decoded to `[0, 1]`) and 16/32-bit
-`SFLOAT` formats (decoded to linear unclamped HDR values), and honors the
-`KTXorientation` metadata. Basis Universal (`vkFormat` 0) and supercompressed
-payloads require a transcoder and raise a clear error instead of guessing.
+Decode a KTX2 (Khronos texture) file into an `H×W×C` image, matching the
+layout produced by [`load_png`](@ref). Supports single-level 8-bit
+R/RG/RGB/RGBA `UNORM`/`SRGB` formats (decoded to `[0, 1]`) and 16/32-bit
+`SFLOAT` formats (decoded to linear unclamped HDR values), stored without
+supercompression or with ZLIB supercompression (scheme 3, which three.js
+`KTX2Loader` does not read), and honors the `KTXorientation` metadata. Basis
+Universal (`vkFormat` 0, BasisLZ) and Zstandard-supercompressed payloads need
+decoders Diff3D does not have and raise a clear error instead of guessing.
 """
 load_ktx2(path::String) = _decode_ktx2(read(path))
 
@@ -1703,6 +1747,14 @@ end
 Decode a Radiance RGBE/HDR image with `FORMAT=32-bit_rle_rgbe` into a linear
 H×W×3 floating-point array. Supports both flat scanlines and the standard
 per-channel RLE scanline encoding used by `.hdr` environment maps.
+
+Pixels are converted as Greg Ward's reference `rgbe.c` (`rgbe2float`) does:
+`mantissa * 2^(e - 136)`, i.e. `mantissa / 256 * 2^(e - 128)`, with `e = 0`
+decoding to black. three.js `HDRLoader` (formerly `RGBELoader`,
+HDRLoader.js:358) uses `mantissa / 255 * 2^(e - 128)` instead, so its values
+are 256/255 (about 0.39 %) larger than these, and an `e = 0` pixel there is
+`mantissa / 255 * 2^-128` rather than exactly 0. Multiply by `256 / 255` to
+reproduce three.js values.
 """
 load_rgbe(path::String) = _decode_rgbe(read(path))
 
@@ -1713,9 +1765,540 @@ load_hdr(path::String) = load_rgbe(path)
 RGBELoader(path::String; colorspace::Symbol=:linear, kwargs...) =
     Texture(load_rgbe(path); colorspace=colorspace, kwargs...)
 
+# ========================== TGA (Truevision Targa) ==========================
+# The TGA, PCD and DDS decoders report malformed and unsupported files with
+# an ArgumentError.
+@noinline _decoder_error(msg::AbstractString) = throw(ArgumentError(msg))
+
+# three.js TGALoader (examples/jsm/loaders/TGALoader.js): colour-mapped,
+# true-colour and greyscale images, raw or run-length encoded, 8/16/24/32-bit
+# pixels and all four origins, decoded to RGBA8.
+
+const _TGA_TYPES = (1, 2, 3, 9, 10, 11)
+
+function _decode_tga(bytes::AbstractVector{UInt8})
+    n = length(bytes)
+    # TGALoader.js:446 (header is 18 bytes; three.js asks for 19)
+    n >= 19 || _decoder_error("TGA file is truncated: not enough data to contain the header")
+    id_length = Int(bytes[1])
+    colormap_type = Int(bytes[2])
+    image_type = Int(bytes[3])
+    colormap_length = Int(bytes[6]) | (Int(bytes[7]) << 8)
+    colormap_size = Int(bytes[8])
+    width = Int(bytes[13]) | (Int(bytes[14]) << 8)
+    height = Int(bytes[15]) | (Int(bytes[16]) << 8)
+    pixel_size = Int(bytes[17])
+    flags = Int(bytes[18])
+    # tgaCheckHeader (TGALoader.js:41-100)
+    image_type == 0 && _decoder_error("TGA file has no image data (image type 0)")
+    image_type in _TGA_TYPES || _decoder_error("TGA image type $image_type is not supported")
+    use_pal = image_type in (1, 9)
+    use_rle = image_type >= 9
+    use_grey = image_type in (3, 11)
+    if use_pal
+        (colormap_length <= 256 && colormap_size == 24 && colormap_type == 1) ||
+            _decoder_error("TGA colour-mapped image needs a colour map of at most 256 24-bit entries")
+        pixel_size == 8 || _decoder_error("TGA colour-mapped image must have 8-bit indices, got $pixel_size")
+    else
+        colormap_type == 0 || _decoder_error("TGA true-colour and greyscale images cannot have a colour map")
+    end
+    (width > 0 && height > 0) || _decoder_error("TGA image size $(width)x$(height) is invalid")
+    pixel_size in (8, 16, 24, 32) || _decoder_error("TGA pixel size $pixel_size is not supported")
+    use_grey && !(pixel_size in (8, 16)) &&
+        _decoder_error("TGA greyscale images must have 8 or 16-bit pixels, got $pixel_size")
+    # An 8-bit pixel is a palette index or a grey level; TGALoader.js reads it
+    # through the colour map, which true-colour images do not have.
+    !use_grey && !use_pal && pixel_size == 8 &&
+        _decoder_error("TGA true-colour images must have 16, 24 or 32-bit pixels, got 8")
+    offset = 18 + id_length
+    offset <= n || _decoder_error("TGA file is truncated in its image ID")
+    palette = UInt8[]
+    if use_pal
+        stop = offset + 3 * colormap_length
+        stop <= n || _decoder_error("TGA colour map is truncated")
+        palette = bytes[(offset + 1):stop]
+        offset = stop
+    end
+    psize = pixel_size >> 3
+    total = width * height * psize            # at most 65535^2 * 4 bytes
+    pixels = if use_rle
+        # A run-length packet of 1 + psize bytes or more expands to at most
+        # 128 pixels, which bounds the image a file of this size can hold.
+        width * height <= 128 * (n - offset) ||
+            _decoder_error("TGA run-length data is truncated: $(width)x$(height) pixels need more than $(n - offset) bytes")
+        _tga_unrle(bytes, offset, total, psize)
+    else
+        offset + total <= n || _decoder_error("TGA pixel data is truncated")
+        @view bytes[(offset + 1):(offset + total)]
+    end
+    return _tga_rgba(pixels, width, height, pixel_size, use_grey, use_pal, palette,
+                     (flags & 0x30) >> 4)
+end
+
+# TGALoader.js tgaParse: packets with the high bit set repeat one pixel
+# (count = low 7 bits + 1), others copy that many pixels. A packet that would
+# run past the image or the file is an error (three.js has no check).
+function _tga_unrle(bytes::AbstractVector{UInt8}, offset::Int, total::Int, psize::Int)
+    n = length(bytes)
+    out = Vector{UInt8}(undef, total)
+    shift = 0
+    p = offset + 1
+    @inbounds while shift < total
+        p <= n || _decoder_error("TGA run-length data is truncated")
+        c = Int(bytes[p]); p += 1
+        count = (c & 0x7f) + 1
+        shift + count * psize <= total || _decoder_error("TGA run-length packet runs past the image")
+        if c & 0x80 != 0
+            p + psize - 1 <= n || _decoder_error("TGA run-length data is truncated")
+            for k in 0:(count - 1), b in 1:psize
+                out[shift + k * psize + b] = bytes[p + b - 1]
+            end
+            p += psize
+        else
+            len = count * psize
+            p + len - 1 <= n || _decoder_error("TGA run-length data is truncated")
+            copyto!(out, shift + 1, bytes, p, len)
+            p += len
+        end
+        shift += count * psize
+    end
+    return out
+end
+
+# getTgaRGBA (TGALoader.js:328-427): pixels in file order are placed by the
+# origin bits (0 bottom-left, 1 bottom-right, 2 top-left, 3 top-right); row 1
+# of the result is the top of the image. Values are the RGBA bytes / 255.
+function _tga_rgba(pixels::AbstractVector{UInt8}, width::Int, height::Int, pixel_size::Int,
+                   use_grey::Bool, use_pal::Bool, palette::Vector{UInt8}, origin::Int)
+    img = Array{Float64}(undef, height, width, 4)
+    top = origin >= 2
+    right = origin == 1 || origin == 3
+    psize = pixel_size >> 3
+    i = 0
+    @inbounds for fy in 0:(height - 1), fx in 0:(width - 1)
+        y = top ? fy + 1 : height - fy
+        x = right ? width - fx : fx + 1
+        q = i * psize + 1
+        i += 1
+        if use_grey
+            g = pixels[q]
+            r = gr = b = g
+            a = pixel_size == 16 ? pixels[q + 1] : 0xff
+        elseif use_pal
+            k = 3 * Int(pixels[q])
+            k + 3 <= length(palette) || _decoder_error("TGA colour index $(pixels[q]) is outside the colour map")
+            # tgaGetImageData8bits: palette entries are stored B, G, R.
+            r, gr, b, a = palette[k + 3], palette[k + 2], palette[k + 1], 0xff
+        elseif pixel_size == 16
+            # tgaGetImageData16bits: A1R5G5B5 with 5-bit channels shifted to
+            # the top of the byte, and alpha 0 when bit 15 is set.
+            c = UInt16(pixels[q]) | (UInt16(pixels[q + 1]) << 8)
+            r = UInt8((c & 0x7c00) >> 7)
+            gr = UInt8((c & 0x03e0) >> 2)
+            b = UInt8((c & 0x001f) << 3)
+            a = (c & 0x8000) != 0 ? 0x00 : 0xff
+        else
+            b, gr, r = pixels[q], pixels[q + 1], pixels[q + 2]
+            a = pixel_size == 32 ? pixels[q + 3] : 0xff
+        end
+        img[y, x, 1] = r / 255
+        img[y, x, 2] = gr / 255
+        img[y, x, 3] = b / 255
+        img[y, x, 4] = a / 255
+    end
+    return img
+end
+
+"""
+    load_tga(path) -> Array{Float64,3}
+
+Decode a Truevision Targa (`.tga`) image into an H×W×4 RGBA array with values
+in [0, 1] and row 1 at the top of the image, as three.js `TGALoader` does:
+colour-mapped (24-bit palettes of up to 256 entries), true-colour (16, 24 and
+32-bit) and greyscale (8-bit, or 16-bit grey + alpha) images, raw or
+run-length encoded, in any of the four origins. 16-bit colour pixels follow
+`TGALoader`: each 5-bit channel `c` becomes `8c / 255`, and the pixel is
+transparent when its top bit is set. Malformed files raise an error.
+"""
+load_tga(path::AbstractString) = _decode_tga(read(path))
+
+"""
+    TGALoader(path; kwargs...) -> Texture
+
+Load a `.tga` file with `load_tga` into a [`Texture`](@ref); keywords
+are passed to `Texture`. three.js `TGALoader` returns its texture with
+`flipY = true`, which is Diff3D's row order, so UVs sample the same texels.
+"""
+TGALoader(path::AbstractString; kwargs...) = Texture(load_tga(path); kwargs...)
+
+# ========================== PCD (Point Cloud Library) ==========================
+# three.js PCDLoader (examples/jsm/loaders/PCDLoader.js): ascii, binary and
+# binary_compressed (LZF) data with x/y/z, rgb, normal_x/y/z, intensity and
+# label fields, returned as a point cloud.
+
+# LZF decompression (PCDLoader.js decompressLZF, liblzf lzf_d.c): a control
+# byte below 32 copies ctrl + 1 literal bytes; otherwise it is a back
+# reference of (ctrl >> 5) + 2 bytes (7 extends the length by the next byte)
+# at distance ((ctrl & 0x1f) << 8) + next byte + 1. The output must be exactly
+# `out_len` bytes.
+function _lzf_decompress(data::AbstractVector{UInt8}, out_len::Int)
+    out = Vector{UInt8}(undef, out_len)
+    n = length(data)
+    ip = 1
+    op = 0
+    @inbounds while ip <= n
+        ctrl = Int(data[ip]); ip += 1
+        if ctrl < 32
+            len = ctrl + 1
+            op + len <= out_len || _decoder_error("PCD LZF data decompresses past its declared size")
+            ip + len - 1 <= n || _decoder_error("PCD LZF literal run is truncated")
+            copyto!(out, op + 1, data, ip, len)
+            ip += len
+            op += len
+        else
+            len = ctrl >> 5
+            ip <= n || _decoder_error("PCD LZF back reference is truncated")
+            if len == 7
+                len += Int(data[ip]); ip += 1
+                ip <= n || _decoder_error("PCD LZF back reference is truncated")
+            end
+            ref = op - ((ctrl & 0x1f) << 8) - Int(data[ip]) - 1
+            ip += 1
+            op + len + 2 <= out_len || _decoder_error("PCD LZF data decompresses past its declared size")
+            ref >= 0 || _decoder_error("PCD LZF back reference points before the start of the data")
+            # Overlapping copies repeat bytes, so copy one byte at a time.
+            for k in 1:(len + 2)
+                out[op + k] = out[ref + k]
+            end
+            op += len + 2
+        end
+    end
+    op == out_len || _decoder_error("PCD LZF data decompresses to $op bytes, expected $out_len")
+    return out
+end
+
+const _PCD_FIELD_NAMES = ("x", "y", "z", "rgb", "normal_x", "normal_y", "normal_z",
+                          "intensity", "label")
+
+# Value of one field element at 0-based byte `off` of `buf` (little-endian,
+# PCDLoader.js _getDataView with littleEndian = true).
+@inline function _pcd_value(buf::AbstractVector{UInt8}, off::Int, type::Char, size::Int)
+    if type == 'F'
+        return size == 8 ? reinterpret(Float64, _rd_le64(buf, off + 1) % UInt64) :
+                           Float64(_rd_f32(buf, off + 1))
+    end
+    u = size == 1 ? UInt32(buf[off + 1]) : size == 2 ? UInt32(_rd_le16(buf, off + 1)) :
+        UInt32(_rd_le32(buf, off + 1))
+    type == 'U' && return Float64(u)
+    return Float64(size == 1 ? reinterpret(Int8, u % UInt8) :
+                   size == 2 ? reinterpret(Int16, u % UInt16) : reinterpret(Int32, u))
+end
+
+function _pcd_header(bytes::AbstractVector{UInt8})
+    n = length(bytes)
+    fields = String[]; sizes = Int[]; types = Char[]; counts = Int[]
+    width = height = points = nothing
+    data_kind = nothing
+    pos = 1
+    while pos <= n && data_kind === nothing
+        stop = something(findnext(==(UInt8('\n')), bytes, pos), n + 1)
+        line = strip(String(bytes[pos:(stop - 1)]))
+        pos = stop + 1
+        isvalid(line) || _decoder_error("PCD header line $(repr(line)) is not valid UTF-8 text")
+        (isempty(line) || startswith(line, "#")) && continue
+        parts = split(line)
+        key = uppercase(parts[1])
+        values = parts[2:end]
+        function int(s, what)
+            v = tryparse(Int, s)
+            v === nothing && _decoder_error("PCD $what $(repr(s)) is not an integer")
+            return v
+        end
+        if key == "FIELDS"
+            fields = String.(values)
+        elseif key == "SIZE"
+            sizes = [int(s, "SIZE") for s in values]
+        elseif key == "TYPE"
+            all(s -> s in ("F", "I", "U"), values) ||
+                _decoder_error("PCD TYPE entries must be F, I or U, got $(join(values, ' '))")
+            types = [only(s) for s in values]
+        elseif key == "COUNT"
+            counts = [int(s, "COUNT") for s in values]
+        elseif key in ("WIDTH", "HEIGHT", "POINTS")
+            length(values) == 1 || _decoder_error("PCD $key line must hold one integer")
+            v = int(values[1], key)
+            key == "WIDTH" ? (width = v) : key == "HEIGHT" ? (height = v) : (points = v)
+        elseif key == "DATA"
+            length(values) == 1 || _decoder_error("PCD DATA line must name one data kind")
+            data_kind = lowercase(values[1])
+        end
+    end
+    data_kind === nothing && _decoder_error("PCD header has no DATA line")
+    data_kind in ("ascii", "binary", "binary_compressed") ||
+        _decoder_error("PCD DATA $(repr(data_kind)) is not supported; expected ascii, binary or binary_compressed")
+    nf = length(fields)
+    nf > 0 || _decoder_error("PCD header has no FIELDS")
+    isempty(counts) && (counts = ones(Int, nf))
+    (length(types) == nf && length(counts) == nf && (data_kind == "ascii" ? length(sizes) in (0, nf) :
+                                                     length(sizes) == nf)) ||
+        _decoder_error("PCD FIELDS, SIZE, TYPE and COUNT must have one entry per field")
+    isempty(sizes) && (sizes = fill(4, nf))
+    for k in 1:nf
+        valid = types[k] == 'F' ? sizes[k] in (4, 8) : sizes[k] in (1, 2, 4)
+        valid || _decoder_error("PCD field $(fields[k]) has unsupported TYPE $(types[k]) SIZE $(sizes[k])")
+        # Every element takes at least a byte, so a larger COUNT cannot fit.
+        1 <= counts[k] <= n || _decoder_error("PCD field $(fields[k]) COUNT $(counts[k]) must be positive and fit in the file")
+    end
+    if points === nothing
+        (width === nothing || height === nothing) &&
+            _decoder_error("PCD header needs POINTS or WIDTH and HEIGHT")
+        points = try
+            Base.checked_mul(width, height)
+        catch err
+            err isa OverflowError || rethrow()
+            _decoder_error("PCD WIDTH * HEIGHT overflows")
+        end
+    end
+    points >= 0 || _decoder_error("PCD POINTS must be non-negative")
+    for f in ("x", "y", "z")
+        f in fields || _decoder_error("PCD file has no $f field")
+    end
+    return (; fields, sizes, types, counts, points, data_kind, data_start=pos)
+end
+
+function _decode_pcd(bytes::AbstractVector{UInt8})
+    h = _pcd_header(bytes)
+    nf = length(h.fields)
+    fidx = Dict{String,Int}()
+    for (k, f) in enumerate(h.fields)
+        f in _PCD_FIELD_NAMES && !haskey(fidx, f) && (fidx[f] = k)
+    end
+    ascii = h.data_kind == "ascii"
+    # A packed rgb value is 4 bytes (B, G, R, unused), which binary data reads directly.
+    !ascii && haskey(fidx, "rgb") && h.sizes[fidx["rgb"]] != 4 &&
+        _decoder_error("PCD rgb field must have SIZE 4, got $(h.sizes[fidx["rgb"]])")
+    # Token index (ascii) or byte offset (binary) of each field's first element.
+    offsets = zeros(Int, nf)
+    for k in 2:nf
+        offsets[k] = offsets[k - 1] + (ascii ? 1 : h.sizes[k - 1]) * h.counts[k - 1]
+    end
+    row = offsets[end] + (ascii ? 1 : h.sizes[end]) * h.counts[end]
+    if ascii
+        rows = Vector{Vector{SubString{String}}}()
+        for line in eachsplit(String(bytes[h.data_start:end]), '\n')
+            tokens = split(line)
+            isempty(tokens) && continue
+            length(tokens) >= row ||
+                _decoder_error("PCD ascii point $(length(rows) + 1) has $(length(tokens)) values, expected $row")
+            push!(rows, tokens)
+        end
+        function ascii_value(i, k)
+            s = rows[i][offsets[k] + 1]
+            v = tryparse(Float64, s)
+            v === nothing && _decoder_error("PCD ascii value $(repr(s)) is not a number")
+            return v
+        end
+        function ascii_rgb(i, k)
+            v = ascii_value(i, k)
+            # PCDLoader.js:410-421: a float rgb holds the packed integer's bits.
+            if h.types[k] == 'F'
+                packed = Int64(reinterpret(Int32, Float32(v)))
+            else
+                (isinteger(v) && abs(v) <= 2.0^32) || _decoder_error("PCD ascii rgb value $v is not a packed integer")
+                packed = Int64(v)
+            end
+            return ((packed >> 16) & 0xff, (packed >> 8) & 0xff, packed & 0xff)
+        end
+        return _pcd_collect(length(rows), fidx, ascii_value, ascii_rgb)
+    end
+    N = h.points
+    avail = length(bytes) - h.data_start + 1
+    data = if h.data_kind == "binary"
+        N <= avail ÷ row ||
+            _decoder_error("PCD binary data is truncated: $N points of $row bytes need more than the $avail bytes present")
+        @view bytes[h.data_start:(h.data_start + N * row - 1)]
+    else
+        avail >= 8 || _decoder_error("PCD binary_compressed sizes are truncated")
+        csize = _rd_le32(bytes, h.data_start)
+        dsize = _rd_le32(bytes, h.data_start + 4)
+        first = h.data_start + 8
+        csize <= avail - 8 || _decoder_error("PCD binary_compressed data is truncated")
+        (N <= dsize ÷ row && dsize == N * row) ||
+            _decoder_error("PCD binary_compressed size $dsize does not match $N points of $row bytes")
+        # An LZF back reference expands 3 input bytes to at most 264 output bytes.
+        dsize <= 88 * csize ||
+            _decoder_error("PCD binary_compressed size $dsize exceeds what $csize LZF bytes can hold")
+        _lzf_decompress(@view(bytes[first:(first + csize - 1)]), dsize)
+    end
+    # binary: array of structures; binary_compressed: one array per field
+    # (PCDLoader.js:459-462).
+    soa = h.data_kind == "binary_compressed"
+    at(i, k) = soa ? N * offsets[k] + h.sizes[k] * h.counts[k] * (i - 1) :
+                     (i - 1) * row + offsets[k]
+    binary_value(i, k) = _pcd_value(data, at(i, k), h.types[k], h.sizes[k])
+    # PCDLoader.js:551-553: the packed bytes are B, G, R.
+    binary_rgb(i, k) = (Int(data[at(i, k) + 3]), Int(data[at(i, k) + 2]), Int(data[at(i, k) + 1]))
+    return _pcd_collect(N, fidx, binary_value, binary_rgb)
+end
+
+function _pcd_collect(N::Int, fidx::Dict{String,Int}, value::F, rgb_bytes::G) where {F,G}
+    has(f) = haskey(fidx, f)
+    has_normal = has("normal_x") && has("normal_y") && has("normal_z")
+    positions = Vector{Float64}(undef, 3N)
+    normals = has_normal ? Vector{Float64}(undef, 3N) : Float64[]
+    colors = has("rgb") ? Vector{Float64}(undef, 3N) : Float64[]
+    intensity = has("intensity") ? Vector{Float64}(undef, N) : Float64[]
+    label = has("label") ? Vector{Int}(undef, N) : Int[]
+    kx, ky, kz = fidx["x"], fidx["y"], fidx["z"]
+    for i in 1:N
+        positions[3i - 2] = value(i, kx)
+        positions[3i - 1] = value(i, ky)
+        positions[3i] = value(i, kz)
+        if has_normal
+            normals[3i - 2] = value(i, fidx["normal_x"])
+            normals[3i - 1] = value(i, fidx["normal_y"])
+            normals[3i] = value(i, fidx["normal_z"])
+        end
+        if has("rgb")
+            # Color.setRGB(r, g, b, SRGBColorSpace) stores linear values.
+            r, g, b = rgb_bytes(i, fidx["rgb"])
+            colors[3i - 2] = _srgb_texel_to_linear(r / 255)
+            colors[3i - 1] = _srgb_texel_to_linear(g / 255)
+            colors[3i] = _srgb_texel_to_linear(b / 255)
+        end
+        has("intensity") && (intensity[i] = value(i, fidx["intensity"]))
+        if has("label")
+            v = value(i, fidx["label"])
+            (isinteger(v) && abs(v) <= 2.0^32) || _decoder_error("PCD label $v is not an integer")
+            label[i] = Int(v)
+        end
+    end
+    return (; positions, normals, colors, intensity, label)
+end
+
+"""
+    load_pcd(path) -> PointsObject
+
+Load a Point Cloud Library `.pcd` file as three.js `PCDLoader` does: `ascii`,
+`binary` and `binary_compressed` (LZF) data, little-endian. The `x`, `y`, `z`
+fields give the positions; `normal_x/y/z` the normals; a packed `rgb` field
+the geometry attribute `:color` (decoded from sRGB to linear, as
+`Color.setRGB(r, g, b, SRGBColorSpace)` does); `intensity` and `label` the
+attributes `:intensity` and `:label`. Other fields are skipped. The material is
+`PointsMaterial(size=0.005)` as in `PCDLoader`; Diff3D point materials do not
+draw vertex colours, so `:color` is kept as data.
+
+Differences from `PCDLoader`: values keep full precision (three.js stores
+32-bit floats); ascii rows may be separated by any whitespace and honour
+`COUNT` when locating fields (three.js assumes one value per field); a file
+without `x`, `y` and `z` fields, short rows, truncated data, LZF data that
+does not decompress to the declared size and invalid `TYPE`/`SIZE` pairs
+raise an error.
+"""
+function load_pcd(path::AbstractString)
+    d = _decode_pcd(read(path))
+    n = length(d.positions) ÷ 3
+    geo = BufferGeometry(d.positions, d.normals, Float64[], Int[], n, 0)
+    isempty(d.colors) || set_attribute!(geo, :color, d.colors, 3)
+    isempty(d.intensity) || set_attribute!(geo, :intensity, d.intensity, 1)
+    isempty(d.label) || set_attribute!(geo, :label, d.label, 1)
+    return PointsObject(geo, PointsMaterial(size=0.005); name="")
+end
+
+# ========================== DDS (DirectDraw Surface) ==========================
+# three.js DDSLoader (examples/jsm/loaders/DDSLoader.js) for its uncompressed
+# layouts: 32-bit B8G8R8A8 and 24-bit B8G8R8. Block-compressed payloads
+# (DXT1/3/5, ETC1, BC6H) are GPU formats three.js uploads without decoding;
+# Diff3D samples textures on the CPU and rejects them.
+
+const _DDS_MAGIC = 0x20534444                       # "DDS "
+
+function _dds_fourcc_string(v::Int)
+    chars = [Char(UInt8((v >> (8k)) & 0xff)) for k in 0:3]
+    return all(c -> isprint(c), chars) ? repr(String(chars)) : "0x" * string(v; base=16, pad=8)
+end
+
+function _decode_dds(bytes::AbstractVector{UInt8})
+    n = length(bytes)
+    n >= 128 || _decoder_error("DDS file is truncated: the header needs 128 bytes, got $n")
+    _rd_le32(bytes, 1) == _DDS_MAGIC || _decoder_error("not a DDS file (bad magic number)")
+    header_size = _rd_le32(bytes, 5)
+    header_size == 124 || _decoder_error("DDS header size $header_size is not 124")
+    height = _rd_le32(bytes, 13)
+    width = _rd_le32(bytes, 17)
+    pf_flags = _rd_le32(bytes, 81)
+    fourcc = _rd_le32(bytes, 85)
+    bit_count = _rd_le32(bytes, 89)
+    rmask, gmask, bmask, amask = (_rd_le32(bytes, 93), _rd_le32(bytes, 97),
+                                  _rd_le32(bytes, 101), _rd_le32(bytes, 105))
+    caps2 = _rd_le32(bytes, 113)
+    if (pf_flags & 0x4) != 0 && fourcc != 0          # DDPF_FOURCC
+        name = _dds_fourcc_string(fourcc)
+        fourcc == 0x30315844 &&
+            _decoder_error("DDS DX10 extended headers are not supported; only uncompressed B8G8R8A8 and B8G8R8 DDS images are supported")
+        # DXT1, DXT3, DXT5, ETC1 (DDSLoader.js:166-169)
+        fourcc in (0x31545844, 0x33545844, 0x35545844, 0x31435445) &&
+            _decoder_error("DDS $name data is block-compressed; only uncompressed B8G8R8A8 and B8G8R8 DDS images are supported")
+        _decoder_error("DDS FourCC $name is not supported; only uncompressed B8G8R8A8 and B8G8R8 DDS images are supported")
+    end
+    (caps2 & 0x200) == 0 || _decoder_error("DDS cube maps are not supported")
+    (caps2 & 0x200000) == 0 || _decoder_error("DDS volume textures are not supported")
+    # DDSLoader.js:246-262 tests the masks with `&`; the byte order it then
+    # reads (B, G, R[, A]) holds only for these exact masks.
+    channels = if bit_count == 32 && (rmask, gmask, bmask, amask) ==
+                  (0x00ff0000, 0x0000ff00, 0x000000ff, 0xff000000)
+        4
+    elseif bit_count == 24 && (rmask, gmask, bmask) == (0x00ff0000, 0x0000ff00, 0x000000ff)
+        3
+    else
+        _decoder_error("DDS pixel format ($bit_count-bit, masks R=0x$(string(rmask; base=16)) G=0x$(string(gmask; base=16)) B=0x$(string(bmask; base=16)) A=0x$(string(amask; base=16))) is not supported; only B8G8R8A8 and B8G8R8 are")
+    end
+    (width > 0 && height > 0) || _decoder_error("DDS image size $(width)x$(height) is invalid")
+    offset = 128                                      # header_size + magic
+    avail = n - offset
+    (width <= avail ÷ channels && height <= avail ÷ (width * channels)) ||
+        _decoder_error("DDS pixel data is truncated: $(width)x$(height)x$channels bytes do not fit in the file")
+    img = Array{Float64}(undef, height, width, 4)
+    @inbounds for y in 1:height, x in 1:width
+        p = offset + ((y - 1) * width + (x - 1)) * channels
+        img[y, x, 1] = bytes[p + 3] / 255
+        img[y, x, 2] = bytes[p + 2] / 255
+        img[y, x, 3] = bytes[p + 1] / 255
+        img[y, x, 4] = channels == 4 ? bytes[p + 4] / 255 : 1.0
+    end
+    return img
+end
+
+"""
+    load_dds(path) -> Array{Float64,3}
+
+Decode the base level of an uncompressed DirectDraw Surface (`.dds`) image —
+32-bit B8G8R8A8 or 24-bit B8G8R8, the uncompressed layouts three.js
+`DDSLoader` reads — into an H×W×4 RGBA array with values in [0, 1], row 1
+being the first row of the file (the top of the image). Mipmap levels after
+the first are ignored. Block-compressed (DXT/BC/ETC1) data, other pixel
+layouts, cube maps and volume textures raise an error: three.js hands
+compressed blocks to the GPU, while Diff3D samples textures on the CPU.
+"""
+load_dds(path::AbstractString) = _decode_dds(read(path))
+
+"""
+    DDSLoader(path; kwargs...) -> Texture
+
+Load an uncompressed `.dds` file (see `load_dds`) as a
+[`Texture`](@ref); keywords are passed to `Texture`. three.js uploads DDS
+data as a compressed texture without `flipY`, so UV `v = 0` samples the first
+row of the file; the rows are reversed here so Diff3D samples the same texels.
+"""
+DDSLoader(path::AbstractString; kwargs...) =
+    Texture(reverse(load_dds(path); dims=1); kwargs...)
+
 # ========================== OpenEXR (scanline) ==========================
-# Supports scanline images with NONE/ZIP/ZIPS compression and HALF/FLOAT/UINT
-# pixels. Tiled, deep, multi-part, and PIZ/PXR24/B44/DWA payloads fail clearly.
+# Supports single-part scanline and tiled (level 0 of ONE_LEVEL/MIPMAP)
+# images with NONE/RLE/ZIP/ZIPS/PIZ/PXR24/B44/B44A compression and
+# HALF/FLOAT/UINT pixels. Deep, multi-part, DWAA/DWAB, RIPMAP and
+# random-order scanline files fail clearly; three.js EXRLoader reads deep,
+# multi-part and DWAA/DWAB files.
 
 const _EXR_MAGIC = 20000630                      # 0x01312f76
 
@@ -2865,6 +3448,7 @@ function load_mtl(path::String)
     st = _MTLState("")
     io = open(path, "r")
     try
+        _skip_utf8_bom!(io)
         for raw in eachline(io)
             line = strip(raw)
             (isempty(line) || startswith(line, "#")) && continue
@@ -2968,6 +3552,10 @@ vertices but no faces, lines or points loads as one unnamed point cloud.
 Unlike `OBJLoader`, which draws the vertices of a polyline `l a b c` pairwise,
 a polyline becomes the segments `a-b` and `b-c`, and the faces, lines and points
 of one object become separate children instead of one object of the last kind.
+An object whose faces use several materials becomes one mesh per material,
+where `OBJLoader` builds one mesh with geometry groups and a material array:
+Diff3D's renderers and exporters draw a mesh with a single material (a
+material vector is rejected), so the split is what keeps each material.
 Smoothing groups (`s`) are ignored.
 """
 function load_obj_scene(path::String)
@@ -10309,6 +10897,15 @@ function _gltf_checked_index(raw, count::Int, label::String)
     return idx
 end
 
+# A property the glTF 2.0 JSON schema lists as `required`, or an ArgumentError
+# naming the object and the property (instead of a bare KeyError).
+function _gltf_required(obj, key::String, what::AbstractString)
+    obj isa AbstractDict || throw(ArgumentError("glTF $what must be a JSON object"))
+    haskey(obj, key) ||
+        throw(ArgumentError("glTF $what is missing required property \"$key\""))
+    return obj[key]
+end
+
 function _gltf_checked_component_type(raw, label::String)
     return _gltf_checked_integer(raw, "$label componentType")
 end
@@ -10318,16 +10915,20 @@ function _gltf_accessor(gltf, buffers, ai::Int)
     accessors = gltf["accessors"]
     0 <= ai < length(accessors) || error("glTF accessor index $ai out of bounds")
     acc = accessors[ai + 1]
-    count = _gltf_checked_nonnegative_integer(acc["count"], "accessor count")
-    typ = String(acc["type"])
+    what = "accessors[$ai]"
+    count = _gltf_checked_nonnegative_integer(_gltf_required(acc, "count", what),
+                                              "accessor count")
+    typ = String(_gltf_required(acc, "type", what))
     haskey(_GLTF_COMP_SIZE, typ) || error("glTF accessor type $typ")
     ncomp = _GLTF_COMP_SIZE[typ]
-    ctype = _gltf_checked_component_type(acc["componentType"], "accessor")
+    ctype = _gltf_checked_component_type(_gltf_required(acc, "componentType", what),
+                                         "accessor")
     normalized = _gltf_checked_bool(get(acc, "normalized", false), "accessor normalized")
     dense_payload = haskey(acc, "bufferView")
     compbytes = _gltf_component_bytes(ctype)
     out_len = _checked_mul_int(count, ncomp, "glTF accessor output length")
     _checked_mul_int(out_len, sizeof(Float64), "glTF accessor output byte size")
+    _gltf_check_accessor_allocation(count, ncomp, compbytes, what)
     element = _gltf_accessor_element_layout(typ, ncomp, compbytes)
 
     dense_layout = if dense_payload
@@ -10342,15 +10943,18 @@ function _gltf_accessor(gltf, buffers, ai::Int)
     if haskey(acc, "sparse")
         sparse = acc["sparse"]
         sparse isa AbstractDict || error("glTF accessor sparse must be an object")
-        scount = _gltf_checked_nonnegative_integer(sparse["count"], "sparse accessor count")
+        scount = _gltf_checked_nonnegative_integer(
+            _gltf_required(sparse, "count", "$what.sparse"), "sparse accessor count")
         scount <= count || error("glTF sparse accessor count exceeds accessor count")
-        indices_def = sparse["indices"]
-        values_def = sparse["values"]
+        indices_def = _gltf_required(sparse, "indices", "$what.sparse")
+        values_def = _gltf_required(sparse, "values", "$what.sparse")
         indices_def isa AbstractDict ||
             error("glTF sparse accessor indices must be an object")
         values_def isa AbstractDict ||
             error("glTF sparse accessor values must be an object")
-        ictype = _gltf_checked_component_type(indices_def["componentType"], "sparse accessor indices")
+        ictype = _gltf_checked_component_type(
+            _gltf_required(indices_def, "componentType", "$what.sparse.indices"),
+            "sparse accessor indices")
         ictype in (5121, 5123, 5125) ||
             error("glTF sparse accessor indices componentType must be UNSIGNED_BYTE, UNSIGNED_SHORT, or UNSIGNED_INT")
         icompbytes = _gltf_component_bytes(ictype)
@@ -10380,6 +10984,28 @@ function _gltf_accessor(gltf, buffers, ai::Int)
                                      ibuf, ioffset, vbuf, voffset)
     end
     return (out, ncomp, count)
+end
+
+# three.js GLTFLoader.js loadAccessor reads every accessor, including one
+# without a bufferView (zeros, usually a sparse base), into a single typed
+# array of count * itemSize components of the accessor's component type, and
+# an accessor with a bufferView lies inside one ArrayBuffer at least that
+# large. No JavaScript engine three.js runs on can create a buffer of 2^35
+# bytes (V8's sandboxed buffer limit is just under 32 GiB: Node 26 allocates a
+# 24 GiB Float32Array and aborts at 2^35 bytes; SpiderMonkey and
+# JavaScriptCore allow less), so an accessor that large cannot be part of an
+# asset three.js loads. Refusing it here, before anything is allocated, keeps a
+# tiny file from declaring a bufferView-less accessor that would make Diff3D
+# allocate without bound.
+const _GLTF_MAX_ACCESSOR_BYTES = Int64(2)^35
+
+function _gltf_check_accessor_allocation(count::Int, ncomp::Int, component_bytes::Int,
+                                         what::AbstractString)
+    count <= (_GLTF_MAX_ACCESSOR_BYTES - 1) ÷ (ncomp * component_bytes) ||
+        throw(ArgumentError("glTF $what declares $count elements of $ncomp x " *
+                            "$component_bytes bytes, which is beyond the largest typed " *
+                            "array (2^35 bytes) a glTF loader can allocate"))
+    return nothing
 end
 
 function _gltf_apply_sparse_accessor!(out::Vector{Float64}, ncomp::Int, count::Int,
@@ -10576,17 +11202,18 @@ function _gltf_sparse_buffer_layout(gltf, buffers, sparse_def::AbstractDict,
                                     label::String; stride::Int=element_size,
                                     alignment::Int=1)::Tuple{AbstractVector{UInt8},Int}
     buffer_views = get(gltf, "bufferViews", Any[])::AbstractVector
-    bv = buffer_views[_gltf_checked_index(sparse_def["bufferView"],
-                                          length(buffer_views),
-                                          "$label bufferView") + 1]::AbstractDict
+    bv_index = _gltf_checked_index(_gltf_required(sparse_def, "bufferView", label),
+                                   length(buffer_views), "$label bufferView")
+    bv = buffer_views[bv_index + 1]::AbstractDict
     haskey(bv, "byteStride") &&
         error("glTF $label bufferView must not define byteStride")
-    buf = buffers[_gltf_checked_index(bv["buffer"], length(buffers),
-                                      "$label buffer") + 1]::AbstractVector{UInt8}
+    buf = buffers[_gltf_checked_index(_gltf_required(bv, "buffer", "bufferViews[$bv_index]"),
+                                      length(buffers), "$label buffer") + 1]::AbstractVector{UInt8}
     view_offset = _gltf_checked_nonnegative_integer(get(bv, "byteOffset", 0.0),
                                                     "$label bufferView byteOffset")
-    view_len = _gltf_checked_nonnegative_integer(bv["byteLength"],
-                                                 "$label bufferView byteLength")
+    view_len = _gltf_checked_nonnegative_integer(
+        _gltf_required(bv, "byteLength", "bufferViews[$bv_index]"),
+        "$label bufferView byteLength")
     view_end = _gltf_checked_byte_end(view_offset, view_len, "$label bufferView")
     view_end <= length(buf) ||
         error("glTF $label bufferView byteLength $view_len at byteOffset " *
@@ -10609,14 +11236,15 @@ function _gltf_accessor_buffer_layout(gltf, buffers, acc, ncomp::Int, ctype::Int
                                       element_stride::Int=element_size,
                                       alignment::Int=1)::Tuple{AbstractVector{UInt8},Int,Int}
     buffer_views = get(gltf, "bufferViews", Any[])::AbstractVector
-    bv = buffer_views[_gltf_checked_index(acc["bufferView"], length(buffer_views),
-                                          "$label bufferView") + 1]::AbstractDict
-    buf = buffers[_gltf_checked_index(bv["buffer"], length(buffers),
-                                      "bufferView buffer") + 1]::AbstractVector{UInt8}
+    bv_index = _gltf_checked_index(acc["bufferView"], length(buffer_views),
+                                   "$label bufferView")
+    bv = buffer_views[bv_index + 1]::AbstractDict
+    buf = buffers[_gltf_checked_index(_gltf_required(bv, "buffer", "bufferViews[$bv_index]"),
+                                      length(buffers), "bufferView buffer") + 1]::AbstractVector{UInt8}
     view_offset::Int = _gltf_checked_nonnegative_integer(get(bv, "byteOffset", 0.0),
                                                          "bufferView byteOffset")
-    view_len::Int = _gltf_checked_nonnegative_integer(bv["byteLength"],
-                                                     "bufferView byteLength")
+    view_len::Int = _gltf_checked_nonnegative_integer(
+        _gltf_required(bv, "byteLength", "bufferViews[$bv_index]"), "bufferView byteLength")
     view_end::Int = _gltf_checked_byte_end(view_offset, view_len, "$label bufferView")
     view_end <= length(buf) ||
         error("glTF $label bufferView byteLength $view_len at byteOffset $view_offset exceeds buffer length $(length(buf))")
@@ -10934,10 +11562,13 @@ function _gltf_buffer_view_bytes(gltf, buffers, buffer_view_index::Int, label::S
     0 <= buffer_view_index < length(buffer_views) ||
         error("$label index $buffer_view_index out of bounds")
     bv = buffer_views[buffer_view_index + 1]
-    buf = buffers[_gltf_checked_index(bv["buffer"], length(buffers), "bufferView buffer") + 1]
+    what = "bufferViews[$buffer_view_index]"
+    buf = buffers[_gltf_checked_index(_gltf_required(bv, "buffer", what), length(buffers),
+                                      "bufferView buffer") + 1]
     offset = _gltf_checked_nonnegative_integer(get(bv, "byteOffset", 0.0),
                                                "bufferView byteOffset")
-    len = _gltf_checked_nonnegative_integer(bv["byteLength"], "bufferView byteLength")
+    len = _gltf_checked_nonnegative_integer(_gltf_required(bv, "byteLength", what),
+                                            "bufferView byteLength")
     view_end = _gltf_checked_byte_end(offset, len, "image bufferView")
     view_end <= length(buf) ||
         error("$label byteLength $len at byteOffset $offset exceeds buffer length $(length(buf))")
@@ -10994,7 +11625,8 @@ function _gltf_texture(gltf, buffers, dir::String, texinfo; colorspace::Symbol=:
                        texture_cache=nothing)
     texinfo === nothing && return nothing
     textures = get(gltf, "textures", Any[])
-    ti = _gltf_checked_index(texinfo["index"], length(textures), "texture")
+    ti = _gltf_checked_index(_gltf_required(texinfo, "index", "textureInfo"),
+                             length(textures), "texture")
     texdef = textures[ti + 1]
     if !haskey(texdef, "source")
         basisu = get(get(texdef, "extensions", Dict{String,Any}()),
@@ -11486,9 +12118,10 @@ function _gltf_primitive_indices(gltf, buffers, accessor_index::Int, nverts::Int
     0 <= accessor_index < length(accessors) ||
         error("glTF primitive indices accessor index $accessor_index out of bounds")
     acc = accessors[accessor_index + 1]::AbstractDict
-    acc["type"] == "SCALAR" ||
+    what = "accessors[$accessor_index]"
+    _gltf_required(acc, "type", what) == "SCALAR" ||
         error("glTF primitive indices accessor must be SCALAR")
-    ctype::Int = _gltf_checked_component_type(acc["componentType"],
+    ctype::Int = _gltf_checked_component_type(_gltf_required(acc, "componentType", what),
                                               "primitive indices accessor")
     ctype in (5121, 5123, 5125) ||
         error("glTF primitive indices componentType must be UNSIGNED_BYTE, UNSIGNED_SHORT, or UNSIGNED_INT")
@@ -11496,9 +12129,10 @@ function _gltf_primitive_indices(gltf, buffers, accessor_index::Int, nverts::Int
                                     "primitive indices accessor normalized")
     !normalized ||
         error("glTF primitive indices accessor normalized must be false")
-    count::Int = _gltf_checked_nonnegative_integer(acc["count"],
+    count::Int = _gltf_checked_nonnegative_integer(_gltf_required(acc, "count", what),
                                                   "primitive indices accessor count")
     _checked_mul_int(count, sizeof(Int), "glTF primitive indices output byte size")
+    _gltf_check_accessor_allocation(count, 1, _gltf_component_bytes(ctype), what)
     dense_payload = haskey(acc, "bufferView")
     dense_layout = if dense_payload
         _gltf_accessor_buffer_layout(
@@ -11512,13 +12146,14 @@ function _gltf_primitive_indices(gltf, buffers, accessor_index::Int, nverts::Int
     sparse_layout = nothing
     if haskey(acc, "sparse")
         sparse = acc["sparse"]::AbstractDict
-        scount::Int = _gltf_checked_nonnegative_integer(sparse["count"],
-                                                       "sparse accessor count")
+        scount::Int = _gltf_checked_nonnegative_integer(
+            _gltf_required(sparse, "count", "$what.sparse"), "sparse accessor count")
         scount <= count || error("glTF sparse accessor count exceeds accessor count")
-        indices_def = sparse["indices"]::AbstractDict
-        values_def = sparse["values"]::AbstractDict
-        ictype::Int = _gltf_checked_component_type(indices_def["componentType"],
-                                                  "sparse accessor indices")
+        indices_def = _gltf_required(sparse, "indices", "$what.sparse")::AbstractDict
+        values_def = _gltf_required(sparse, "values", "$what.sparse")::AbstractDict
+        ictype::Int = _gltf_checked_component_type(
+            _gltf_required(indices_def, "componentType", "$what.sparse.indices"),
+            "sparse accessor indices")
         ictype in (5121, 5123, 5125) ||
             error("glTF sparse accessor indices componentType must be UNSIGNED_BYTE, UNSIGNED_SHORT, or UNSIGNED_INT")
         icompbytes::Int = _gltf_component_bytes(ictype)
@@ -11726,7 +12361,7 @@ function _gltf_instance_colors(gltf, buffers, node, count::Int)
     ext = get(get(node, "extensions", Dict{String,Any}()),
               "EXT_mesh_gpu_instancing", nothing)
     ext === nothing && return nothing
-    attrs = ext["attributes"]
+    attrs = _gltf_required(ext, "attributes", "EXT_mesh_gpu_instancing")
     haskey(attrs, "_COLOR_0") || return nothing
     accessor_index = _gltf_checked_accessor_index(
         gltf, attrs["_COLOR_0"], "EXT_mesh_gpu_instancing _COLOR_0")
@@ -11795,29 +12430,30 @@ end
 
 function _gltf_camera(gltf, camera_idx::Int, name::String)
     camdef = gltf["cameras"][camera_idx + 1]
-    typ = String(camdef["type"])
+    what = "cameras[$camera_idx]"
+    typ = String(_gltf_required(camdef, "type", what))
     cam = if typ == "perspective"
-        p = camdef["perspective"]
+        p = _gltf_required(camdef, "perspective", what)
         far = haskey(p, "zfar") ?
               _gltf_checked_finite_number(p["zfar"], "camera zfar") : Inf
-        PerspectiveCamera(fov=_gltf_checked_finite_number(p["yfov"],
+        PerspectiveCamera(fov=_gltf_checked_finite_number(_gltf_required(p, "yfov", "$what.perspective"),
                                                           "camera yfov"),
                           aspect=_gltf_checked_finite_number(
                               get(p, "aspectRatio", 1.0), "camera aspectRatio"),
-                          near=_gltf_checked_finite_number(p["znear"],
+                          near=_gltf_checked_finite_number(_gltf_required(p, "znear", "$what.perspective"),
                                                            "camera znear"),
                           far=far,
                           name=name)
     elseif typ == "orthographic"
-        o = camdef["orthographic"]
-        xmag = _gltf_checked_finite_number(o["xmag"], "camera xmag")
-        ymag = _gltf_checked_finite_number(o["ymag"], "camera ymag")
+        o = _gltf_required(camdef, "orthographic", what)
+        xmag = _gltf_checked_finite_number(_gltf_required(o, "xmag", "$what.orthographic"), "camera xmag")
+        ymag = _gltf_checked_finite_number(_gltf_required(o, "ymag", "$what.orthographic"), "camera ymag")
         # xmag/ymag are HALF extents (spec: P[0][0] = 1/xmag, P[1][1] = 1/ymag).
         OrthographicCamera(left=-xmag, right=xmag,
                            bottom=-ymag, top=ymag,
-                           near=_gltf_checked_finite_number(o["znear"],
+                           near=_gltf_checked_finite_number(_gltf_required(o, "znear", "$what.orthographic"),
                                                             "camera znear"),
-                           far=_gltf_checked_finite_number(o["zfar"],
+                           far=_gltf_checked_finite_number(_gltf_required(o, "zfar", "$what.orthographic"),
                                                            "camera zfar"),
                            name=name)
     else
@@ -11838,7 +12474,7 @@ end
 function _gltf_node_light(gltf, light_idx::Int, name::String)
     lights = _gltf_punctual_lights(gltf)
     ldef = lights[light_idx + 1]
-    typ = String(ldef["type"])
+    typ = String(_gltf_required(ldef, "type", "KHR_lights_punctual lights[$light_idx]"))
     color = _gltf_color3(get(ldef, "color", [1.0, 1.0, 1.0]), "light color")
     intensity = _gltf_checked_finite_number(get(ldef, "intensity", 1.0),
                                             "light intensity")
@@ -11977,7 +12613,8 @@ function _gltf_validate_attribute_format(gltf, accessor_index::Int,
                                          normalized_types::Tuple)
     accessor = gltf["accessors"][accessor_index + 1]
     component_type = _gltf_checked_component_type(
-        accessor["componentType"], "$name accessor")
+        _gltf_required(accessor, "componentType", "accessors[$accessor_index]"),
+        "$name accessor")
     normalized = _gltf_checked_bool(
         get(accessor, "normalized", false), "$name accessor normalized")
     valid = normalized ? component_type in normalized_types :
@@ -12015,7 +12652,8 @@ end
 # `load_gltf` (text/embedded buffers) and `load_glb` (binary container, where
 # the BIN chunk is supplied as buffer 0). `buffers` must already contain the raw
 # bytes for every buffer referenced by the document.
-function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String="")
+function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String="",
+                           custom_attributes::Bool=false)
     _gltf_check_required_extensions(gltf)
     scene = Scene()
     node_count = length(get(gltf, "nodes", Any[]))
@@ -12087,17 +12725,36 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
     end
 
     function build_primitive(prim, skin_idx=nothing, morph_weights=Float64[],
-                             morph_names=String[]; preserve_nontriangle_morphs::Bool=false)
+                             morph_names=String[]; preserve_nontriangle_morphs::Bool=false,
+                             what::String="mesh primitive")
         mode = _gltf_checked_integer(get(prim, "mode", 4), "primitive mode")
         0 <= mode <= 6 || error("unsupported glTF primitive mode $mode")
         skin_idx === nothing || mode in (4, 5, 6) ||
             error("glTF primitive mode $mode cannot be loaded as SkinnedMesh")
-        attrs = prim["attributes"]
+        attrs = _gltf_required(prim, "attributes", what)
+        # glTF 2.0 3.7.2.1: a primitive without POSITION has nothing to draw,
+        # and client implementations SHOULD skip it (the caller does).
+        haskey(attrs, "POSITION") || return nothing
         position_accessor = _gltf_checked_accessor_index(gltf, attrs["POSITION"],
                                                          "POSITION")
         _gltf_validate_attribute_format(
             gltf, position_accessor, "POSITION",
             _gltf_attribute_types(quantized, :position)...)
+        if !haskey(prim, "indices")
+            # The vertex count fixes a non-indexed primitive's topology, so a
+            # count the mode cannot use is rejected from the declaration,
+            # before any attribute (possibly a bufferView-less run of zeros)
+            # is materialised.
+            position_what = "accessors[$position_accessor]"
+            position_def = gltf["accessors"][position_accessor + 1]
+            declared = _gltf_checked_nonnegative_integer(
+                _gltf_required(position_def, "count", position_what), "accessor count")
+            _gltf_check_accessor_allocation(
+                declared, get(_GLTF_COMP_SIZE, get(position_def, "type", "SCALAR"), 1),
+                _gltf_component_bytes(_gltf_checked_component_type(
+                    position_def["componentType"], "POSITION accessor")), position_what)
+            _gltf_validate_primitive_cardinality(mode, declared, "vertex")
+        end
         pos, position_size, nverts = _gltf_accessor(
             gltf, buffers, position_accessor)
         position_size == 3 || error("glTF POSITION accessor must be VEC3")
@@ -12164,6 +12821,17 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
                 valid_sizes, expected_type)
             set_attribute!(geo, local_name, data, item_size)
         end
+        if custom_attributes
+            # Application-specific attributes (glTF 2.0 §3.7.2.1) start with
+            # `_`; GLTFLoader.js:4871 stores them under the lower-cased name.
+            for gltf_name in sort!([String(k) for k in keys(attrs)])
+                startswith(gltf_name, "_") || continue
+                attr_accessor = _gltf_checked_accessor_index(gltf, attrs[gltf_name], gltf_name)
+                data, item_size, attr_count = _gltf_accessor(gltf, buffers, attr_accessor)
+                attr_count == nverts || error("glTF $gltf_name count does not match POSITION")
+                set_attribute!(geo, Symbol(lowercase(gltf_name)), data, item_size)
+            end
+        end
         for (ti, target) in enumerate(get(prim, "targets", Any[]))
             for (gltf_name, local_kind) in (
                 ("POSITION", :position),
@@ -12220,7 +12888,7 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
         skin_index = _gltf_checked_zero_based_index(skin_idx, length(skins), "skin")
         skin = skins[skin_index + 1]
         bones = Bone[]
-        for j in skin["joints"]
+        for j in _gltf_required(skin, "joints", "skins[$skin_index]")
             joint_idx = _gltf_checked_node_index(j, node_count, "skin joint")
             bone = node_objects[joint_idx]
             bone isa Bone || error("glTF skin joint node was not loaded as a Bone")
@@ -12297,8 +12965,9 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
             # three.js sizes morphTargetInfluences to the target count, writes
             # mesh.weights over it element by element (GLTFLoader.js:2474-2486),
             # then writes node.weights over that (GLTFLoader.js:4228-4238).
+            primitives = _gltf_required(mesh_def, "primitives", "meshes[$mesh_idx]")
             target_count = maximum(prim -> length(get(prim, "targets", Any[])),
-                                   mesh_def["primitives"]; init=0)
+                                   primitives; init=0)
             mesh_weights = haskey(mesh_def, "weights") ?
                 _gltf_checked_number_vector(mesh_def["weights"], "morph weights") : Float64[]
             node_weights = haskey(node, "weights") ?
@@ -12307,14 +12976,17 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
             copyto!(morph_weights, mesh_weights)
             copyto!(morph_weights, node_weights)
             morph_names = _gltf_target_names(mesh_def)
-            for (prim_slot, prim) in enumerate(mesh_def["primitives"])
+            for (prim_slot, prim) in enumerate(primitives)
                 if instance_matrices !== nothing
                     (isempty(get(prim, "targets", Any[])) && isempty(morph_weights)) ||
                         error("EXT_mesh_gpu_instancing with morph targets is not supported")
                 end
                 mesh_obj = build_primitive(
                     prim, get(node, "skin", nothing), morph_weights, morph_names;
-                    preserve_nontriangle_morphs=(node_idx in morph_animated_nodes))
+                    preserve_nontriangle_morphs=(node_idx in morph_animated_nodes),
+                    what="meshes[$mesh_idx].primitives[$(prim_slot - 1)]")
+                # A primitive without POSITION is skipped (build_primitive).
+                mesh_obj === nothing && continue
                 if instance_matrices === nothing
                     add!(obj, mesh_obj)
                 else
@@ -12487,28 +13159,32 @@ function _gltf_animation_clips(gltf, buffers, node_objects)
     # Base.IdSet is unexported before Julia 1.11.
     node_object_set = Base.IdSet{Any}(values(node_objects))
     for (ai, anim) in enumerate(gltf["animations"])
-        samplers = anim["samplers"]
+        what = "animations[$(ai - 1)]"
+        samplers = _gltf_required(anim, "samplers", what)
         channels = get(anim, "channels", Any[])
         tracks = AbstractKeyframeTrack[]
         for ch in channels
-            target = ch["target"]
+            target = _gltf_required(ch, "target", "$what channel")
             node_idx = _gltf_animation_target_node(gltf, target)
             node_idx === nothing && continue
             haskey(node_objects, node_idx) || continue
-            path = String(target["path"])
+            path = String(_gltf_required(target, "path", "$what channel target"))
             path in ("translation", "rotation", "scale", "weights") || continue
             sampler_idx = _gltf_checked_zero_based_index(
-                ch["sampler"], length(samplers), "animation sampler")
+                _gltf_required(ch, "sampler", "$what channel"), length(samplers),
+                "animation sampler")
             sampler = samplers[sampler_idx + 1]
             interpolation = _gltf_animation_interpolation(
                 get(sampler, "interpolation", "LINEAR"))
-            input_accessor = _gltf_checked_accessor_index(gltf, sampler["input"],
+            input_accessor = _gltf_checked_accessor_index(
+                gltf, _gltf_required(sampler, "input", "$what sampler"),
                                                           "animation input")
             _gltf_validate_attribute_format(
                 gltf, input_accessor, "animation input", (5126,), ())
             times, tncomp, tcount = _gltf_accessor(gltf, buffers, input_accessor)
             tncomp == 1 || error("glTF animation input accessor must be SCALAR")
-            output_accessor = _gltf_checked_accessor_index(gltf, sampler["output"],
+            output_accessor = _gltf_checked_accessor_index(
+                gltf, _gltf_required(sampler, "output", "$what sampler"),
                                                            "animation output")
             _gltf_validate_attribute_format(
                 gltf, output_accessor, "animation output", (5126,),
@@ -12571,13 +13247,14 @@ function _gltf_animation_clips(gltf, buffers, node_objects)
     return clips
 end
 
-function _gltf_build_asset(gltf, buffers; dir::String="")
-    scene, node_objects = _gltf_build_scene(gltf, buffers; return_nodes=true, dir=dir)
+function _gltf_build_asset(gltf, buffers; dir::String="", custom_attributes::Bool=false)
+    scene, node_objects = _gltf_build_scene(gltf, buffers; return_nodes=true, dir=dir,
+                                            custom_attributes=custom_attributes)
     return GLTFAsset(scene, _gltf_animation_clips(gltf, buffers, node_objects))
 end
 
 """
-    load_gltf(path) -> Scene
+    load_gltf(path; custom_attributes=false) -> Scene
 
 Load a text glTF 2.0 file into a `Scene`.
 
@@ -12591,30 +13268,37 @@ geometry is de-indexed so that every triangle has its own corners carrying the
 triangle's face normal.
 Use [`load_glb`](@ref) for binary `.glb` containers whose first buffer is stored
 in the GLB BIN chunk.
+
+With `custom_attributes=true`, application-specific vertex attributes (names
+starting with `_`, such as the ones [`save_gltf`](@ref) writes for custom
+geometry attributes) are kept as geometry attributes under their lower-cased
+name, as three.js `GLTFLoader` keeps them (`_TEMPERATURE` becomes
+`:_temperature`). By default they are ignored.
 """
-function load_gltf(path::String)
-    gltf = _json_parse(read(path, String))
+function load_gltf(path::String; custom_attributes::Bool=false)
+    gltf = _json_parse(_strip_utf8_bom(read(path)))
     _gltf_validate_document(gltf)
     dir = dirname(path)
     buffers = [_gltf_read_buffer(b, dir) for b in _gltf_document_buffers(gltf)]
-    return _gltf_build_scene(gltf, buffers; dir=dir)
+    return _gltf_build_scene(gltf, buffers; dir=dir, custom_attributes=custom_attributes)
 end
 
 """
-    load_gltf_asset(path) -> GLTFAsset
+    load_gltf_asset(path; custom_attributes=false) -> GLTFAsset
 
 Load a glTF 2.0 file and return both the scene and parsed animation clips.
 Node `translation`, `rotation`, and `scale` channels are mapped to Diff3D.jl
 `KeyframeTrack` / `QuaternionKeyframeTrack` objects targeting the loaded scene
 nodes, and `weights` channels drive morph-target influences. Use
-[`load_glb_asset`](@ref) for binary `.glb` containers.
+[`load_glb_asset`](@ref) for binary `.glb` containers. `custom_attributes`
+is as for [`load_gltf`](@ref).
 """
-function load_gltf_asset(path::String)
-    gltf = _json_parse(read(path, String))
+function load_gltf_asset(path::String; custom_attributes::Bool=false)
+    gltf = _json_parse(_strip_utf8_bom(read(path)))
     _gltf_validate_document(gltf)
     dir = dirname(path)
     buffers = [_gltf_read_buffer(b, dir) for b in _gltf_document_buffers(gltf)]
-    return _gltf_build_asset(gltf, buffers; dir=dir)
+    return _gltf_build_asset(gltf, buffers; dir=dir, custom_attributes=custom_attributes)
 end
 
 # Resolve one indexed glTF buffer definition in a GLB container. Only buffer 0
@@ -12680,6 +13364,8 @@ function _parse_glb(path::String)
     end
     have_json || error("GLB has no JSON chunk")
 
+    # GLTFLoader decodes the JSON chunk with TextDecoder, which drops a BOM.
+    _has_utf8_bom(json_bytes) && (json_bytes = @view json_bytes[4:end])
     gltf = _json_parse(json_bytes)
     _gltf_validate_document(gltf)
     dir = dirname(path)
@@ -12689,30 +13375,39 @@ function _parse_glb(path::String)
 end
 
 """
-    load_glb(path) -> Scene
+    load_glb(path; custom_attributes=false) -> Scene
 
 Load a binary glTF (`.glb`) container into a `Scene`. Parses the 12-byte header
 (magic `glTF`, version, total length) and the chunk list, extracts the JSON
 chunk (type `0x4E4F534A`) and the optional binary chunk (type `0x004E4942`),
 then reuses the glTF document logic. A buffer view without a `uri` reads from
-the embedded binary chunk (buffer 0). Mirrors [`load_gltf`](@ref) output.
+the embedded binary chunk (buffer 0). Mirrors [`load_gltf`](@ref) output,
+including its `custom_attributes` keyword.
 """
-function load_glb(path::String)
+function load_glb(path::String; custom_attributes::Bool=false)
     gltf, buffers, dir = _parse_glb(path)
-    return _gltf_build_scene(gltf, buffers; dir=dir)
+    return _gltf_build_scene(gltf, buffers; dir=dir, custom_attributes=custom_attributes)
 end
 
-"""Load a binary glTF (`.glb`) and return both scene and animation clips."""
-function load_glb_asset(path::String)
+"""
+    load_glb_asset(path; custom_attributes=false) -> GLTFAsset
+
+Load a binary glTF (`.glb`) and return both scene and animation clips, as
+[`load_gltf_asset`](@ref) does for `.gltf` files.
+"""
+function load_glb_asset(path::String; custom_attributes::Bool=false)
     gltf, buffers, dir = _parse_glb(path)
-    return _gltf_build_asset(gltf, buffers; dir=dir)
+    return _gltf_build_asset(gltf, buffers; dir=dir, custom_attributes=custom_attributes)
 end
 
 # ============================ glTF export ============================
-# A subset of three.js GLTFExporter (examples/jsm/exporters/GLTFExporter.js):
-# node hierarchy and transforms, triangle/line/point primitives with their
-# vertex attributes and morph targets, untextured materials, and transform
-# and morph-weight animations. Everything else is reported, not dropped.
+# three.js GLTFExporter (examples/jsm/exporters/GLTFExporter.js): node
+# hierarchy and transforms; triangle, line, point, skinned and instanced
+# primitives with their vertex attributes, custom `_NAME` attributes, morph
+# targets and draw ranges; materials with embedded PNG textures, samplers,
+# KHR_texture_transform and the KHR_materials_* extensions; cameras;
+# KHR_lights_punctual; skins; and transform, morph-weight and per-target
+# morph animations. Everything else is reported, not dropped.
 
 _gltfx_error(msg::AbstractString) = throw(ArgumentError("save_gltf: " * msg))
 
@@ -12727,20 +13422,36 @@ mutable struct _GLTFExportWriter
     node_index::IdDict{Any,Int}
     morph_counts::IdDict{Any,Int}
     extensions_used::Vector{String}
+    extensions_required::Vector{String}
+    textures::Vector{Any}
+    texture_index::IdDict{Any,Int}
+    images::Vector{Any}
+    image_index::IdDict{Any,Int}
+    samplers::Vector{Any}
+    merged_maps::Dict{Any,Texture}
+    cameras::Vector{Any}
+    lights::Vector{Any}
+    skins::Vector{Any}
+    skinned::Vector{Any}
+    binary::Bool
 end
 
-_GLTFExportWriter() = _GLTFExportWriter(UInt8[], Any[], Any[], Any[], Any[], Any[],
-                                        Dict{Any,Int}(), IdDict{Any,Int}(),
-                                        IdDict{Any,Int}(), String[])
+_GLTFExportWriter(binary::Bool=false) =
+    _GLTFExportWriter(UInt8[], Any[], Any[], Any[], Any[], Any[], Dict{Any,Int}(),
+                      IdDict{Any,Int}(), IdDict{Any,Int}(), String[], String[],
+                      Any[], IdDict{Any,Int}(), Any[], IdDict{Any,Int}(), Any[],
+                      Dict{Any,Texture}(), Any[], Any[], Any[], Any[], binary)
 
-function _gltfx_use_extension!(w::_GLTFExportWriter, name::String)
+function _gltfx_use_extension!(w::_GLTFExportWriter, name::String; required::Bool=false)
     name in w.extensions_used || push!(w.extensions_used, name)
+    required && !(name in w.extensions_required) && push!(w.extensions_required, name)
     return w
 end
 
 function _gltfx_buffer_view!(w::_GLTFExportWriter, bytes::AbstractVector{UInt8}, target)
-    # Accessor offsets must be multiples of the component size (glTF 2.0
-    # §3.6.2.4); four bytes covers every type written here.
+    # Accessor offsets must be multiples of the component size and vertex
+    # attribute elements 4-byte aligned (glTF 2.0 §3.6.2.4); starting every
+    # view on a 4-byte boundary covers every type written here.
     while length(w.bin) % 4 != 0
         push!(w.bin, 0x00)
     end
@@ -12752,19 +13463,21 @@ function _gltfx_buffer_view!(w::_GLTFExportWriter, bytes::AbstractVector{UInt8},
     return length(w.buffer_views) - 1
 end
 
-const _GLTFX_TYPES = Dict(1 => "SCALAR", 2 => "VEC2", 3 => "VEC3", 4 => "VEC4")
+const _GLTFX_TYPES = Dict(1 => "SCALAR", 2 => "VEC2", 3 => "VEC3", 4 => "VEC4", 16 => "MAT4")
 
 # A FLOAT accessor of `ncomp`-component items; min/max are written where glTF
 # requires them (POSITION, animation inputs).
-function _gltfx_float_accessor!(w::_GLTFExportWriter, data::AbstractVector{<:Real}, ncomp::Int,
+function _gltfx_float_accessor!(w::_GLTFExportWriter, data::AbstractVector, ncomp::Int,
                                 what::String; minmax::Bool=false, target=nothing)
     isempty(data) && _gltfx_error("$what is empty")
     length(data) % ncomp == 0 ||
         _gltfx_error("$what has $(length(data)) values, not a multiple of $ncomp")
     values = Vector{Float32}(undef, length(data))
     for i in eachindex(data)
-        x = Float32(data[i])
-        isfinite(x) || _gltfx_error("$what value $(data[i]) is not a finite 32-bit float")
+        v = data[i]
+        v isa Real && !(v isa Bool) || _gltfx_error("$what value $(repr(v)) is not a real number")
+        x = Float32(v)
+        isfinite(x) || _gltfx_error("$what value $v is not a finite 32-bit float")
         values[i] = x
     end
     acc = Dict{String,Any}("bufferView" => _gltfx_buffer_view!(w, reinterpret(UInt8, values), target),
@@ -12778,7 +13491,26 @@ function _gltfx_float_accessor!(w::_GLTFExportWriter, data::AbstractVector{<:Rea
     return length(w.accessors) - 1
 end
 
-function _gltfx_index_accessor!(w::_GLTFExportWriter, indices::Vector{Int}, nverts::Int)
+# An UNSIGNED_BYTE or UNSIGNED_SHORT accessor of 0-based integer values (JOINTS_n).
+function _gltfx_joint_accessor!(w::_GLTFExportWriter, values::Vector{Int}, what::String)
+    isempty(values) && _gltfx_error("$what is empty")
+    for v in values
+        0 <= v <= 65535 || _gltfx_error("$what value $v is outside 0:65535")
+    end
+    if maximum(values) <= 255
+        bytes = Vector{UInt8}(UInt8.(values))
+        ctype = 5121
+    else
+        bytes = Vector{UInt8}(reinterpret(UInt8, UInt16.(values)))
+        ctype = 5123
+    end
+    push!(w.accessors, Dict{String,Any}("bufferView" => _gltfx_buffer_view!(w, bytes, 34962),
+                                        "componentType" => ctype,
+                                        "count" => length(values) ÷ 4, "type" => "VEC4"))
+    return length(w.accessors) - 1
+end
+
+function _gltfx_index_accessor!(w::_GLTFExportWriter, indices::AbstractVector{Int}, nverts::Int)
     for i in indices
         1 <= i <= nverts || _gltfx_error("geometry index $i is out of bounds for $nverts vertices")
     end
@@ -12805,13 +13537,308 @@ function _gltfx_color(c, what::String)
     return Float64[c.r, c.g, c.b]
 end
 
+function _gltfx_unit_color(c, what::String)
+    rgb = _gltfx_color(c, what)
+    all(x -> 0.0 <= x <= 1.0, rgb) || _gltfx_error("$what components must lie in [0, 1]")
+    return rgb
+end
+
+# ---- textures ----
+
+const _GLTFX_WRAP = Dict(:repeat => 10497, :clamp => 33071, :mirror => 33648)
+const _GLTFX_MIN_FILTER = Dict(:nearest => 9728, :linear => 9729,
+                               :nearest_mipmap_nearest => 9984,
+                               :linear_mipmap_nearest => 9985,
+                               :nearest_mipmap_linear => 9986,
+                               :linear_mipmap_linear => 9987)
+
+# GLTFExporter.js:1552-1567 writes one sampler per texture.
+function _gltfx_sampler!(w::_GLTFExportWriter, tex::Texture, what::String)
+    # `filter` is what the CPU samplers magnify with and what load_gltf sets
+    # from magFilter, so the two must agree for the texture to survive.
+    (tex.filter === :nearest) == (tex.mag_filter === :nearest) ||
+        _gltfx_error("$what has filter :$(tex.filter) but mag_filter :$(tex.mag_filter); glTF stores one magnification filter")
+    def = Dict{String,Any}("magFilter" => tex.filter === :nearest ? 9728 : 9729,
+                           "minFilter" => _GLTFX_MIN_FILTER[tex.min_filter],
+                           "wrapS" => _GLTFX_WRAP[tex.wrap_s],
+                           "wrapT" => _GLTFX_WRAP[tex.wrap_t])
+    push!(w.samplers, def)
+    return length(w.samplers) - 1
+end
+
+# One PNG image per distinct pixel array. Texture data is stored with row 1 at
+# the top of the image under the flipY convention (UV v = 0 on the last row);
+# glTF UV (0, 0) is the first image row, so the rows are written in reverse,
+# as GLTFExporter.js:1464-1468 does for a texture with flipY = true and
+# load_gltf undoes on import.
+function _gltfx_image!(w::_GLTFExportWriter, tex::Texture, what::String)
+    idx = get(w.image_index, tex.data, nothing)
+    idx === nothing || return idx
+    bytes = try
+        _png_encode_bytes(tex.data; flip_rows=true)
+    catch err
+        err isa ArgumentError || rethrow()
+        _gltfx_error("$what cannot be stored as an 8-bit PNG: $(err.msg)")
+    end
+    def = Dict{String,Any}("mimeType" => "image/png")
+    if w.binary
+        def["bufferView"] = _gltfx_buffer_view!(w, bytes, nothing)
+    else
+        def["uri"] = "data:image/png;base64," * _gltfx_base64(bytes)
+    end
+    push!(w.images, def)
+    idx = length(w.images) - 1
+    w.image_index[tex.data] = idx
+    return idx
+end
+
+function _gltfx_texture!(w::_GLTFExportWriter, tex::Texture, what::String)
+    idx = get(w.texture_index, tex, nothing)
+    idx === nothing || return idx
+    def = Dict{String,Any}("sampler" => _gltfx_sampler!(w, tex, what),
+                           "source" => _gltfx_image!(w, tex, what))
+    push!(w.textures, def)
+    idx = length(w.textures) - 1
+    w.texture_index[tex] = idx
+    return idx
+end
+
+# KHR_texture_transform of a texture's UV matrix, or nothing for the identity.
+# glTF applies uv' = offset + R(rotation) * (scale .* uv) with
+# R = [cos sin; -sin cos] (KHR_texture_transform README). For an automatic
+# matrix with a zero center and a rotation that commutes with the repeat
+# (rotation 0 or equal repeats) the texture's own offset, rotation and repeat
+# are that decomposition, and are written as GLTFExporter.js:908-942 writes
+# them. Any other matrix (a center, unequal repeats under rotation, a manual
+# matrix) is decomposed exactly; a sheared or projective matrix has no glTF
+# form and is reported.
+function _gltfx_uv_trs(tex::Texture, what::String)
+    if tex.matrix_auto_update
+        _texture_update_matrix_if_stale!(tex)
+        tex.center == Vec2(0.0, 0.0) &&
+            (tex.rotation == 0.0 || tex.repeat.x == tex.repeat.y) &&
+            return tex.offset, tex.rotation, tex.repeat
+    end
+    e = _texture_validate_matrix(tex.matrix).e
+    (e[7], e[8], e[9]) == (0.0, 0.0, 1.0) ||
+        _gltfx_error("$what has a projective UV matrix, which KHR_texture_transform cannot store")
+    a, b, d, f = e[1], e[2], e[4], e[5]
+    b == 0.0 && d == 0.0 && return Vec2(e[3], e[6]), 0.0, Vec2(a, f)
+    sx = hypot(a, d)
+    rotation = sx > 0.0 ? atan(-d, a) : atan(b, f)
+    sy = b * sin(rotation) + f * cos(rotation)
+    tol = 1.0e-12 * max(1.0, abs(a), abs(b), abs(d), abs(f))
+    (abs(sx * cos(rotation) - a) <= tol && abs(-sx * sin(rotation) - d) <= tol &&
+     abs(sy * sin(rotation) - b) <= tol && abs(sy * cos(rotation) - f) <= tol) ||
+        _gltfx_error("$what has a sheared UV matrix, which KHR_texture_transform cannot store")
+    return Vec2(e[3], e[6]), rotation, Vec2(sx, sy)
+end
+
+function _gltfx_texture_transform(tex::Texture, what::String)
+    offset, rotation, scale = _gltfx_uv_trs(tex, what)
+    def = Dict{String,Any}()
+    (offset.x != 0.0 || offset.y != 0.0) && (def["offset"] = Float64[offset.x, offset.y])
+    rotation != 0.0 && (def["rotation"] = Float64(rotation))
+    (scale.x != 1.0 || scale.y != 1.0) && (def["scale"] = Float64[scale.x, scale.y])
+    return isempty(def) ? nothing : def
+end
+
+# A glTF textureInfo for `tex` in a material slot. Colour slots are decoded
+# from sRGB by the renderers and loaded as sRGB by load_gltf, so a linear
+# texture there would change the rendered colour after a round trip; data
+# slots are sampled raw and ignore the colour space.
+function _gltfx_texture_info!(w::_GLTFExportWriter, tex, what::String; color::Bool=false)
+    tex isa Texture || _gltfx_error("$what must be a Texture, not $(typeof(tex))")
+    color && tex.colorspace !== :srgb &&
+        _gltfx_error("$what is a colour texture and must use colorspace :srgb")
+    info = Dict{String,Any}("index" => _gltfx_texture!(w, tex, what))
+    tex.tex_coord != 0 && (info["texCoord"] = tex.tex_coord)
+    transform = _gltfx_texture_transform(tex, what)
+    if transform !== nothing
+        info["extensions"] = Dict{String,Any}("KHR_texture_transform" => transform)
+        _gltfx_use_extension!(w, "KHR_texture_transform")
+    end
+    return info
+end
+
+# Channel `channel` (1 = R, 2 = G, 3 = B) of a texture as the material
+# samplers read it: one- and two-channel textures expand their first channel.
+_gltfx_texture_channel(data::Array{Float64,3}, channel::Int) =
+    size(data, 3) <= 2 ? data[:, :, 1] : data[:, :, channel]
+
+function _gltfx_same_sampling(a::Texture, b::Texture)
+    _texture_update_matrix_if_stale!(a)
+    _texture_update_matrix_if_stale!(b)
+    return (a.wrap_s, a.wrap_t, a.filter, a.min_filter, a.mag_filter, a.tex_coord, a.matrix) ==
+           (b.wrap_s, b.wrap_t, b.filter, b.min_filter, b.mag_filter, b.tex_coord, b.matrix)
+end
+
+# glTF has one metallicRoughnessTexture (roughness in G, metalness in B).
+# GLTFExporter.js:944-1050 uses the texture itself when both maps are the same
+# and otherwise composes R = 0, G = roughness, B = metalness over a
+# (0, 1, 1) fill. The renderers read roughness from G and metalness from B
+# raw (shading.jl _apply_pbr_maps), so no colour conversion is applied; both
+# maps must have the same size, sampler, UV set and transform.
+function _gltfx_metal_rough_texture(w::_GLTFExportWriter, roughness_map, metalness_map,
+                                    what::String)
+    roughness_map === metalness_map && return roughness_map
+    for (map, label) in ((roughness_map, "roughness_map"), (metalness_map, "metalness_map"))
+        map === nothing || map isa Texture ||
+            _gltfx_error("$what.$label must be a Texture, not $(typeof(map))")
+    end
+    key = (roughness_map, metalness_map)
+    haskey(w.merged_maps, key) && return w.merged_maps[key]
+    reference = roughness_map === nothing ? metalness_map : roughness_map
+    H, W = size(reference.data, 1), size(reference.data, 2)
+    if roughness_map !== nothing && metalness_map !== nothing
+        size(roughness_map.data)[1:2] == size(metalness_map.data)[1:2] ||
+            _gltfx_error("$what roughness_map and metalness_map must have the same size to share glTF's metallicRoughnessTexture")
+        _gltfx_same_sampling(roughness_map, metalness_map) ||
+            _gltfx_error("$what roughness_map and metalness_map must have the same sampler, UV set and transform to share glTF's metallicRoughnessTexture")
+    end
+    data = zeros(Float64, H, W, 3)
+    data[:, :, 2] .= roughness_map === nothing ? 1.0 : _gltfx_texture_channel(roughness_map.data, 2)
+    data[:, :, 3] .= metalness_map === nothing ? 1.0 : _gltfx_texture_channel(metalness_map.data, 3)
+    merged = Texture(data; wrap_s=reference.wrap_s, wrap_t=reference.wrap_t,
+                     filter=reference.filter, min_filter=reference.min_filter,
+                     mag_filter=reference.mag_filter, colorspace=:linear,
+                     offset=reference.offset, repeat=reference.repeat,
+                     rotation=reference.rotation, center=reference.center,
+                     matrix=reference.matrix, matrix_auto_update=reference.matrix_auto_update,
+                     tex_coord=reference.tex_coord)
+    w.merged_maps[key] = merged
+    return merged
+end
+
+# ---- materials ----
+
+# Texture slots glTF can carry for each material type; any other texture
+# field that is set is reported. Phong and Lambert write the slots
+# GLTFExporter.js:1688-1807 writes for every material.
+const _GLTFX_MATERIAL_MAPS = Dict{Any,Tuple}(
+    MeshStandardMaterial => (:map, :normal_map, :roughness_map, :metalness_map, :ao_map,
+                             :emissive_map),
+    MeshPhysicalMaterial => (:map, :normal_map, :roughness_map, :metalness_map, :ao_map,
+                             :emissive_map, :clearcoat_map, :clearcoat_roughness_map,
+                             :clearcoat_normal_map, :transmission_map, :thickness_map,
+                             :sheen_color_map, :sheen_roughness_map, :iridescence_map,
+                             :iridescence_thickness_map, :specular_intensity_map,
+                             :specular_color_map, :anisotropy_map),
+    MeshBasicMaterial => (:map,),
+    MeshPhongMaterial => (:map, :normal_map, :ao_map, :emissive_map),
+    MeshLambertMaterial => (:map, :normal_map, :ao_map, :emissive_map),
+    LineBasicMaterial => (),
+    PointsMaterial => ())
+
+function _gltfx_ext!(w::_GLTFExportWriter, def::Dict{String,Any}, name::String, ext)
+    get!(() -> Dict{String,Any}(), def, "extensions")[name] = ext
+    _gltfx_use_extension!(w, name)
+    return def
+end
+
+_gltfx_material_name(mat) = String(nameof(typeof(mat)))
+
+# KHR_materials_* extensions of a MeshPhysicalMaterial, written under the same
+# conditions as GLTFExporter.js:2986-3453.
+function _gltfx_physical_extensions!(w::_GLTFExportWriter, def::Dict{String,Any},
+                                     mat::MeshPhysicalMaterial)
+    what = "MeshPhysicalMaterial"
+    tinfo(tex, field; color=false) = _gltfx_texture_info!(w, tex, "$what.$field"; color=color)
+    if mat.clearcoat != 0.0
+        ext = Dict{String,Any}("clearcoatFactor" => mat.clearcoat,
+                               "clearcoatRoughnessFactor" => mat.clearcoat_roughness)
+        mat.clearcoat_map === nothing ||
+            (ext["clearcoatTexture"] = tinfo(mat.clearcoat_map, "clearcoat_map"))
+        mat.clearcoat_roughness_map === nothing ||
+            (ext["clearcoatRoughnessTexture"] = tinfo(mat.clearcoat_roughness_map,
+                                                      "clearcoat_roughness_map"))
+        if mat.clearcoat_normal_map !== nothing
+            info = tinfo(mat.clearcoat_normal_map, "clearcoat_normal_map")
+            mat.clearcoat_normal_scale != 1.0 && (info["scale"] = mat.clearcoat_normal_scale)
+            ext["clearcoatNormalTexture"] = info
+        end
+        _gltfx_ext!(w, def, "KHR_materials_clearcoat", ext)
+    end
+    if mat.dispersion != 0.0
+        _gltfx_ext!(w, def, "KHR_materials_dispersion",
+                    Dict{String,Any}("dispersion" => mat.dispersion))
+    end
+    if mat.iridescence != 0.0
+        ext = Dict{String,Any}("iridescenceFactor" => mat.iridescence,
+                               "iridescenceIor" => mat.iridescence_ior,
+                               "iridescenceThicknessMinimum" => mat.iridescence_thickness_min,
+                               "iridescenceThicknessMaximum" => mat.iridescence_thickness)
+        mat.iridescence_map === nothing ||
+            (ext["iridescenceTexture"] = tinfo(mat.iridescence_map, "iridescence_map"))
+        mat.iridescence_thickness_map === nothing ||
+            (ext["iridescenceThicknessTexture"] = tinfo(mat.iridescence_thickness_map,
+                                                        "iridescence_thickness_map"))
+        _gltfx_ext!(w, def, "KHR_materials_iridescence", ext)
+    end
+    if mat.transmission != 0.0
+        ext = Dict{String,Any}("transmissionFactor" => mat.transmission)
+        mat.transmission_map === nothing ||
+            (ext["transmissionTexture"] = tinfo(mat.transmission_map, "transmission_map"))
+        _gltfx_ext!(w, def, "KHR_materials_transmission", ext)
+        # Diff3D stores three.js's infinite attenuation distance as 0, which
+        # glTF expresses by leaving attenuationDistance out.
+        vol = Dict{String,Any}("thicknessFactor" => mat.thickness,
+                               "attenuationColor" => _gltfx_unit_color(
+                                   mat.attenuation_color, "$what attenuation_color"))
+        mat.attenuation_distance > 0.0 && (vol["attenuationDistance"] = mat.attenuation_distance)
+        mat.thickness_map === nothing ||
+            (vol["thicknessTexture"] = tinfo(mat.thickness_map, "thickness_map"))
+        _gltfx_ext!(w, def, "KHR_materials_volume", vol)
+    end
+    if mat.ior != 1.5
+        _gltfx_ext!(w, def, "KHR_materials_ior", Dict{String,Any}("ior" => mat.ior))
+    end
+    if mat.specular_intensity != 1.0 || mat.specular_color != Color3(1.0, 1.0, 1.0) ||
+       mat.specular_intensity_map !== nothing || mat.specular_color_map !== nothing
+        ext = Dict{String,Any}("specularFactor" => mat.specular_intensity,
+                               "specularColorFactor" => _gltfx_color(
+                                   mat.specular_color, "$what specular_color"))
+        mat.specular_intensity_map === nothing ||
+            (ext["specularTexture"] = tinfo(mat.specular_intensity_map, "specular_intensity_map"))
+        mat.specular_color_map === nothing ||
+            (ext["specularColorTexture"] = tinfo(mat.specular_color_map, "specular_color_map";
+                                                 color=true))
+        _gltfx_ext!(w, def, "KHR_materials_specular", ext)
+    end
+    if mat.sheen != 0.0
+        # glTF sheen has no strength and loaders set sheen = 1
+        # (GLTFLoader.js:1105, load_gltf); the renderers scale the sheen
+        # colour by `sheen` (shading.jl), so the strength folds into the
+        # colour factor exactly. GLTFExporter.js:3398-3399 drops it instead.
+        sheen_color = _gltfx_unit_color(mat.sheen_color, "$what sheen_color") .* mat.sheen
+        ext = Dict{String,Any}("sheenColorFactor" => sheen_color,
+                               "sheenRoughnessFactor" => mat.sheen_roughness)
+        mat.sheen_color_map === nothing ||
+            (ext["sheenColorTexture"] = tinfo(mat.sheen_color_map, "sheen_color_map"; color=true))
+        mat.sheen_roughness_map === nothing ||
+            (ext["sheenRoughnessTexture"] = tinfo(mat.sheen_roughness_map, "sheen_roughness_map"))
+        _gltfx_ext!(w, def, "KHR_materials_sheen", ext)
+    end
+    if mat.anisotropy != 0.0
+        ext = Dict{String,Any}("anisotropyStrength" => mat.anisotropy,
+                               "anisotropyRotation" => mat.anisotropy_rotation)
+        mat.anisotropy_map === nothing ||
+            (ext["anisotropyTexture"] = tinfo(mat.anisotropy_map, "anisotropy_map"))
+        _gltfx_ext!(w, def, "KHR_materials_anisotropy", ext)
+    end
+    return def
+end
+
 function _gltfx_material_def(w::_GLTFExportWriter, mat)
     T = typeof(mat)
+    haskey(_GLTFX_MATERIAL_MAPS, T) ||
+        _gltfx_error("$(nameof(T)) cannot be exported; use MeshStandardMaterial, MeshPhysicalMaterial, MeshBasicMaterial, MeshPhongMaterial, MeshLambertMaterial, LineBasicMaterial or PointsMaterial")
+    slots = _GLTFX_MATERIAL_MAPS[T]
     for f in fieldnames(T)
         name = String(f)
-        if (name == "map" || endswith(name, "_map") || name == "envmap") &&
-           getfield(mat, f) !== nothing
-            _gltfx_error("$(nameof(T)).$name is set; textures cannot be exported")
+        if (name == "map" || endswith(name, "_map") || name == "envmap" || name == "matcap") &&
+           getfield(mat, f) !== nothing && !(f in slots)
+            _gltfx_error("$(nameof(T)).$name is set; glTF has no slot for it")
         end
     end
     hasfield(T, :clipping_planes) && !isempty(mat.clipping_planes) &&
@@ -12821,41 +13848,65 @@ function _gltfx_material_def(w::_GLTFExportWriter, mat)
     side = hasfield(T, :side) ? mat.side : :front
     side === :back &&
         _gltfx_error("back-side materials cannot be exported; glTF materials are single- or double-sided")
+    what = String(nameof(T))
     pbr = Dict{String,Any}()
     def = Dict{String,Any}("pbrMetallicRoughness" => pbr)
-    if mat isa MeshStandardMaterial
+    if mat isa Union{MeshStandardMaterial, MeshPhysicalMaterial}
         pbr["metallicFactor"] = Float64(mat.metalness)
         pbr["roughnessFactor"] = Float64(mat.roughness)
+        if mat.roughness_map !== nothing || mat.metalness_map !== nothing
+            pbr["metallicRoughnessTexture"] = _gltfx_texture_info!(
+                w, _gltfx_metal_rough_texture(w, mat.roughness_map, mat.metalness_map, what),
+                "$what.roughness_map/metalness_map")
+        end
     elseif mat isa MeshBasicMaterial
         # GLTFExporter.js:2962-2973 (KHR_materials_unlit)
         pbr["metallicFactor"] = 0.0
         pbr["roughnessFactor"] = 0.9
-        def["extensions"] = Dict{String,Any}("KHR_materials_unlit" => Dict{String,Any}())
-        _gltfx_use_extension!(w, "KHR_materials_unlit")
-    elseif mat isa Union{MeshPhongMaterial, MeshLambertMaterial, LineBasicMaterial, PointsMaterial}
+        _gltfx_ext!(w, def, "KHR_materials_unlit", Dict{String,Any}())
+    else
         # GLTFExporter.js:1680-1684 for materials without metalness/roughness.
         pbr["metallicFactor"] = 0.0
         pbr["roughnessFactor"] = 1.0
-    else
-        _gltfx_error("$(nameof(T)) cannot be exported; use MeshStandardMaterial, MeshBasicMaterial, MeshPhongMaterial, MeshLambertMaterial, LineBasicMaterial or PointsMaterial")
     end
     opacity = Float64(mat.opacity)
     0.0 <= opacity <= 1.0 || _gltfx_error("material opacity $opacity is outside [0, 1]")
     # GLTFExporter.js:1666-1672
     color = vcat(_gltfx_color(mat.color, "material colour"), opacity)
     color == [1.0, 1.0, 1.0, 1.0] || (pbr["baseColorFactor"] = color)
+    if hasfield(T, :map) && mat.map !== nothing
+        pbr["baseColorTexture"] = _gltfx_texture_info!(w, mat.map, "$what.map"; color=true)
+    end
     if hasfield(T, :emissive)
         emissive = _gltfx_color(mat.emissive, "material emissive")
         any(!iszero, emissive) && (def["emissiveFactor"] = emissive)
+        if mat.emissive_map !== nothing
+            def["emissiveTexture"] = _gltfx_texture_info!(w, mat.emissive_map,
+                                                          "$what.emissive_map"; color=true)
+        end
         strength = Float64(mat.emissive_intensity)
         isfinite(strength) && strength >= 0 ||
             _gltfx_error("material emissive_intensity $strength must be finite and non-negative")
         if strength != 1.0
             # GLTFExporter.js:3478-3486
-            ext = get!(() -> Dict{String,Any}(), def, "extensions")
-            ext["KHR_materials_emissive_strength"] = Dict{String,Any}("emissiveStrength" => strength)
-            _gltfx_use_extension!(w, "KHR_materials_emissive_strength")
+            _gltfx_ext!(w, def, "KHR_materials_emissive_strength",
+                        Dict{String,Any}("emissiveStrength" => strength))
         end
+    end
+    if hasfield(T, :normal_map) && mat.normal_map !== nothing
+        # Diff3D samples normal maps with glTF's convention (load_gltf keeps
+        # the image and scale as stored), so both are written unchanged.
+        info = _gltfx_texture_info!(w, mat.normal_map, "$what.normal_map")
+        mat.normal_scale != 1.0 && (info["scale"] = Float64(mat.normal_scale))
+        def["normalTexture"] = info
+    end
+    if hasfield(T, :ao_map) && mat.ao_map !== nothing
+        info = _gltfx_texture_info!(w, mat.ao_map, "$what.ao_map")
+        strength = Float64(mat.ao_map_intensity)
+        0.0 <= strength <= 1.0 ||
+            _gltfx_error("$what ao_map_intensity $strength is outside glTF's occlusion strength range [0, 1]")
+        strength != 1.0 && (info["strength"] = strength)
+        def["occlusionTexture"] = info
     end
     # GLTFExporter.js:1810-1826. LineBasicMaterial has no transparent flag and
     # blends whenever its opacity is below one.
@@ -12868,6 +13919,7 @@ function _gltfx_material_def(w::_GLTFExportWriter, mat)
         def["alphaCutoff"] = alpha_test
     end
     side === :double && (def["doubleSided"] = true)
+    mat isa MeshPhysicalMaterial && _gltfx_physical_extensions!(w, def, mat)
     return def
 end
 
@@ -12880,6 +13932,8 @@ function _gltfx_material!(w::_GLTFExportWriter, mat)
     w.material_index[mat] = idx
     return idx
 end
+
+# ---- meshes ----
 
 # glTF normals are unit length (glTF 2.0 §3.7.2.1); GLTFExporter.js:1932-1938
 # normalises them the same way.
@@ -12911,19 +13965,48 @@ function _gltfx_morph_slot(name::Symbol)
     return nothing
 end
 
-const _GLTFX_PRIMITIVE_OBJECTS = Union{Mesh, LineSegments, LineLoop, LineObject, PointsObject}
-const _GLTFX_VERTEX_COLOR_MATERIALS = Union{MeshStandardMaterial, MeshBasicMaterial,
-                                            MeshPhongMaterial, MeshLambertMaterial}
+const _GLTFX_PRIMITIVE_OBJECTS = Union{Mesh, SkinnedMesh, InstancedMesh, LineSegments,
+                                       LineLoop, LineObject, PointsObject}
+const _GLTFX_VERTEX_COLOR_MATERIALS = Union{MeshStandardMaterial, MeshPhysicalMaterial,
+                                            MeshBasicMaterial, MeshPhongMaterial,
+                                            MeshLambertMaterial}
+# glTF vertex attribute semantics (GLTFExporter.js:1940-1941); a custom
+# attribute whose upper-case name is one of these is not prefixed with `_`.
+const _GLTFX_SEMANTIC = r"^(POSITION|NORMAL|TANGENT|TEXCOORD_\d+|COLOR_\d+|JOINTS_\d+|WEIGHTS_\d+)$"
+
+function _gltfx_mode(obj)
+    if obj isa InstancedMesh
+        return Dict(:triangles => 4, :points => 0, :lines => 1, :line_loop => 2,
+                    :line_strip => 3)[obj.draw_mode]
+    end
+    return obj isa Union{Mesh, SkinnedMesh} ? 4 : obj isa LineSegments ? 1 :
+           obj isa LineLoop ? 2 : obj isa LineObject ? 3 : 0
+end
+
+# 1-based vertex indices of the geometry's draw range, or nothing without one.
+# The selection is what the renderers draw (geometries.jl _draw_entry_range and
+# _draw_face_range): whole triangles, whole segment pairs, and line strips or
+# loops of at least two entries. GLTFExporter.js does not read drawRange.
+function _gltfx_draw_range_indices(geo::BufferGeometry, mode::Int)
+    geo.draw_range === nothing && return nothing
+    entries = if mode == 4
+        faces = _draw_face_range(geo)
+        isempty(faces) ? (1:0) : ((3first(faces) - 2):(3last(faces)))
+    else
+        r = _draw_entry_range(geo)
+        mode == 1 ? (first(r):(first(r) + 2 * (length(r) ÷ 2) - 1)) :
+        mode in (2, 3) && length(r) < 2 ? (1:0) : r
+    end
+    isempty(entries) && _gltfx_error("the geometry draw range selects nothing to draw")
+    return [_draw_vertex_index(geo, e) for e in entries]
+end
 
 function _gltfx_mesh!(w::_GLTFExportWriter, obj)
     geo = obj.geometry
     geo isa BufferGeometry || _gltfx_error("$(obj.name) has no BufferGeometry")
-    isempty(geo.groups) || _gltfx_error("geometry groups (multi-material meshes) cannot be exported")
-    geo.draw_range === nothing || _gltfx_error("geometry draw ranges cannot be exported")
     obj isa Mesh && obj.flat_shading === true &&
         _gltfx_error("flat_shading=true cannot be exported; give the geometry face normals instead")
-    mode = obj isa Mesh ? 4 : obj isa LineSegments ? 1 : obj isa LineLoop ? 2 :
-           obj isa LineObject ? 3 : 0
+    mode = _gltfx_mode(obj)
     mat = obj.material
     n = geo.n_vertices
     n > 0 && length(geo.positions) == 3n ||
@@ -12940,6 +14023,14 @@ function _gltfx_mesh!(w::_GLTFExportWriter, obj)
         length(geo.uvs) == 2n || _gltfx_error("geometry uvs do not match its vertices")
         attrs["TEXCOORD_0"] = _gltfx_float_accessor!(w, geo.uvs, 2, "TEXCOORD_0"; target=34962)
     end
+    skinned = obj isa SkinnedMesh
+    if skinned
+        _validate_skinned_mesh(obj, "save_gltf SkinnedMesh")
+        attrs["JOINTS_0"] = _gltfx_joint_accessor!(
+            w, [i - 1 for t in obj.skin_indices for i in t], "JOINTS_0")
+        attrs["WEIGHTS_0"] = _gltfx_float_accessor!(
+            w, [x for t in obj.skin_weights for x in t], 4, "WEIGHTS_0"; target=34962)
+    end
     targets = Dict{Int,Dict{String,Any}}()
     for name in sort!(collect(keys(geo.attributes)))
         attr = geo.attributes[name]
@@ -12947,6 +14038,8 @@ function _gltfx_mesh!(w::_GLTFExportWriter, obj)
             _gltfx_error("geometry attribute :$name does not match its vertices")
         slot = _gltfx_morph_slot(name)
         if slot !== nothing
+            obj isa InstancedMesh &&
+                _gltfx_error("instanced meshes with morph targets cannot be exported; EXT_mesh_gpu_instancing loaders reject them")
             gltf_name, k = slot
             attr.item_size == 3 || _gltfx_error("morph attribute :$name must have 3 components")
             t = get!(() -> Dict{String,Any}(), targets, k)
@@ -12967,13 +14060,48 @@ function _gltfx_mesh!(w::_GLTFExportWriter, obj)
         elseif name === :tangent
             attr.item_size == 4 || _gltfx_error("tangent attribute must have 4 components")
             attrs["TANGENT"] = _gltfx_float_accessor!(w, attr.data, 4, "TANGENT"; target=34962)
+        elseif name === :skinIndex || name === :skinWeight
+            # A SkinnedMesh writes its own skin_indices/skin_weights; on other
+            # objects these are the JOINTS_0/WEIGHTS_0 data load_gltf keeps.
+            skinned && continue
+            attr.item_size == 4 || _gltfx_error("$name attribute must have 4 components")
+            if name === :skinIndex
+                joints = Int[]
+                for v in attr.data
+                    v isa Real && isinteger(v) ||
+                        _gltfx_error("skinIndex attribute values must be integers")
+                    push!(joints, Int(v))
+                end
+                attrs["JOINTS_0"] = _gltfx_joint_accessor!(w, joints, "JOINTS_0")
+            else
+                attrs["WEIGHTS_0"] = _gltfx_float_accessor!(w, attr.data, 4, "WEIGHTS_0";
+                                                            target=34962)
+            end
         else
-            _gltfx_error("geometry attribute :$name cannot be exported")
+            # Custom attribute (GLTFExporter.js:1936-1943): upper-cased and
+            # prefixed with `_`; load_gltf(path; custom_attributes=true) and
+            # GLTFLoader read it back under the lower-cased glTF name.
+            gltf_name = uppercase(String(name))
+            occursin(_GLTFX_SEMANTIC, gltf_name) &&
+                _gltfx_error("geometry attribute :$name would be written as the glTF semantic $gltf_name; rename it")
+            startswith(gltf_name, "_") || (gltf_name = "_" * gltf_name)
+            haskey(attrs, gltf_name) &&
+                _gltfx_error("geometry attributes map to the same glTF attribute $gltf_name")
+            1 <= attr.item_size <= 4 ||
+                _gltfx_error("geometry attribute :$name has $(attr.item_size) components; glTF vertex attributes have 1 to 4")
+            attrs[gltf_name] = _gltfx_float_accessor!(w, attr.data, attr.item_size,
+                                                      "geometry attribute :$name"; target=34962)
         end
     end
     prim = Dict{String,Any}("attributes" => attrs, "mode" => mode,
                             "material" => _gltfx_material!(w, mat))
-    if !isempty(geo.indices)
+    # Geometry groups only select materials when an object has a material
+    # array (GLTFExporter.js:2117-2118); Diff3D objects have one material, so
+    # the groups are not written.
+    range_indices = _gltfx_draw_range_indices(geo, mode)
+    if range_indices !== nothing
+        prim["indices"] = _gltfx_index_accessor!(w, range_indices, n)
+    elseif !isempty(geo.indices)
         mode == 4 && length(geo.indices) % 3 != 0 &&
             _gltfx_error("triangle indices must come in threes")
         prim["indices"] = _gltfx_index_accessor!(w, geo.indices, n)
@@ -12988,14 +14116,14 @@ function _gltfx_mesh!(w::_GLTFExportWriter, obj)
         end
         prim["targets"] = Any[targets[k] for k in 0:(ntargets - 1)]
     end
-    influences = obj.morph_target_influences
+    influences = hasproperty(obj, :morph_target_influences) ? obj.morph_target_influences : Float64[]
     if !isempty(influences)
         length(influences) == ntargets ||
             _gltfx_error("$(length(influences)) morph influences for $ntargets morph targets")
         all(isfinite, influences) || _gltfx_error("morph influences must be finite")
         any(!iszero, influences) && (mesh["weights"] = Float64.(influences))
     end
-    names = obj.morph_target_names
+    names = hasproperty(obj, :morph_target_names) ? obj.morph_target_names : String[]
     if !isempty(names)
         length(names) == ntargets ||
             _gltfx_error("$(length(names)) morph target names for $ntargets morph targets")
@@ -13007,9 +14135,156 @@ function _gltfx_mesh!(w::_GLTFExportWriter, obj)
     return length(w.meshes) - 1
 end
 
+# ---- cameras, lights, instancing ----
+
+# Rotation (as a unit quaternion) whose -Z axis points along `direction` and
+# whose +Y axis lies towards `up`, the orientation glTF cameras and lights
+# look along (glTF 2.0 §3.10, KHR_lights_punctual).
+function _gltfx_look_quaternion(direction::Vec3, up::Vec3)
+    view = mat4_look_at(Vec3(0.0, 0.0, 0.0), direction, up)
+    return quat_normalize(quat_from_rotation_matrix(mat4_transpose(view)))
+end
+
+function _gltfx_camera!(w::_GLTFExportWriter, cam)
+    cam.view === nothing || !cam.view.enabled ||
+        _gltfx_error("$(nameof(typeof(cam))) view offsets cannot be exported")
+    zoom = cam.zoom
+    def = if cam isa PerspectiveCamera
+        cam.film_offset == 0.0 ||
+            _gltfx_error("PerspectiveCamera film_offset cannot be exported")
+        # three.js PerspectiveCamera.updateProjectionMatrix divides the
+        # half-height by zoom, which is the projection of this field of view.
+        yfov = zoom == 1.0 ? cam.fov : 2 * atan(tan(cam.fov / 2) / zoom)
+        p = Dict{String,Any}("yfov" => yfov, "znear" => cam.near, "aspectRatio" => cam.aspect)
+        # An infinite far plane is glTF's infinite projection (no zfar).
+        isfinite(cam.far) && (p["zfar"] = cam.far)
+        Dict{String,Any}("type" => "perspective", "perspective" => p)
+    else
+        # glTF xmag and ymag are half extents of a view centred on the axis
+        # (glTF 2.0 §3.10.3; load_gltf builds left = -xmag). GLTFExporter.js:2268
+        # writes right * 2, which GLTFLoader reads back as twice the width.
+        (cam.left == -cam.right && cam.bottom == -cam.top) ||
+            _gltfx_error("OrthographicCamera must be symmetric (left == -right, bottom == -top) to be exported")
+        xmag, ymag = cam.right / zoom, cam.top / zoom
+        (xmag > 0.0 && ymag > 0.0) ||
+            _gltfx_error("OrthographicCamera right and top must be positive to be exported")
+        Dict{String,Any}("type" => "orthographic",
+                         "orthographic" => Dict{String,Any}("xmag" => xmag, "ymag" => ymag,
+                                                            "znear" => cam.near,
+                                                            "zfar" => cam.far))
+    end
+    push!(w.cameras, def)
+    return length(w.cameras) - 1
+end
+
+function _gltfx_light!(w::_GLTFExportWriter, light)
+    def = Dict{String,Any}("color" => _gltfx_unit_color(light.color, "light colour"),
+                           "intensity" => light.intensity)
+    isempty(light.name) || (def["name"] = light.name)
+    if light isa DirectionalLight
+        def["type"] = "directional"
+    else
+        light.ies_profile === nothing ||
+            _gltfx_error("IES light profiles cannot be exported")
+        # glTF punctual lights fall off with the inverse square (decay 2);
+        # GLTFExporter.js:2908-2913 warns and drops other decays.
+        light.decay == 2.0 ||
+            _gltfx_error("light decay $(light.decay) cannot be exported; glTF lights use decay 2")
+        light.distance >= 0.0 || _gltfx_error("light distance must be non-negative")
+        light.distance > 0.0 && (def["range"] = light.distance)
+        if light isa PointLight
+            def["type"] = "point"
+        else
+            def["type"] = "spot"
+            0.0 < light.angle <= pi / 2 ||
+                _gltfx_error("SpotLight angle $(light.angle) is outside glTF's (0, π/2]")
+            0.0 <= light.penumbra <= 1.0 ||
+                _gltfx_error("SpotLight penumbra $(light.penumbra) is outside [0, 1]")
+            # GLTFExporter.js:2903-2904
+            def["spot"] = Dict{String,Any}("innerConeAngle" => (1.0 - light.penumbra) * light.angle,
+                                           "outerConeAngle" => light.angle)
+        end
+    end
+    push!(w.lights, def)
+    _gltfx_use_extension!(w, "KHR_lights_punctual")
+    return length(w.lights) - 1
+end
+
+# Node rotation of a camera or light aimed through `target`. A camera's target
+# and up are in its parent frame, and the rotation is the look-at rotation
+# Diff3D itself derives from them (cameras.jl _sync_camera_rotation_from_view!).
+# A light's target is a world point; the rotation points the node's -Z (scaled
+# by the node's own z scale, as the loaded rotation-driven light reads it) at
+# it from the parent frame.
+function _gltfx_aim_quaternion(obj)
+    if obj isa AbstractCamera
+        d = obj.target - obj.position
+        iszero(d.x) && iszero(d.y) && iszero(d.z) &&
+            _gltfx_error("$(nameof(typeof(obj))) target equals its position, so it has no view direction")
+        return _gltfx_look_quaternion(d, obj.up)
+    end
+    world = obj.target - _light_world_position(obj)
+    iszero(world.x) && iszero(world.y) && iszero(world.z) &&
+        _gltfx_error("$(nameof(typeof(obj))) target equals its position, so it has no direction")
+    parent = get_parent(obj)
+    local_dir = parent === nothing ? world :
+        mat4_transform_direction(mat4_inverse(compute_world_matrix(parent)), world)
+    sz = obj.scale.z
+    sz == 0.0 && _gltfx_error("$(nameof(typeof(obj))) with zero z scale has no direction")
+    local_dir = normalize(sz > 0.0 ? local_dir : -local_dir)
+    return _gltfx_look_quaternion(local_dir, _safe_up(local_dir))
+end
+
+# Translation, rotation and scale of an affine instance matrix with
+# orthogonal axes (glTF EXT_mesh_gpu_instancing stores TRS per instance).
+function _gltfx_instance_trs(M::Mat4{Float64}, i::Int)
+    e = M.e
+    tol = 1.0e-12 * max(1.0, maximum(abs, e))
+    (abs(e[4]) <= tol && abs(e[8]) <= tol && abs(e[12]) <= tol && abs(e[16] - 1.0) <= tol) ||
+        _gltfx_error("instance matrix $i is not affine")
+    cols = (Vec3(e[1], e[2], e[3]), Vec3(e[5], e[6], e[7]), Vec3(e[9], e[10], e[11]))
+    for (a, b) in ((1, 2), (1, 3), (2, 3))
+        na, nb = norm(cols[a]), norm(cols[b])
+        (na == 0.0 || nb == 0.0 || abs(dot(cols[a], cols[b])) <= 1.0e-9 * na * nb) ||
+            _gltfx_error("instance matrix $i has sheared axes, which glTF TRS cannot store")
+    end
+    position, euler, scale = _gltf_decompose(M)
+    q = quat_normalize(quat_from_euler(euler.x, euler.y, euler.z; order=euler.order))
+    return position, q, scale
+end
+
+function _gltfx_instancing!(w::_GLTFExportWriter, node::Dict{String,Any}, obj::InstancedMesh)
+    _validate_instanced_mesh(obj, "save_gltf InstancedMesh")
+    count = length(obj.instance_matrices)
+    count > 0 || _gltfx_error("an InstancedMesh with no instances cannot be exported")
+    t = Float64[]; r = Float64[]; s = Float64[]
+    for (i, M) in enumerate(obj.instance_matrices)
+        p, q, sc = _gltfx_instance_trs(M, i)
+        append!(t, (p.x, p.y, p.z)); append!(r, (q.x, q.y, q.z, q.w)); append!(s, (sc.x, sc.y, sc.z))
+    end
+    # GLTFExporter.js:3565-3592 writes all three; no bufferView target.
+    attrs = Dict{String,Any}("TRANSLATION" => _gltfx_float_accessor!(w, t, 3, "instance translation"),
+                             "ROTATION" => _gltfx_float_accessor!(w, r, 4, "instance rotation"),
+                             "SCALE" => _gltfx_float_accessor!(w, s, 3, "instance scale"))
+    if any(c -> c != Color3(1.0, 1.0, 1.0), obj.instance_colors)
+        attrs["_COLOR_0"] = _gltfx_float_accessor!(
+            w, [x for c in obj.instance_colors for x in (c.r, c.g, c.b)], 3, "instance colour")
+    end
+    get!(() -> Dict{String,Any}(), node, "extensions")["EXT_mesh_gpu_instancing"] =
+        Dict{String,Any}("attributes" => attrs)
+    _gltfx_use_extension!(w, "EXT_mesh_gpu_instancing"; required=true)
+    return node
+end
+
+# ---- nodes ----
+
+const _GLTFX_NODE_OBJECTS = Union{Group, Object3D, Bone, _GLTFX_PRIMITIVE_OBJECTS,
+                                  PerspectiveCamera, OrthographicCamera,
+                                  DirectionalLight, PointLight, SpotLight}
+
 function _gltfx_node!(w::_GLTFExportWriter, obj)
-    obj isa Union{Group, Object3D, _GLTFX_PRIMITIVE_OBJECTS} ||
-        _gltfx_error("$(nameof(typeof(obj))) objects cannot be exported; it writes groups, meshes, lines and points")
+    obj isa _GLTFX_NODE_OBJECTS ||
+        _gltfx_error("$(nameof(typeof(obj))) objects cannot be exported; it writes groups, bones, meshes, lines, points, cameras and directional, point and spot lights")
     _validate_object_transform(obj)
     node = Dict{String,Any}()
     push!(w.nodes, node)
@@ -13018,12 +14293,27 @@ function _gltfx_node!(w::_GLTFExportWriter, obj)
     isempty(obj.name) || (node["name"] = obj.name)
     p, r, s = obj.position, obj.rotation, obj.scale
     (p.x, p.y, p.z) == (0.0, 0.0, 0.0) || (node["translation"] = Float64[p.x, p.y, p.z])
-    if (r.x, r.y, r.z) != (0.0, 0.0, 0.0)
+    aimed = obj isa Union{AbstractCamera, DirectionalLight, SpotLight} && !obj.rotation_driven
+    if aimed
+        any(is_visible, get_children(obj)) &&
+            _gltfx_error("$(nameof(typeof(obj))) aimed by its target cannot have exported children; set rotation_driven=true")
+        q = _gltfx_aim_quaternion(obj)
+        node["rotation"] = Float64[q.x, q.y, q.z, q.w]
+    elseif (r.x, r.y, r.z) != (0.0, 0.0, 0.0)
         q = quat_normalize(quat_from_euler(r.x, r.y, r.z; order=r.order))
         node["rotation"] = Float64[q.x, q.y, q.z, q.w]
     end
     (s.x, s.y, s.z) == (1.0, 1.0, 1.0) || (node["scale"] = Float64[s.x, s.y, s.z])
-    obj isa _GLTFX_PRIMITIVE_OBJECTS && (node["mesh"] = _gltfx_mesh!(w, obj))
+    if obj isa _GLTFX_PRIMITIVE_OBJECTS
+        node["mesh"] = _gltfx_mesh!(w, obj)
+        obj isa SkinnedMesh && push!(w.skinned, (obj, idx))
+        obj isa InstancedMesh && _gltfx_instancing!(w, node, obj)
+    elseif obj isa AbstractCamera
+        node["camera"] = _gltfx_camera!(w, obj)
+    elseif obj isa AbstractLight
+        node["extensions"] = Dict{String,Any}(
+            "KHR_lights_punctual" => Dict{String,Any}("light" => _gltfx_light!(w, obj)))
+    end
     children = Int[]
     for child in get_children(obj)
         # GLTFExporter's default onlyVisible: hidden objects are left out.
@@ -13033,6 +14323,42 @@ function _gltfx_node!(w::_GLTFExportWriter, obj)
     isempty(children) || (node["children"] = children)
     return idx
 end
+
+# glTF skins of the exported skinned meshes (GLTFExporter.js:2412-2451): the
+# joints are the skeleton's bone nodes and inverseBindMatrices[i] =
+# boneInverse[i] * bindMatrix, so an attached skin poses the same vertices.
+function _gltfx_skins!(w::_GLTFExportWriter)
+    for (sm, node_idx) in w.skinned
+        sm.bind_mode === :attached ||
+            _gltfx_error("detached skinned meshes cannot be exported; glTF skins are attached")
+        joints = Int[]
+        for bone in sm.skeleton.bones
+            j = get(w.node_index, bone, nothing)
+            j === nothing &&
+                _gltfx_error("skeleton bone $(repr(bone.name)) of $(repr(sm.name)) is not exported")
+            push!(joints, j)
+        end
+        isempty(joints) && _gltfx_error("a skinned mesh needs at least one bone")
+        ibm = Float64[]
+        for inverse in sm.skeleton.bind_inverses
+            e = (inverse * sm.bind_matrix).e
+            tol = 1.0e-9 * max(1.0, maximum(abs, e))
+            (abs(e[4]) <= tol && abs(e[8]) <= tol && abs(e[12]) <= tol &&
+             abs(e[16] - 1.0) <= tol) ||
+                _gltfx_error("inverse bind matrices must be affine")
+            # The fourth row is written exactly [0, 0, 0, 1], as glTF requires.
+            append!(ibm, (e[1], e[2], e[3], 0.0, e[5], e[6], e[7], 0.0,
+                          e[9], e[10], e[11], 0.0, e[13], e[14], e[15], 1.0))
+        end
+        push!(w.skins, Dict{String,Any}(
+            "joints" => joints,
+            "inverseBindMatrices" => _gltfx_float_accessor!(w, ibm, 16, "inverse bind matrices")))
+        w.nodes[node_idx + 1]["skin"] = length(w.skins) - 1
+    end
+    return w
+end
+
+# ---- animations ----
 
 function _gltfx_times(times::Vector{Float64})
     for i in 2:length(times)
@@ -13066,6 +14392,85 @@ function _gltfx_check_weights(values, count::Int)
         length(v) == count || _gltfx_error("morph weight keyframes need $count values each")
     end
     return nothing
+end
+
+# Value of a linear or step keyframe sequence at `t`, holding the end values
+# outside the keyframes (three.js LinearInterpolant / DiscreteInterpolant).
+function _gltfx_sample(times::Vector{Float64}, values::Vector, t::Float64, step::Bool)
+    t <= times[1] && return values[1]
+    t >= times[end] && return values[end]
+    j = searchsortedlast(times, t)
+    times[j] == t && return values[j]
+    step && return values[j]
+    a = (t - times[j]) / (times[j + 1] - times[j])
+    return values[j] .* (1 - a) .+ values[j + 1] .* a
+end
+
+# 1-based morph target a scalar `morph_target_influences` track drives.
+function _gltfx_morph_track_index(w::_GLTFExportWriter, track::NumberKeyframeTrack)
+    count = get(w.morph_counts, track.target, 0)
+    count > 0 || _gltfx_error("a morph weights track targets an object without morph targets")
+    k = if isempty(track.morph_name)
+        track.component
+    else
+        names = hasproperty(track.target, :morph_target_names) ? track.target.morph_target_names : String[]
+        something(findfirst(==(track.morph_name), names), 0)
+    end
+    1 <= k <= count ||
+        _gltfx_error("a morph influence track names target $(isempty(track.morph_name) ? k : repr(track.morph_name)), which its object does not have")
+    return k, count
+end
+
+# GLTFExporter.Utils.mergeMorphTargetTracks (GLTFExporter.js:3695-3798): the
+# per-target scalar tracks of one object become one weights track. The first
+# track gives the keyframes (other targets 0) and its interpolation; each
+# later track writes its value at every merged keyframe, then inserts its own
+# keyframes (de-duplicated within 1 ms, GLTFExporter.js:3611-3693) with the
+# merged track's values interpolated there.
+function _gltfx_merge_morph_tracks(w::_GLTFExportWriter, tracks)
+    out = Any[]
+    merged = IdDict{Any,Int}()
+    for track in tracks
+        if !(track isa NumberKeyframeTrack && track.property === :morph_target_influences)
+            push!(out, track)
+            continue
+        end
+        track.interpolation === :cubic &&
+            _gltfx_error("smooth (:cubic) morph influence tracks cannot be exported; glTF has LINEAR, STEP and CUBICSPLINE")
+        k, count = _gltfx_morph_track_index(w, track)
+        _gltfx_times(track.times)
+        step = track.interpolation === :step
+        slot = get(merged, track.target, nothing)
+        if slot === nothing
+            values = [zeros(count) for _ in track.times]
+            for j in eachindex(track.times)
+                values[j][k] = track.values[j]
+            end
+            push!(out, (target=track.target, times=copy(track.times), values=values,
+                        step=step))
+            merged[track.target] = length(out)
+            continue
+        end
+        m = out[slot]
+        for j in eachindex(m.times)
+            m.values[j][k] = _gltfx_sample(track.times, track.values, m.times[j], step)
+        end
+        for j in eachindex(track.times)
+            t = track.times[j]
+            at = findfirst(x -> abs(x - t) < 0.001, m.times)
+            if at === nothing
+                value = copy(_gltfx_sample(m.times, m.values, t, m.step))
+                at = searchsortedfirst(m.times, t)
+                insert!(m.times, at, t)
+                insert!(m.values, at, value)
+            end
+            m.values[at][k] = track.values[j]
+        end
+    end
+    return Any[t isa NamedTuple ?
+               MorphWeightsKeyframeTrack(t.target, :morph_target_influences, t.times, t.values;
+                                         interpolation=t.step ? :step : :linear) : t
+               for t in out]
 end
 
 # glTF animation path, sampler interpolation, output values and their
@@ -13106,6 +14511,8 @@ function _gltfx_track_output(w::_GLTFExportWriter, track)
         _gltfx_check_weights(track.out_tangents, count)
         return "weights", "CUBICSPLINE",
                _gltfx_cubic(track.in_tangents, track.values, track.out_tangents, identity), 1
+    elseif track isa NumberKeyframeTrack
+        _gltfx_error("NumberKeyframeTrack property :$(track.property) cannot be exported; glTF animates translation, rotation, scale and morph weights")
     end
     _gltfx_error("$(nameof(typeof(track))) cannot be exported")
 end
@@ -13116,11 +14523,16 @@ function _gltfx_animation(w::_GLTFExportWriter, clip::AnimationClip)
         _gltfx_error("animation $(repr(clip.name)) is additive, which glTF cannot store")
     samplers = Any[]
     channels = Any[]
-    for track in clip.tracks
+    targeted = Set{Tuple{Int,String}}()
+    for track in _gltfx_merge_morph_tracks(w, clip.tracks)
         node = get(w.node_index, track.target, nothing)
         node === nothing &&
             _gltfx_error("animation $(repr(clip.name)) targets an object that is not exported")
         path, interpolation, output, ncomp = _gltfx_track_output(w, track)
+        # glTF 2.0 §5.5: a node and path are animated by at most one channel.
+        (node, path) in targeted &&
+            _gltfx_error("animation $(repr(clip.name)) animates the $path of one object twice")
+        push!(targeted, (node, path))
         input = _gltfx_float_accessor!(w, _gltfx_times(track.times), 1, "animation input";
                                        minmax=true)
         out = _gltfx_float_accessor!(w, output, ncomp, "animation output")
@@ -13134,6 +14546,8 @@ function _gltfx_animation(w::_GLTFExportWriter, clip::AnimationClip)
     isempty(clip.name) || (anim["name"] = clip.name)
     return anim
 end
+
+# ---- JSON and document ----
 
 function _gltfx_json(io::IO, x::AbstractString)
     isvalid(x) || _gltfx_error("strings must be valid UTF-8")
@@ -13195,8 +14609,8 @@ function _gltfx_base64(bytes::Vector{UInt8})
     return String(out)
 end
 
-function _gltfx_document(root::AbstractObject3D, animations)
-    w = _GLTFExportWriter()
+function _gltfx_document(root::AbstractObject3D, animations; binary::Bool=false)
+    w = _GLTFExportWriter(binary)
     scene = Dict{String,Any}()
     roots = Int[]
     if root isa Scene
@@ -13209,6 +14623,7 @@ function _gltfx_document(root::AbstractObject3D, animations)
         push!(roots, _gltfx_node!(w, root))
     end
     isempty(roots) || (scene["nodes"] = roots)
+    _gltfx_skins!(w)
     anims = Any[_gltfx_animation(w, clip) for clip in animations]
     doc = Dict{String,Any}("asset" => Dict{String,Any}("version" => "2.0",
                                                          "generator" => "Diff3D.jl save_gltf"),
@@ -13216,8 +14631,17 @@ function _gltfx_document(root::AbstractObject3D, animations)
     isempty(w.nodes) || (doc["nodes"] = w.nodes)
     isempty(w.meshes) || (doc["meshes"] = w.meshes)
     isempty(w.materials) || (doc["materials"] = w.materials)
+    isempty(w.textures) || (doc["textures"] = w.textures)
+    isempty(w.images) || (doc["images"] = w.images)
+    isempty(w.samplers) || (doc["samplers"] = w.samplers)
+    isempty(w.cameras) || (doc["cameras"] = w.cameras)
+    isempty(w.skins) || (doc["skins"] = w.skins)
     isempty(anims) || (doc["animations"] = anims)
+    isempty(w.lights) ||
+        (doc["extensions"] = Dict{String,Any}(
+            "KHR_lights_punctual" => Dict{String,Any}("lights" => w.lights)))
     isempty(w.extensions_used) || (doc["extensionsUsed"] = w.extensions_used)
+    isempty(w.extensions_required) || (doc["extensionsRequired"] = w.extensions_required)
     if !isempty(w.bin)
         while length(w.bin) % 4 != 0
             push!(w.bin, 0x00)
@@ -13235,37 +14659,62 @@ end
 Write `object` as a glTF 2.0 file, like three.js `GLTFExporter.parse`. A
 [`Scene`](@ref) gives the glTF scene its visible children as root nodes; any
 other exportable object becomes the only root node. With `binary=true` the file
-is a `.glb` container; otherwise it is JSON with the buffer embedded as a
-base64 data URI. [`load_gltf_asset`](@ref) and [`load_glb_asset`](@ref) read
-the result back (with each mesh node loaded as a `Group` holding its primitive).
+is a `.glb` container (see `save_glb`); otherwise it is JSON with the
+buffer and images embedded as base64 data URIs. [`load_gltf_asset`](@ref) and
+[`load_glb_asset`](@ref) read the result back (with each mesh node loaded as a
+`Group` holding its primitive). Hidden objects are left out, as with
+`GLTFExporter`'s default `onlyVisible`.
 
-Exported: `Group`, `Object3D`, [`Mesh`](@ref), [`LineSegments`](@ref),
-`LineObject`, `LineLoop` and [`PointsObject`](@ref) nodes with their names
-and transforms (hidden objects are left out, as with `GLTFExporter`'s default
-`onlyVisible`); positions, normals (normalised), uvs, `:uv2`, `:tangent`,
-`:color` (for a mesh only when its material uses vertex colours), indices, morph
-targets, morph influences and target names; untextured
-[`MeshStandardMaterial`](@ref), [`MeshBasicMaterial`](@ref) (as
-`KHR_materials_unlit`), Phong, Lambert, line and points materials (colour,
-opacity, alpha mode and cutoff, double side, emissive, with
-`KHR_materials_emissive_strength`); and [`AnimationClip`](@ref)s whose tracks are
-position, scale, rotation and morph-weight keyframes (linear, step or cubic
-spline). Line widths, point sizes and depth flags are not part of glTF and are
+Exported:
+
+- Nodes: `Group`, `Object3D`, [`Bone`](@ref), [`Mesh`](@ref),
+  [`SkinnedMesh`](@ref), [`InstancedMesh`](@ref) (`EXT_mesh_gpu_instancing`,
+  per-instance TRS and non-white colours as `_COLOR_0`), [`LineSegments`](@ref),
+  `LineObject`, `LineLoop`, [`PointsObject`](@ref), perspective and symmetric
+  orthographic cameras (`zoom` folded into `yfov`/`xmag`/`ymag`; glTF's half
+  extents, not GLTFExporter's doubled `xmag`), and directional, point and spot
+  lights (`KHR_lights_punctual`, decay 2). A camera or light aimed through its
+  `target` gets the matching node rotation.
+- Geometry: positions, normals (normalised), uvs, `:uv2`, `:tangent`, `:color`
+  (for a mesh only when its material uses vertex colours), skin joints and
+  weights, indices, morph targets, influences and target names, other
+  attributes as custom `_NAME` attributes (read back by
+  `load_gltf(path; custom_attributes=true)`), and the draw range (as the index
+  list of what the renderers draw). Geometry groups select nothing for a
+  single-material object and are not written (GLTFExporter.js:2117).
+- Materials: [`MeshStandardMaterial`](@ref), [`MeshPhysicalMaterial`](@ref)
+  (`KHR_materials_clearcoat`, `_transmission`, `_volume`, `_ior`, `_specular`,
+  `_sheen` with the sheen strength folded into the colour, `_iridescence`,
+  `_anisotropy`, `_dispersion`), [`MeshBasicMaterial`](@ref)
+  (`KHR_materials_unlit`), Phong, Lambert, line and points materials: colour,
+  opacity, alpha mode and cutoff, double side, emissive with
+  `KHR_materials_emissive_strength`, and their textures as embedded 8-bit PNG
+  images (values in [0, 1]; rows stored top-first for glTF's UV origin) with
+  samplers, texture coordinate sets and `KHR_texture_transform`. Different
+  roughness and metalness maps are merged into one metallic-roughness image.
+- Skins (`inverseBindMatrices = bind_inverse * bind_matrix` of attached
+  skins), and [`AnimationClip`](@ref)s with position, scale, rotation and
+  morph-weight tracks (linear, step or cubic spline); scalar
+  `morph_target_influences` tracks are merged per object as GLTFExporter does.
+
+Anything else raises an `ArgumentError` instead of being dropped: other
+objects and lights, sprites, LODs, toon, normal and shader materials,
+texture slots glTF lacks (alpha, light and environment maps), back-side or
+wireframe materials, `flat_shading=true`, colour textures in linear colour
+space, detached skins, sheared instance matrices, and other track kinds.
+Line widths, point sizes, shadows and depth flags are not part of glTF and are
 not written.
-
-Anything else raises an `ArgumentError` instead of being dropped: cameras,
-lights, skinned and instanced meshes, sprites, textures, physical, toon and
-shader materials, back-side or wireframe materials, geometry groups, draw
-ranges, `flat_shading=true`, custom attributes, and other track kinds.
 """
 function save_gltf(path::AbstractString, object::AbstractObject3D;
                    animations::AbstractVector{AnimationClip}=AnimationClip[],
                    binary::Bool=endswith(lowercase(path), ".glb"))
-    doc, bin = _gltfx_document(object, animations)
+    doc, bin = _gltfx_document(object, animations; binary=binary)
     if binary
         io = IOBuffer()
         _gltfx_json(io, doc)
         json = take!(io)
+        # GLB chunks are 4-byte aligned: JSON pads with spaces, BIN with zeros
+        # (glTF 2.0 §4.4.3.1); _gltfx_document padded the buffer.
         while length(json) % 4 != 0
             push!(json, UInt8(' '))
         end
@@ -13286,3 +14735,15 @@ function save_gltf(path::AbstractString, object::AbstractObject3D;
     end
     return path
 end
+
+"""
+    save_glb(path, object; animations=AnimationClip[])
+
+Write `object` as a binary glTF (`.glb`) container: [`save_gltf`](@ref) with
+`binary=true`, as three.js `GLTFExporter.parse` with `{ binary: true }`. The
+JSON chunk is padded with spaces and the BIN chunk (vertex data and PNG
+images) with zeros to 4-byte boundaries. Returns `path`.
+"""
+save_glb(path::AbstractString, object::AbstractObject3D;
+         animations::AbstractVector{AnimationClip}=AnimationClip[]) =
+    save_gltf(path, object; animations=animations, binary=true)
