@@ -360,7 +360,13 @@ export
     trackball_pointer_move!, trackball_pointer_up!, trackball_pointer_cancel!,
     trackball_wheel!, trackball_key_down!, trackball_key_up!, trackball_update!,
     drag_pointer_down!, drag_pointer_move!, drag_pointer_up!, VertexNormalsHelper,
-    VertexTangentsHelper, RectAreaLightHelper,
+    VertexTangentsHelper, RectAreaLightHelper, ArcballControls, ArcballState,
+    arcball_pointer_down!, arcball_pointer_move!, arcball_pointer_up!,
+    arcball_pointer_cancel!, arcball_wheel!, arcball_animation_frame!,
+    arcball_update!, arcball_set_mouse_action!, arcball_unset_mouse_action!,
+    arcball_save_state!, arcball_reset!, arcball_copy_state, arcball_paste_state!,
+    arcball_set_camera!, arcball_set_tb_radius!, arcball_set_gizmos_visible!,
+    arcball_activate_gizmos!, arcball_dispose_grid!, arcball_resize!,
 
     # Animation mixing
     AnimationActionMixer, AnimationAction, clip_make_additive, mixer_clip_action,
