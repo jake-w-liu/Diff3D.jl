@@ -258,6 +258,11 @@ end
 const _OBJECT_LAYER_STORE = WeakKeyDict{AbstractObject3D, Layers}()
 const _OBJECT_LAYER_LOCK = ReentrantLock()
 const _DEFAULT_OBJECT_LAYER_MASK = UInt32(1)
+# Set, under the lock, before the first entry is stored and never cleared.
+# While it is false every object has the default mask, so the per-object
+# lookups made by each raycast and each render skip the global lock, which
+# would otherwise serialize independent work on different threads.
+const _OBJECT_LAYER_STORE_USED = Threads.Atomic{Bool}(false)
 
 """
 Layers mask attached to `obj`. Scene-graph objects need not carry a `layers`
@@ -267,6 +272,7 @@ function object_layers(obj::AbstractObject3D)
     hasproperty(obj, :layers) && return getfield(obj, :layers)
     lock(_OBJECT_LAYER_LOCK)
     try
+        _OBJECT_LAYER_STORE_USED[] = true
         return get!(_OBJECT_LAYER_STORE, obj) do
             Layers()
         end
@@ -277,6 +283,7 @@ end
 
 function _object_layer_mask(obj::AbstractObject3D)
     hasproperty(obj, :layers) && return getfield(obj, :layers).mask
+    _OBJECT_LAYER_STORE_USED[] || return _DEFAULT_OBJECT_LAYER_MASK
     lock(_OBJECT_LAYER_LOCK)
     try
         layers = get(_OBJECT_LAYER_STORE, obj, nothing)
@@ -1107,13 +1114,29 @@ function _raycast_lines!(hits,rc::Raycaster,obj,geo::BufferGeometry,wm::Mat4,
     return hits
 end
 
+# The camera and material fields are abstractly typed, so the quad is built
+# behind a call that dispatches on both. The world matrix reaches that call through
+# the raycaster's matrix stack: an isbits Mat4 passed through dynamic dispatch
+# would be boxed for every sprite.
 function _raycast_sprite!(hits,rc::Raycaster,obj::Sprite,wm::Mat4)
     camera = rc.camera
     camera === nothing && throw(ArgumentError(
         "Sprite picking requires a camera; call set_from_camera! or pass camera to Raycaster"))
     _validate_sprite_center(obj,"Sprite raycast")
     _validate_material_parameters(obj.material)
-    a,b,c,d = _sprite_quad_corners(obj,obj.material,camera,wm,view_matrix(camera))
+    push!(rc.worlds, convert(Mat4{Float64}, wm))
+    try
+        _raycast_sprite_quad!(hits, rc, obj, obj.material, camera)
+    finally
+        pop!(rc.worlds)
+    end
+    return hits
+end
+
+function _raycast_sprite_quad!(hits, rc::Raycaster, obj::Sprite, material,
+                               camera::AbstractCamera)
+    wm = @inbounds rc.worlds[end]
+    a,b,c,d = _sprite_quad_corners(obj,material,camera,wm,view_matrix(camera))
     origin,direction = rc.ray.origin,rc.ray.direction
     first_hit = _ray_triangle_intersect_unchecked(origin,direction,a,b,c,1e-9,:double)
     second_hit = _ray_triangle_intersect_unchecked(origin,direction,a,c,d,1e-9,:double)
@@ -1231,7 +1254,21 @@ function _raycast_lod!(hits::Vector{Intersection}, rc::Raycaster, lod::LOD,
     isempty(lod.levels) && return hits
     origin = Vec3(wm.e[13], wm.e[14], wm.e[15])
     level = lod_select(lod, min(distance(rc.ray.origin, origin), floatmax(Float64)))
-    return _raycast_object!(hits, rc, level, wm * compute_local_matrix(level))
+    # The level is abstractly typed; its world matrix is computed behind the
+    # dispatch, from the LOD matrix on the stack, so no Mat4 is boxed.
+    push!(rc.worlds, wm)
+    try
+        _raycast_lod_level!(hits, rc, level)
+    finally
+        pop!(rc.worlds)
+    end
+    return hits
+end
+
+function _raycast_lod_level!(hits::Vector{Intersection}, rc::Raycaster,
+                             level::AbstractObject3D)
+    world = @inbounds(rc.worlds[end]) * compute_local_matrix(level)
+    return _raycast_object!(hits, rc, level, world)
 end
 
 _raycast_object!(hits::Vector{Intersection}, rc::Raycaster, obj::AbstractObject3D) =
