@@ -228,27 +228,36 @@ function sg_checksum(image)
     return h
 end
 
-# Checksums of the images before the fix. Julia 1.10 and 1.13 round some of
-# the scene and pixel math differently, so each has its own values; on each
-# version the code before and after the fix gives the same bits. (Recorded on
-# 1.10 and 1.13; the second set is assumed for 1.11 and later.)
-const SG_PINNED = VERSION < v"1.11" ?
+# Checksums of the images before the fix, recorded on Julia 1.10 and 1.13 with
+# the code before and after the fix (identical bits on each version). The two
+# versions differ from each other already before the fix: the Float64
+# `point_segment_distance` calls Base's three-argument `hypot`, which sums the
+# squares with fast-math additions (Base.Math `_hypot` for tuples), so LLVM
+# may reassociate them and the last bit of some distances depends on the
+# compiler version. Other versions have not been recorded and are skipped.
+const SG_PINNED = VERSION.major == 1 && VERSION.minor == 10 ?
     (0x365338aee837936f, 0x27cc03e769899a8a, 0x13f2f7dce59950ce) :
-    (0xb2af542443f4a073, 0xdd962baeea661237, 0xfb0290ada526f99e)
+    VERSION.major == 1 && VERSION.minor == 13 ?
+    (0xb2af542443f4a073, 0xdd962baeea661237, 0xfb0290ada526f99e) : nothing
 
 @testset "Soft images without zero-coverage reference owners are unchanged" begin
     # No pixel of these renders has a pass-1 reference owner with zero
     # coverage, so the fix must leave every bit as it was. This guards the
     # compatibility of the 2.x image model rather than the defect itself, so
     # it also passes on the code before the fix.
-    camera = sg_camera()
-    scene = sg_lit_scene(:sphere)
-    @test sg_checksum(soft_render_scene(scene, camera, 40, 40; sigma=0.5, gamma=0.1)) ==
-          SG_PINNED[1]
-    @test sg_checksum(soft_render_scene(scene, camera, 40, 40; sigma=1e-2, gamma=1e-3)) ==
-          SG_PINNED[2]
-    # The two-triangle scene at σ = 0.3: the near face has non-zero coverage
-    # at every pixel of its box, so it keeps the reference where it is nearest.
-    image = sg_render([SG_FAR, SG_NEAR], [SG_RED, SG_BLUE], 0.3, 1e-4, :logit)
-    @test sg_checksum(image) == SG_PINNED[3]
+    if SG_PINNED === nothing
+        @test_skip "image checksums are recorded for Julia 1.10 and 1.13 only"
+    else
+        camera = sg_camera()
+        scene = sg_lit_scene(:sphere)
+        @test sg_checksum(soft_render_scene(scene, camera, 40, 40; sigma=0.5, gamma=0.1)) ==
+              SG_PINNED[1]
+        @test sg_checksum(soft_render_scene(scene, camera, 40, 40; sigma=1e-2, gamma=1e-3)) ==
+              SG_PINNED[2]
+        # The two-triangle scene at σ = 0.3: the near face has non-zero
+        # coverage at every pixel of its box, so it keeps the reference where
+        # it is nearest.
+        image = sg_render([SG_FAR, SG_NEAR], [SG_RED, SG_BLUE], 0.3, 1e-4, :logit)
+        @test sg_checksum(image) == SG_PINNED[3]
+    end
 end
