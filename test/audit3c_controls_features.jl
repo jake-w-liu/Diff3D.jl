@@ -419,8 +419,8 @@ end
 _c3_vertex(geo, i) = (geo.positions[3i + 1], geo.positions[3i + 2], geo.positions[3i + 3])
 
 @testset "CameraHelper style=:threejs matches three.js CameraHelper" begin
-    # CameraHelper.js:44-104 (line list), 175-260 (update/setPoint with
-    # unproject), 120-172 (setColors). three.js stores Float32 attributes, so
+    # CameraHelper.js:39-165 (line list), 229-313 and 327 (update/setPoint
+    # with unproject), 167-227 (setColors). three.js stores Float32 attributes, so
     # positions agree to ~1e-6 and colours to ~1e-7. 0-based vertex indices.
     cam = PerspectiveCamera(fov=50 * π / 180, aspect=1.5, near=0.5, far=10.0)
     cam.position = Vec3(1.0, 2.0, 3.0)
@@ -470,8 +470,8 @@ _c3_vertex(geo, i) = (geo.positions[3i + 1], geo.positions[3i + 2], geo.position
 end
 
 @testset "PlaneHelper style=:threejs matches three.js PlaneHelper" begin
-    # PlaneHelper.js:36-79: Line strip positions, the filled mesh child, and
-    # updateMatrixWorld (scale, lookAt(normal), translateZ(-constant)).
+    # PlaneHelper.js:28-65 (Line strip positions and the filled mesh child)
+    # and :67-83 (updateMatrixWorld: scale, lookAt(normal), translateZ(-constant)).
     n = normalize(Vec3(1.0, 2.0, -2.0))
     h = PlaneHelper(Plane(n, -1.5), 3; color=Diff3D._helper_hex_color(0x33cc99), style=:threejs)
     line = [-0.3944271909999153,-0.11803398874989512,-2.5652475842498523,1.3944271909999153,2.118033988749895,0.565247584249853,2.288854381999831,-0.11803398874989512,-1.2236067977499787,-1.288854381999831,2.118033988749895,-0.776393202250021,1.3944271909999153,2.118033988749895,0.565247584249853,2.288854381999831,-0.11803398874989512,-1.2236067977499787,-0.3944271909999153,-0.11803398874989512,-2.5652475842498523,-1.288854381999831,2.118033988749895,-0.776393202250021]
@@ -491,8 +491,8 @@ end
 end
 
 @testset "VertexNormalsHelper and VertexTangentsHelper match three.js" begin
-    # VertexNormalsHelper.js:93-131 (normal matrix), VertexTangentsHelper.js:
-    # 84-117 (transformDirection); Float32 buffers in three.js.
+    # VertexNormalsHelper.js:94-144 (normal matrix), VertexTangentsHelper.js:
+    # 78-122 (transformDirection); Float32 buffers in three.js.
     g = BoxGeometry(width=1.0, height=2.0, depth=3.0)
     compute_tangents!(g)
     m = Mesh(g, MeshBasicMaterial())
@@ -523,7 +523,7 @@ end
 end
 
 @testset "RectAreaLightHelper matches three.js RectAreaLightHelper" begin
-    # RectAreaLightHelper.js:31-110 for a light at (2, 3, 1) looking at the
+    # RectAreaLightHelper.js:34-105 for a light at (2, 3, 1) looking at the
     # origin, 4x2, colour 0xff8800 at intensity 3 (normalized to max 1).
     light = RectAreaLight(color=Diff3D._helper_hex_color(0xff8800), intensity=3.0,
                           width=4.0, height=2.0, position=Vec3(2.0, 3.0, 1.0))
@@ -539,4 +539,306 @@ end
     @test all(abs.((c.r, c.g, c.b) .- (1.0, 0.24620132669705552, 0.0)) .<= 1e-10)
     @test Diff3D.RectAreaLightHelper(light; color=Color3(0.0, 1.0, 0.0)).material.color ==
           Color3(0.0, 1.0, 0.0)
+end
+
+# ---- DragControls pointer input ------------------------------------------------
+
+function _c3_drag_scene()
+    scene = Scene()
+    g = Group()
+    g.position = Vec3(0.0, 0.5, 0.0)
+    g.rotation = Euler(0.0, 0.4, 0.1, :XYZ)
+    add!(scene, g)
+    a = Mesh(BoxGeometry(width=1.0, height=1.0, depth=1.0), MeshBasicMaterial())
+    a.position = Vec3(1.0, 0.0, 0.0)
+    a.rotation = Euler(0.2, 0.0, 0.0, :XYZ)
+    add!(g, a)
+    b = Mesh(BoxGeometry(width=1.0, height=1.0, depth=1.0), MeshBasicMaterial())
+    b.position = Vec3(-1.5, 0.0, 0.5)
+    add!(scene, b)
+    cam = PerspectiveCamera(fov=50 * π / 180, aspect=800 / 600, near=0.1, far=100.0)
+    cam.position = Vec3(0.0, 2.0, 6.0)
+    cam.target = Vec3(0.0, 0.0, 0.0)
+    return g, a, b, cam
+end
+
+# Client pixels of box a and box b centres (rounded) in an 800x600 element
+# at (10, 20), and the gesture used for every case below.
+const _C3_SA = (501, 252)
+const _C3_SB = (245, 337)
+
+function _c3_drag_run(n_steps; kw...)
+    g, a, b, cam = _c3_drag_scene()
+    dc = DragControls([g, b], cam; element_left=10, element_top=20,
+                      element_width=800, element_height=600, kw...)
+    sa, sb = _C3_SA, _C3_SB
+    steps = [
+        () -> Diff3D.drag_pointer_down!(dc, sa...),
+        () -> Diff3D.drag_pointer_move!(dc, sa[1] + 40, sa[2] - 25),
+        () -> Diff3D.drag_pointer_move!(dc, sa[1] + 90, sa[2] + 10),
+        () -> Diff3D.drag_pointer_up!(dc),
+        () -> Diff3D.drag_pointer_down!(dc, sb...; button=2),
+        () -> Diff3D.drag_pointer_move!(dc, sb[1] + 30, sb[2] + 20),
+        () -> Diff3D.drag_pointer_move!(dc, sb[1] - 10, sb[2] + 60),
+        () -> Diff3D.drag_pointer_up!(dc),
+        () -> Diff3D.drag_pointer_down!(dc, sb...; pointer_type=:touch),
+        () -> Diff3D.drag_pointer_move!(dc, sb[1] - 50, sb[2] - 30; pointer_type=:touch),
+        () -> Diff3D.drag_pointer_up!(dc),
+        () -> Diff3D.drag_pointer_down!(dc, 5, 5),
+        () -> Diff3D.drag_pointer_move!(dc, 100, 100),
+        () -> Diff3D.drag_pointer_up!(dc),
+    ]
+    states = []
+    for step in steps[1:n_steps]
+        step()
+        push!(states, (a=(a.position, Diff3D._object_quaternion(a)),
+                       b=(b.position, Diff3D._object_quaternion(b)),
+                       g=(g.position, Diff3D._object_quaternion(g))))
+    end
+    return dc, states
+end
+
+# q and -q are the same rotation.
+_c3_q_close(q, e; atol=1e-12) =
+    all(abs.((q.x, q.y, q.z, q.w) .- e) .<= atol) ||
+    all(abs.((-q.x, -q.y, -q.z, -q.w) .- e) .<= atol)
+
+@testset "DragControls pointer input follows three.js r186" begin
+    # Oracle: three.js r186 DragControls (DragControls.js onPointerMove :239,
+    # onPointerDown :329, onPointerCancel :388, findGroup :414) driven in node
+    # with the same scene, camera and events.
+    _, base = _c3_drag_run(14)
+    # Left button pans box a (a child of the rotated group) on the
+    # camera-facing plane through its world position.
+    @test _c3_close(base[3].a[1], (1.8116952350646645, -0.1778075150580951, 0.3836707227103337))
+    # Right button rotates box b about the camera's up and right axes.
+    @test _c3_q_close(base[7].b[2], (0.09970099919673374, -0.011353615044300772, 0.005970415708727675, 0.9949347517907211))
+    @test _c3_close(base[7].b[1], (-1.5, 0.0, 0.5))
+    # A touch uses touches.one (pan).
+    @test _c3_close(base[10].b[1], (-1.9546665727959376, 0.25880075027602323, 0.4137330832413255))
+    # A press that hits nothing moves nothing.
+    @test _c3_close(base[14].a[1], (1.8116952350646645, -0.1778075150580951, 0.3836707227103337))
+    @test _c3_close(base[14].b[1], (-1.9546665727959376, 0.25880075027602323, 0.4137330832413255))
+
+    dc, fast = _c3_drag_run(14; rotate_speed=2.5, mouse_buttons=(left=:rotate, middle=:pan, right=:pan))
+    @test _c3_q_close(fast[3].a[2], (0.13173236768700622, 0.2664958618775835, -0.0720788915873184, 0.9520667898279211))
+    @test _c3_close(fast[7].b[1], (-1.5909333145591897, -0.5176015005520518, 0.6725338335173507))
+    @test _c3_close(fast[10].b[1], (-2.0455998873551273, -0.25880075027602856, 0.5862669167586763))
+    @test dc.selected === nothing && dc.state === :none
+
+    # transform_group drags the outermost Group above the hit mesh.
+    _, group = _c3_drag_run(3; transform_group=true)
+    @test _c3_close(group[3].g[1], (0.8626376597371577, 0.40907000665977344, 0.03030999778007626))
+    @test _c3_close(group[3].a[1], (1.0, 0.0, 0.0))
+
+    # Hover, disabled controls, missing element size and bad options.
+    g, a, b, cam = _c3_drag_scene()
+    dc = DragControls([g, b], cam; element_left=10, element_top=20,
+                      element_width=800, element_height=600)
+    Diff3D.drag_pointer_move!(dc, _C3_SB...)
+    @test dc.hovered === b
+    Diff3D.drag_pointer_move!(dc, 5, 5)
+    @test dc.hovered === nothing
+    dc.enabled = false
+    Diff3D.drag_pointer_down!(dc, _C3_SB...)
+    @test dc.selected === nothing
+    # A Group-less hit with transform_group selects nothing (three.js throws).
+    dc = DragControls([g, b], cam; transform_group=true, element_left=10,
+                      element_top=20, element_width=800, element_height=600)
+    Diff3D.drag_pointer_down!(dc, _C3_SB...)
+    @test dc.selected === nothing
+    @test_throws ArgumentError Diff3D.drag_pointer_down!(DragControls([b], cam), 1, 1)
+    @test_throws ArgumentError DragControls([b], cam; mouse_buttons=(left=:dolly, middle=:pan, right=:pan))
+    @test_throws ArgumentError Diff3D.drag_pointer_down!(dc, 1, 1; pointer_type=:stylus)
+    # The programmatic API and its defaults are unchanged.
+    dc = DragControls([b], cam)
+    @test dc.rotate_speed == 1.0 && dc.mouse_buttons == (left=:pan, middle=:pan, right=:rotate)
+    drag_start!(dc, b)
+    drag_move!(dc, Vec3(0.5, 0.0, 0.0))
+    @test _c3_close(b.position, (-1.0, 0.0, 0.5))
+end
+
+# ---- TrackballControls pointer, wheel and key input ---------------------------
+
+_C3P(x, y) = (x, y)
+# Event scripts replayed against three.js r186 TrackballControls in node (DOM
+# listener attachment emulated: keydown is detached after the first key until
+# keyup, pointermove/pointerup are attached only while a pointer is down).
+# Every step is followed by `u` (default 1) update() calls.
+const _C3_TB_MOUSE = [
+    (pd=_C3P(400, 300),), (pm=_C3P(430, 290),), (pm=_C3P(470, 260),), (u=3,), (pu=_C3P(470, 260),), (u=4,),
+    (pd=_C3P(300, 300), b=1), (pm=_C3P(300, 340),), (pm=_C3P(300, 330), u=2), (pu=_C3P(300, 330),), (u=3,),
+    (pd=_C3P(500, 200), b=2), (pm=_C3P(540, 230),), (pm=_C3P(600, 180), u=2), (pu=_C3P(600, 180),), (u=3,),
+    (w=120,), (w=-300, mode=1), (w=2, mode=2), (u=2,),
+    (kd="KeyS",), (pd=_C3P(200, 400),), (pm=_C3P(200, 380),), (pu=_C3P(200, 380),), (ku=true,),
+    (kd="KeyQ",), (kd="KeyD",), (pd=_C3P(200, 400),), (pm=_C3P(260, 380),), (pu=_C3P(260, 380),), (ku=true,),
+    (kd="KeyD",), (pd=_C3P(200, 400), b=1), (pm=_C3P(240, 350),), (pu=_C3P(240, 350),), (ku=true,), (u=3,),
+    (pd=_C3P(100, 100), b=3), (pm=_C3P(150, 150),), (pu=_C3P(150, 150),),
+]
+const _C3_TB_TOUCH = [
+    (pd=_C3P(400, 300), t=:touch, id=5), (pm=_C3P(420, 310), t=:touch, id=5), (pm=_C3P(450, 330), t=:touch, id=5),
+    (pd=_C3P(500, 300), t=:touch, id=7), (pm=_C3P(520, 290), t=:touch, id=7), (pm=_C3P(430, 340), t=:touch, id=5),
+    (pm=_C3P(560, 250), t=:touch, id=7, u=2),
+    (pu=_C3P(560, 250), t=:touch, id=7), (pm=_C3P(440, 360), t=:touch, id=5), (pm=_C3P(460, 380), t=:touch, id=5),
+    (pu=_C3P(460, 380), t=:touch, id=5), (u=3,),
+    (pd=_C3P(300, 200), t=:touch, id=8), (pd=_C3P(350, 260), t=:touch, id=9), (pm=_C3P(310, 180), t=:touch, id=8),
+    (pc=true, id=9), (pm=_C3P(330, 170), t=:touch, id=8), (pu=_C3P(330, 170), t=:touch, id=8),
+]
+const _C3_TB_ORTHO = [
+    (pd=_C3P(300, 300), b=1), (pm=_C3P(300, 360),), (u=2,), (pu=_C3P(300, 360),), (u=2,),
+    (w=-400,), (u=2,), (w=3000,), (u=3,),
+    (pd=_C3P(500, 200), b=2), (pm=_C3P(560, 260),), (pu=_C3P(560, 260),), (u=2,),
+    (pd=_C3P(400, 300),), (pm=_C3P(430, 280),), (pu=_C3P(430, 280),), (u=2,),
+    (pd=_C3P(400, 300), t=:touch, id=1), (pd=_C3P(500, 300), t=:touch, id=2), (pm=_C3P(600, 300), t=:touch, id=2),
+    (pu=_C3P(600, 300), t=:touch, id=2), (pu=_C3P(400, 300), t=:touch, id=1),
+]
+
+# Camera at (1, 2, 5), up +y, target (0.5, 0, -0.5); element 800x600 at (10, 20).
+function _c3_tb_run(kind, steps; kw...)
+    cam = kind === :ortho ?
+        OrthographicCamera(left=-4.0, right=4.0, top=3.0, bottom=-3.0, near=0.1, far=100.0) :
+        PerspectiveCamera(fov=50 * π / 180, aspect=800 / 600, near=0.1, far=100.0)
+    kind === :ortho && (cam.zoom = 1.5)
+    cam.position = Vec3(1.0, 2.0, 5.0)
+    cam.up = Vec3(0.0, 1.0, 0.0)
+    cam.target = Vec3(0.0, 0.0, 0.0)
+    tc = TrackballControls(cam, Vec3(0.5, 0.0, -0.5); element_left=10, element_top=20,
+                           element_width=800, element_height=600, kw...)
+    Diff3D.trackball_update!(tc)
+    states = []
+    for s in steps
+        t = get(s, :t, :mouse)
+        id = get(s, :id, 1)
+        haskey(s, :pd) && Diff3D.trackball_pointer_down!(tc, s.pd...; button=get(s, :b, 0),
+                                                        pointer_type=t, pointer_id=id)
+        haskey(s, :pm) && Diff3D.trackball_pointer_move!(tc, s.pm...; pointer_type=t, pointer_id=id)
+        haskey(s, :pu) && Diff3D.trackball_pointer_up!(tc, s.pu...; pointer_type=t, pointer_id=id)
+        haskey(s, :pc) && Diff3D.trackball_pointer_cancel!(tc; pointer_id=id)
+        haskey(s, :w) && Diff3D.trackball_wheel!(tc, s.w; delta_mode=get(s, :mode, 0))
+        haskey(s, :kd) && Diff3D.trackball_key_down!(tc, s.kd)
+        haskey(s, :ku) && Diff3D.trackball_key_up!(tc)
+        for _ in 1:get(s, :u, 1)
+            Diff3D.trackball_update!(tc)
+        end
+        push!(states, (p=cam.position, up=cam.up, t=tc.target,
+                       z=kind === :ortho ? cam.zoom : 1.0))
+    end
+    return tc, states
+end
+
+# three.js r186 camera.position, camera.up, controls.target and camera.zoom
+# after the given (1-based) step.
+const _C3_TB_EXPECTED = Dict(
+"mouse" => Dict(
+        4 => (p=(-1.3857608031390185, 0.3205228114497825, 5.053482809974729),
+              up=(-0.17365358636608802, 0.953552816037086, 0.24613301072781588),
+              t=(0.5, 0, -0.5), z=1),
+        6 => (p=(-2.6574067652856175, -0.9061768217949803, 4.36925313432873),
+              up=(-0.32340801393113927, 0.8736098902065011, 0.36361107829451667),
+              t=(0.5, 0, -0.5), z=1),
+        11 => (p=(-4.487260677374847, -2.3002422397589934, 4.52389496900098),
+              up=(-0.4527664744153672, 0.7885912325925045, 0.41608459178839263),
+              t=(0.5, 0, -0.5), z=1),
+        16 => (p=(-5.660498039017303, -3.0711140974149385, 3.2439570173053442),
+              up=(-0.5063983478389779, 0.7495721126612254, 0.42626559939378267),
+              t=(-0.10069200187249458, -0.2045387451604216, -1.428819264960976), z=1),
+        20 => (p=(-6.0686315383625935, -3.381004020473611, 2.9964500795561646),
+              up=(-0.522238322829335, 0.7376285661324385, 0.42798508454595274),
+              t=(-0.20889239220165776, -0.2720728864170313, -1.659147799686572), z=1),
+        31 => (p=(-6.160691572220307, -3.476292624800396, -0.6578232865834786),
+              up=(-0.6790105035995612, 0.6513850817078457, 0.33858855758860745),
+              t=(-0.25013519832030007, -0.2980689460558435, -1.757938804319618), z=1),
+        40 => (p=(-4.4890380706732875, -3.1279172269918276, -5.987482807207837),
+              up=(-0.8113081932670874, 0.5826446727382841, 0.048002092323067715),
+              t=(0.36509103381890295, -0.552935470871908, -2.267983632779539), z=1)),
+"static" => Dict(
+        40 => (p=(-3.2567562766752323, -0.3283241221006347, 4.619481734508131),
+              up=(-0.26554768695148173, 0.9378381867272905, 0.22348145665979827),
+              t=(0.08266730949633488, -0.3995119727736486, -0.7547176401630314), z=1)),
+"limits" => Dict(
+        40 => (p=(-3.532041505051759, -1.4787767978756179, 0.8438230849351736),
+              up=(-0.5738695808831309, 0.7733660705833241, 0.26940420376736657),
+              t=(0.5, 0, -0.5), z=1)),
+"norot" => Dict(
+        40 => (p=(-0.39618977113170184, 0.9349691500173041, 5.126926342830155),
+              up=(0, 1, 0),
+              t=(-0.8961897711317018, -1.065030849982696, -0.37307365716984536), z=1)),
+"touch" => Dict(
+        7 => (p=(-0.9000641010892956, 1.9642999591116812, 2.3835311552200737),
+              up=(-0.10871372482295023, 0.9614148298361325, -0.2527110029386925),
+              t=(0.28296185570036597, 0.012045407668837434, -0.5471943099050047), z=1),
+        12 => (p=(-1.8597579398628308, 2.3888563459567234, 1.3379854006432188),
+              up=(-0.0761833762797009, 0.8544278142777073, -0.5139544759677113),
+              t=(0.1784723225246393, -0.0593373077850882, -0.5730261721281841), z=1),
+        18 => (p=(-2.2310906102665213, 1.5943899870846052, 0.8143157684579292),
+              up=(-0.17686040121451424, 0.8276670848318958, -0.5326233145179734),
+              t=(0.16418299456837593, -0.11038822340153849, -0.5564123632417526), z=1)),
+"roll" => Dict(
+        18 => (p=(-1.858432778249185, 2.185192525628554, 0.6304089084038681),
+              up=(-0.2548883817689508, 0.6608208171862253, -0.7059375046082578),
+              t=(0.1453476453597975, -0.04202510841498549, -0.6133216189077776), z=1)),
+"ortho" => Dict(
+        9 => (p=(1, 2, 5),
+              up=(0, 1, 0),
+              t=(0.5, 0, -0.5), z=0.17672143629384987),
+        22 => (p=(-1.6965495072371777, 0.2887720842226802, 4.987273110288184),
+              up=(-0.1863577316045233, 0.9478288756438301, 0.25863336669302506),
+              t=(0.37784044552966817, 0.08497527852081616, -0.5041177140700379), z=0.08006827300736569)),
+"ortho_lim" => Dict(
+        22 => (p=(0.558918869462341, 1.7289364756843943, 5.11356423398924),
+              up=(-0.023330685331405632, 0.9985169005437612, 0.04919022718434473),
+              t=(0.49844454053832987, 0.0010901839953827727, -0.49989192490589607), z=2.4)),
+)
+
+const _C3_TB_CASES = [
+    ("mouse", :persp, _C3_TB_MOUSE, (;)),
+    ("static", :persp, _C3_TB_MOUSE, (static_moving=true, rotate_speed=2, zoom_speed=0.8, pan_speed=0.5)),
+    ("limits", :persp, _C3_TB_MOUSE, (min_distance=4.5, max_distance=6, dynamic_damping_factor=0.35, no_pan=true)),
+    ("norot", :persp, _C3_TB_MOUSE, (no_rotate=true, no_zoom=true, keys=("KeyR", "KeyZ", "KeyP"),
+                                     mouse_buttons=(left=:pan, middle=:rotate, right=:dolly))),
+    ("touch", :persp, _C3_TB_TOUCH, (;)),
+    ("roll", :persp, _C3_TB_TOUCH, (multi_touch_roll=true, roll_speed=1.5)),
+    ("ortho", :ortho, _C3_TB_ORTHO, (;)),
+    ("ortho_lim", :ortho, _C3_TB_ORTHO, (min_zoom=1.2, max_zoom=2.5, static_moving=true)),
+]
+
+@testset "TrackballControls pointer, wheel and keyboard input follow three.js r186" begin
+    # TrackballControls.js update :347, _panCamera :448, _rotateCamera :486,
+    # _rollCamera :529, _getTouchRollAngle :554, _zoomCamera :599,
+    # _checkDistances :738, event handlers :762-1104.
+    for (name, kind, steps, kw) in _C3_TB_CASES
+        _, states = _c3_tb_run(kind, steps; kw...)
+        for (i, e) in _C3_TB_EXPECTED[name]
+            s = states[i]
+            @test _c3_close(s.p, e.p; atol=1e-12)
+            @test _c3_close(s.up, e.up; atol=1e-12)
+            @test _c3_close(s.t, e.t; atol=1e-12)
+            @test abs(s.z - e.z) <= 1e-12
+        end
+    end
+    # Disabled controls ignore input but update() still applies inertia.
+    tc, _ = _c3_tb_run(:persp, _C3_TB_MOUSE[1:3])
+    tc.enabled = false
+    before = tc.camera.position
+    Diff3D.trackball_pointer_down!(tc, 100, 100)
+    @test length(tc.pointers) == 1  # only the drag from step 1
+    Diff3D.trackball_update!(tc)
+    @test tc.camera.position != before
+    # Validation and the unchanged direct API.
+    cam = PerspectiveCamera()
+    @test_throws ArgumentError Diff3D.trackball_pointer_down!(TrackballControls(cam), 1, 1)
+    @test_throws ArgumentError TrackballControls(cam; dynamic_damping_factor=1.5)
+    @test_throws ArgumentError TrackballControls(cam; min_zoom=2, max_zoom=1)
+    @test_throws ArgumentError TrackballControls(cam; mouse_buttons=(left=:spin, middle=:dolly, right=:pan))
+    tc = TrackballControls(cam)
+    @test tc.rotate_speed == 1.0 && tc.zoom_speed == 1.2 && tc.pan_speed == 0.3
+    @test tc.dynamic_damping_factor == 0.2 && tc.keys == ("KeyA", "KeyS", "KeyD")
+    # trackball_zoom! on an orthographic camera changes zoom, clamped.
+    ortho = OrthographicCamera()
+    ortho.position = Vec3(0.0, 0.0, 5.0)
+    tco = TrackballControls(ortho; max_zoom=3.0)
+    trackball_zoom!(tco, 0.5)
+    @test ortho.zoom == 2.0 && ortho.position == Vec3(0.0, 0.0, 5.0)
+    trackball_zoom!(tco, 0.5)
+    @test ortho.zoom == 3.0
 end

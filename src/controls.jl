@@ -1401,7 +1401,7 @@ end
 
 # TrackballControls: free rotation about the target via screen-space deltas.
 mutable struct TrackballControls
-    camera::PerspectiveCamera
+    camera::_OrbitCamera
     target::Vec3{Float64}
     enabled::Bool
     position0::Vec3{Float64}
@@ -1411,7 +1411,63 @@ mutable struct TrackballControls
     # and pan keeps the camera-to-target distance inside this range.
     min_distance::Float64
     max_distance::Float64
+    # three.js TrackballControls options and pointer/key/wheel input state
+    # (see trackball_update!).
+    rotate_speed::Float64
+    zoom_speed::Float64
+    pan_speed::Float64
+    roll_speed::Float64
+    no_rotate::Bool
+    no_zoom::Bool
+    no_pan::Bool
+    multi_touch_roll::Bool
+    static_moving::Bool
+    dynamic_damping_factor::Float64
+    min_zoom::Float64
+    max_zoom::Float64
+    keys::NTuple{3, String}
+    mouse_buttons::NamedTuple{(:left, :middle, :right), NTuple{3, Symbol}}
+    element_left::Float64
+    element_top::Float64
+    element_width::Float64
+    element_height::Float64
+    state::Symbol
+    key_state::Symbol
+    key_listening::Bool
+    move_prev::NTuple{2, Float64}
+    move_curr::NTuple{2, Float64}
+    zoom_start::NTuple{2, Float64}
+    zoom_end::NTuple{2, Float64}
+    pan_start::NTuple{2, Float64}
+    pan_end::NTuple{2, Float64}
+    last_axis::Vec3{Float64}
+    last_angle::Float64
+    last_roll_angle::Float64
+    touch_zoom_distance_start::Float64
+    touch_zoom_distance_end::Float64
+    touch_roll_angle::Float64
+    touch_roll_pointer_ids::Union{Nothing, NTuple{2, Int}}
+    pointers::Vector{Int}
+    pointer_types::Vector{Symbol}
+    pointer_down_positions::Vector{NTuple{2, Float64}}
+    pointer_positions::Dict{Int, NTuple{2, Float64}}
 end
+
+const _TRACKBALL_DEFAULT_KEYS = ("KeyA", "KeyS", "KeyD")
+const _TRACKBALL_DEFAULT_MOUSE_BUTTONS = (left=:rotate, middle=:dolly, right=:pan)
+
+TrackballControls(camera::_OrbitCamera, target::Vec3{Float64}, enabled::Bool,
+                  position0::Vec3{Float64}, target0::Vec3{Float64},
+                  up0::Vec3{Float64}, min_distance::Real, max_distance::Real) =
+    TrackballControls(camera, target, enabled, position0, target0, up0,
+                      Float64(min_distance), Float64(max_distance),
+                      1.0, 1.2, 0.3, 1.0, false, false, false, false, false,
+                      0.2, 0.0, Inf, _TRACKBALL_DEFAULT_KEYS,
+                      _TRACKBALL_DEFAULT_MOUSE_BUTTONS, 0.0, 0.0, 0.0, 0.0,
+                      :none, :none, true, (0.0, 0.0), (0.0, 0.0), (0.0, 0.0),
+                      (0.0, 0.0), (0.0, 0.0), (0.0, 0.0), Vec3(), 0.0, 0.0,
+                      0.0, 0.0, 0.0, nothing, Int[], Symbol[],
+                      NTuple{2, Float64}[], Dict{Int, NTuple{2, Float64}}())
 
 TrackballControls(camera::PerspectiveCamera, target::Vec3{Float64},
                   enabled::Bool, position0::Vec3{Float64},
@@ -1421,25 +1477,93 @@ TrackballControls(camera::PerspectiveCamera, target::Vec3{Float64},
 
 """
     TrackballControls(camera[, target]; enabled=true, min_distance=0.0,
-                      max_distance=Inf)
+                      max_distance=Inf, rotate_speed=1.0, zoom_speed=1.2,
+                      pan_speed=0.3, roll_speed=1.0, no_rotate=false,
+                      no_zoom=false, no_pan=false, multi_touch_roll=false,
+                      static_moving=false, dynamic_damping_factor=0.2,
+                      min_zoom=0.0, max_zoom=Inf, keys=("KeyA", "KeyS", "KeyD"),
+                      mouse_buttons=(left=:rotate, middle=:dolly, right=:pan),
+                      element_left=0.0, element_top=0.0, element_width=0.0,
+                      element_height=0.0)
 
-Trackball camera manipulator (three.js `TrackballControls`). `min_distance`
-and `max_distance` bound the camera-to-target distance after every
-`trackball_rotate!`, `trackball_zoom!`, and `trackball_pan!`, like three.js
-`minDistance`/`maxDistance`.
+Trackball camera manipulator (three.js `TrackballControls`) for a perspective
+or orthographic camera. `min_distance` and `max_distance` bound the
+camera-to-target distance after every `trackball_rotate!`, `trackball_zoom!`,
+and `trackball_pan!`, like three.js `minDistance`/`maxDistance`.
+
+The remaining keywords are the three.js r186 options used by the
+event-driven API ([`trackball_pointer_down!`](@ref),
+[`trackball_pointer_move!`](@ref), [`trackball_pointer_up!`](@ref),
+[`trackball_pointer_cancel!`](@ref), [`trackball_wheel!`](@ref),
+[`trackball_key_down!`](@ref), [`trackball_key_up!`](@ref) and
+[`trackball_update!`](@ref)): per-gesture speeds, `no_rotate`/`no_zoom`/
+`no_pan` switches, two-finger roll, `static_moving` (no inertia) or the
+`dynamic_damping_factor` inertia, orthographic `min_zoom`/`max_zoom`, the
+`keys` (`KeyboardEvent.code` values) that turn any button into rotate, zoom or
+pan, the `mouse_buttons` actions (`:rotate`, `:dolly`, `:pan` or `:none`), and
+the element rectangle in client pixels (three.js `screen`; width and height
+must be positive for pointer input).
 """
-function TrackballControls(cam::PerspectiveCamera, target::Vec3{Float64}=_camera_control_target(cam);
+function TrackballControls(cam::_OrbitCamera, target::Vec3{Float64}=_camera_control_target(cam);
                            enabled::Bool=true, min_distance::Real=0.0,
-                           max_distance::Real=Inf)
+                           max_distance::Real=Inf, rotate_speed::Real=1.0,
+                           zoom_speed::Real=1.2, pan_speed::Real=0.3,
+                           roll_speed::Real=1.0, no_rotate::Bool=false,
+                           no_zoom::Bool=false, no_pan::Bool=false,
+                           multi_touch_roll::Bool=false, static_moving::Bool=false,
+                           dynamic_damping_factor::Real=0.2, min_zoom::Real=0.0,
+                           max_zoom::Real=Inf,
+                           keys::NTuple{3, AbstractString}=_TRACKBALL_DEFAULT_KEYS,
+                           mouse_buttons::NamedTuple=_TRACKBALL_DEFAULT_MOUSE_BUTTONS,
+                           element_left::Real=0.0, element_top::Real=0.0,
+                           element_width::Real=0.0, element_height::Real=0.0)
     _prepare_camera_control_up!(cam)
-    _validated_camera_view_vectors(cam, :PerspectiveCamera)
+    _validated_camera_view_vectors(cam, nameof(typeof(cam)))
     checked_target = _checked_control_vec3(
         target, "TrackballControls target")
     minimum_distance, maximum_distance =
         _checked_orbit_distances(min_distance, max_distance)
-    TrackballControls(cam, checked_target, enabled, cam.position,
-                      checked_target, cam.up, minimum_distance,
-                      maximum_distance)
+    tc = TrackballControls(cam, checked_target, enabled, cam.position,
+                           checked_target, cam.up, minimum_distance,
+                           maximum_distance)
+    tc.rotate_speed = _checked_control_scalar(rotate_speed, "TrackballControls rotate_speed")
+    tc.zoom_speed = _checked_control_scalar(zoom_speed, "TrackballControls zoom_speed")
+    tc.pan_speed = _checked_control_scalar(pan_speed, "TrackballControls pan_speed")
+    tc.roll_speed = _checked_control_scalar(roll_speed, "TrackballControls roll_speed")
+    tc.no_rotate = no_rotate
+    tc.no_zoom = no_zoom
+    tc.no_pan = no_pan
+    tc.multi_touch_roll = multi_touch_roll
+    tc.static_moving = static_moving
+    tc.dynamic_damping_factor = _checked_damping_factor(
+        dynamic_damping_factor, "TrackballControls dynamic_damping_factor")
+    tc.min_zoom, tc.max_zoom = _checked_trackball_zoom_range(min_zoom, max_zoom)
+    tc.keys = (String(keys[1]), String(keys[2]), String(keys[3]))
+    tc.mouse_buttons = _checked_trackball_mouse_buttons(mouse_buttons)
+    tc.element_left = _checked_control_scalar(element_left, "TrackballControls element_left")
+    tc.element_top = _checked_control_scalar(element_top, "TrackballControls element_top")
+    tc.element_width = _checked_control_scalar(element_width, "TrackballControls element_width")
+    tc.element_height = _checked_control_scalar(element_height, "TrackballControls element_height")
+    return tc
+end
+
+function _checked_trackball_zoom_range(min_zoom, max_zoom)
+    lo = Float64(min_zoom)
+    hi = Float64(max_zoom)
+    (!isnan(lo) && !isnan(hi) && lo >= 0.0 && lo <= hi && isfinite(lo)) ||
+        throw(ArgumentError("TrackballControls needs 0 <= min_zoom <= max_zoom"))
+    return lo, hi
+end
+
+function _checked_trackball_mouse_buttons(buttons::NamedTuple)
+    keys(buttons) == (:left, :middle, :right) || throw(ArgumentError(
+        "TrackballControls mouse_buttons must be a NamedTuple (left=, middle=, right=)"))
+    for action in buttons
+        action isa Symbol && action in (:rotate, :dolly, :pan, :none) ||
+            throw(ArgumentError(
+                "TrackballControls mouse_buttons actions must be :rotate, :dolly, :pan or :none"))
+    end
+    return (left=buttons.left, middle=buttons.middle, right=buttons.right)
 end
 
 """Save the current camera position, up vector, and target as the reset state."""
@@ -1533,14 +1657,20 @@ end
 """
 Scale the camera distance from the trackball target. `factor < 1` zooms in.
 A factor that is not positive leaves the distance unchanged, as three.js
-`TrackballControls` ignores such zoom steps.
+`TrackballControls` ignores such zoom steps. An orthographic camera keeps its
+distance and divides its `zoom` by `factor` instead, clamped to
+`min_zoom`..`max_zoom` (TrackballControls.js `_zoomCamera`).
 """
 function trackball_zoom!(tc::TrackballControls, factor)
     tc.enabled || return tc
-    _validated_camera_view_vectors(tc.camera, :PerspectiveCamera)
+    _validated_camera_view_vectors(tc.camera, nameof(typeof(tc.camera)))
     _checked_control_vec3(tc.target, "TrackballControls target")
     checked_factor = _checked_control_scalar(
         factor, "TrackballControls zoom factor")
+    if tc.camera isa OrthographicCamera
+        checked_factor > 0.0 && _trackball_set_zoom!(tc, tc.camera.zoom / checked_factor)
+        return tc
+    end
     eye = tc.camera.position - tc.target
     # TrackballControls.js:632 only scales the eye when `factor > 0`.
     scaled = checked_factor > 0.0 ? eye * checked_factor : eye
@@ -1567,6 +1697,456 @@ function trackball_pan!(tc::TrackballControls, dx, dy)
     tc.camera.position = position
     tc.camera.target = target
     _sync_camera_rotation_from_view!(tc.camera)
+    return tc
+end
+
+# ---- TrackballControls pointer, wheel and key input (three.js r186) --------
+
+# MathUtils.clamp(zoom, minZoom, maxZoom) applied to an orthographic camera.
+function _trackball_set_zoom!(tc::TrackballControls, zoom::Float64)
+    min_zoom, max_zoom = _checked_trackball_zoom_range(tc.min_zoom, tc.max_zoom)
+    zoom = max(min_zoom, min(max_zoom, zoom))
+    (isfinite(zoom) && zoom > 0.0) || throw(ArgumentError(
+        "TrackballControls orthographic zoom must stay finite and positive"))
+    tc.camera.zoom = zoom
+    return tc
+end
+
+function _validate_trackball_input(tc::TrackballControls)
+    _checked_control_scalar(tc.element_left, "TrackballControls element_left")
+    _checked_control_scalar(tc.element_top, "TrackballControls element_top")
+    width = _checked_control_scalar(tc.element_width, "TrackballControls element_width")
+    height = _checked_control_scalar(tc.element_height, "TrackballControls element_height")
+    (width > 0.0 && height > 0.0) || throw(ArgumentError(
+        "TrackballControls pointer input needs a positive element_width and element_height"))
+    _checked_trackball_mouse_buttons(tc.mouse_buttons)
+    return tc
+end
+
+@inline _trackball_point(x, y, label::String) =
+    (_checked_control_scalar(x, "$label x"), _checked_control_scalar(y, "$label y"))
+
+# TrackballControls._getMouseOnScreen.
+_trackball_on_screen(tc::TrackballControls, x::Float64, y::Float64) =
+    ((x - tc.element_left) / tc.element_width, (y - tc.element_top) / tc.element_height)
+
+# TrackballControls._getMouseOnCircle ("screen.width intentional" for y).
+_trackball_on_circle(tc::TrackballControls, x::Float64, y::Float64) =
+    ((x - tc.element_width * 0.5 - tc.element_left) / (tc.element_width * 0.5),
+     (tc.element_height + 2 * (tc.element_top - y)) / tc.element_width)
+
+@inline _trackball_effective_state(tc::TrackballControls) =
+    tc.key_state === :none ? tc.state : tc.key_state
+
+"""
+    trackball_pointer_down!(controls::TrackballControls, x, y; button=0,
+                            pointer_type=:mouse, pointer_id=1)
+
+three.js `TrackballControls` `pointerdown` at client pixel `(x, y)`. A mouse
+or pen button (0 left, 1 middle, 2 right) starts the `mouse_buttons` action,
+or the action of a held key (see [`trackball_key_down!`](@ref)); one touch
+rotates and two touches zoom and pan (and roll with `multi_touch_roll`). The
+camera moves on the next [`trackball_update!`](@ref).
+"""
+function trackball_pointer_down!(tc::TrackballControls, x, y; button::Integer=0,
+                                 pointer_type::Symbol=:mouse, pointer_id::Integer=1)
+    tc.enabled || return tc
+    _checked_pointer_type(pointer_type)
+    _validate_trackball_input(tc)
+    px, py = _trackball_point(x, y, "TrackballControls pointer")
+    push!(tc.pointers, Int(pointer_id))
+    push!(tc.pointer_types, pointer_type)
+    push!(tc.pointer_down_positions, (px, py))
+    if pointer_type === :touch
+        tc.pointer_positions[Int(pointer_id)] = (px, py)
+        if length(tc.pointers) == 1
+            tc.state = :touch_rotate
+            tc.move_curr = _trackball_on_circle(tc, tc.pointer_down_positions[1]...)
+            tc.move_prev = tc.move_curr
+        else
+            # The first two pointers' pointerdown positions, as three.js
+            # reads them from the stored events.
+            (x0, y0), (x1, y1) = tc.pointer_down_positions[1], tc.pointer_down_positions[2]
+            distance = sqrt((x0 - x1)^2 + (y0 - y1)^2)
+            tc.state = :touch_zoom_pan
+            tc.touch_zoom_distance_start = distance
+            tc.touch_zoom_distance_end = distance
+            tc.pan_start = _trackball_on_screen(tc, (x0 + x1) / 2, (y0 + y1) / 2)
+            tc.pan_end = tc.pan_start
+        end
+        return tc
+    end
+    action = button == 0 ? tc.mouse_buttons.left :
+             button == 1 ? tc.mouse_buttons.middle :
+             button == 2 ? tc.mouse_buttons.right : :none
+    tc.state = action === :dolly ? :zoom : action === :rotate ? :rotate :
+               action === :pan ? :pan : :none
+    state = _trackball_effective_state(tc)
+    if state === :rotate && !tc.no_rotate
+        tc.move_curr = _trackball_on_circle(tc, px, py)
+        tc.move_prev = tc.move_curr
+    elseif state === :zoom && !tc.no_zoom
+        tc.zoom_start = _trackball_on_screen(tc, px, py)
+        tc.zoom_end = tc.zoom_start
+    elseif state === :pan && !tc.no_pan
+        tc.pan_start = _trackball_on_screen(tc, px, py)
+        tc.pan_end = tc.pan_start
+    end
+    return tc
+end
+
+"""
+    trackball_pointer_move!(controls::TrackballControls, x, y;
+                            pointer_type=:mouse, pointer_id=1)
+
+three.js `TrackballControls` `pointermove` at client pixel `(x, y)`. Moves
+arrive only while a pointer is down, as three.js listens for them only then.
+"""
+function trackball_pointer_move!(tc::TrackballControls, x, y;
+                                 pointer_type::Symbol=:mouse, pointer_id::Integer=1)
+    tc.enabled || return tc
+    _checked_pointer_type(pointer_type)
+    isempty(tc.pointers) && return tc
+    _validate_trackball_input(tc)
+    px, py = _trackball_point(x, y, "TrackballControls pointer")
+    if pointer_type === :touch
+        id = Int(pointer_id)
+        tc.pointer_positions[id] = (px, py)
+        if length(tc.pointers) == 1
+            tc.move_curr = _trackball_on_circle(tc, px, py)
+        else
+            # TrackballControls._getSecondPointerPosition.
+            other = id == tc.pointers[1] ? 2 : 1
+            ox, oy = get(tc.pointer_positions, tc.pointers[other],
+                         tc.pointer_down_positions[other])
+            tc.touch_zoom_distance_end = sqrt((px - ox)^2 + (py - oy)^2)
+            tc.pan_end = _trackball_on_screen(tc, (px + ox) / 2, (py + oy) / 2)
+        end
+        return tc
+    end
+    state = _trackball_effective_state(tc)
+    if state === :rotate && !tc.no_rotate
+        tc.move_curr = _trackball_on_circle(tc, px, py)
+    elseif state === :zoom && !tc.no_zoom
+        tc.zoom_end = _trackball_on_screen(tc, px, py)
+    elseif state === :pan && !tc.no_pan
+        tc.pan_end = _trackball_on_screen(tc, px, py)
+    end
+    return tc
+end
+
+# TrackballControls._removePointer.
+function _trackball_remove_pointer!(tc::TrackballControls, id::Int)
+    delete!(tc.pointer_positions, id)
+    i = findfirst(==(id), tc.pointers)
+    if i !== nothing
+        deleteat!(tc.pointers, i)
+        deleteat!(tc.pointer_types, i)
+        deleteat!(tc.pointer_down_positions, i)
+    end
+    return tc
+end
+
+"""
+    trackball_pointer_up!(controls::TrackballControls, x, y;
+                          pointer_type=:mouse, pointer_id=1)
+
+three.js `TrackballControls` `pointerup` at client pixel `(x, y)`: ends the
+mouse gesture, or hands a touch gesture over to the remaining finger(s).
+Inertia (unless `static_moving`) continues in later
+[`trackball_update!`](@ref) calls.
+"""
+function trackball_pointer_up!(tc::TrackballControls, x, y;
+                               pointer_type::Symbol=:mouse, pointer_id::Integer=1)
+    tc.enabled || return tc
+    _checked_pointer_type(pointer_type)
+    isempty(tc.pointers) && return tc
+    _validate_trackball_input(tc)
+    px, py = _trackball_point(x, y, "TrackballControls pointer")
+    id = Int(pointer_id)
+    if pointer_type === :touch
+        # TrackballControls onTouchEnd runs before the pointer is removed.
+        n = length(tc.pointers)
+        if n == 0
+            tc.state = :none
+        elseif n == 1
+            tc.state = :touch_rotate
+            tc.move_curr = _trackball_on_circle(tc, px, py)
+            tc.move_prev = tc.move_curr
+        elseif n == 2
+            tc.state = :touch_zoom_pan
+            for (i, other) in enumerate(tc.pointers)
+                if other != id
+                    ox, oy = get(tc.pointer_positions, other, tc.pointer_down_positions[i])
+                    tc.move_curr = _trackball_on_circle(tc, ox, oy)
+                    tc.move_prev = tc.move_curr
+                    break
+                end
+            end
+        end
+    else
+        tc.state = :none
+    end
+    return _trackball_remove_pointer!(tc, id)
+end
+
+"""
+    trackball_pointer_cancel!(controls::TrackballControls; pointer_id=1)
+
+three.js `TrackballControls` `pointercancel`: forget the pointer without
+ending its gesture state.
+"""
+trackball_pointer_cancel!(tc::TrackballControls; pointer_id::Integer=1) =
+    _trackball_remove_pointer!(tc, Int(pointer_id))
+
+"""
+    trackball_wheel!(controls::TrackballControls, delta_y; delta_mode=0)
+
+three.js `TrackballControls` `wheel`: `delta_y` in pixels (`delta_mode` 0),
+lines (1) or pages (2) feeds the zoom applied by [`trackball_update!`](@ref).
+Ignored with `no_zoom`.
+"""
+function trackball_wheel!(tc::TrackballControls, delta_y; delta_mode::Integer=0)
+    tc.enabled || return tc
+    tc.no_zoom && return tc
+    dy = _checked_control_scalar(delta_y, "TrackballControls wheel delta_y")
+    scale = delta_mode == 2 ? 0.025 : delta_mode == 1 ? 0.01 : 0.00025
+    tc.zoom_start = (tc.zoom_start[1], tc.zoom_start[2] - dy * scale)
+    return tc
+end
+
+"""
+    trackball_key_down!(controls::TrackballControls, code)
+
+three.js `TrackballControls` `keydown` with `KeyboardEvent.code` `code`:
+`keys[1]`, `keys[2]` or `keys[3]` makes every button rotate, zoom or pan
+until [`trackball_key_up!`](@ref). As in three.js, the first key down stops
+key handling until the next key up, even when it matches no key.
+"""
+function trackball_key_down!(tc::TrackballControls, code::AbstractString)
+    tc.enabled || return tc
+    tc.key_listening || return tc
+    tc.key_listening = false
+    tc.key_state === :none || return tc
+    if code == tc.keys[1] && !tc.no_rotate
+        tc.key_state = :rotate
+    elseif code == tc.keys[2] && !tc.no_zoom
+        tc.key_state = :zoom
+    elseif code == tc.keys[3] && !tc.no_pan
+        tc.key_state = :pan
+    end
+    return tc
+end
+
+"""
+    trackball_key_up!(controls::TrackballControls)
+
+three.js `TrackballControls` `keyup`: clear the key action and listen for
+keys again.
+"""
+function trackball_key_up!(tc::TrackballControls)
+    tc.enabled || return tc
+    tc.key_state = :none
+    tc.key_listening = true
+    return tc
+end
+
+# Vector3.normalize: divideScalar(length || 1), so a zero vector stays zero.
+@inline function _trackball_normalize(v::Vec3)
+    n = norm(v)
+    return n == 0.0 ? v : v * (1 / n)
+end
+
+# Vector3.setLength: normalize (a zero vector stays zero) and scale.
+@inline function _trackball_set_length(v::Vec3, length::Float64)
+    n = norm(v)
+    return n == 0.0 ? v * length : v * (1 / n) * length
+end
+
+# TrackballControls._getTouchRollAngle.
+function _trackball_touch_roll_angle!(tc::TrackballControls)
+    if length(tc.pointers) < 2 || tc.pointer_types[1] !== :touch ||
+       tc.pointer_types[2] !== :touch
+        tc.touch_roll_pointer_ids = nothing
+        return 0.0
+    end
+    ids = (tc.pointers[1], tc.pointers[2])
+    x0, y0 = get(tc.pointer_positions, ids[1], tc.pointer_down_positions[1])
+    x1, y1 = get(tc.pointer_positions, ids[2], tc.pointer_down_positions[2])
+    roll = atan(y1 - y0, x1 - x0)
+    if ids != tc.touch_roll_pointer_ids
+        tc.touch_roll_pointer_ids = ids
+        tc.touch_roll_angle = roll
+        return 0.0
+    end
+    angle = roll - tc.touch_roll_angle
+    tc.touch_roll_angle = roll
+    if angle > π
+        angle -= 2π
+    elseif angle < -π
+        angle += 2π
+    end
+    return angle
+end
+
+"""
+    trackball_update!(controls::TrackballControls) -> controls
+
+One three.js r186 `TrackballControls.update()`: apply the rotation, roll,
+zoom and pan accumulated from pointer, wheel and key input, with
+`dynamic_damping_factor` inertia unless `static_moving`, then keep the
+perspective camera within `min_distance`..`max_distance` and look at the
+target. Call it once per frame. Like three.js it runs even when the controls
+are disabled; a two-finger zoom whose finger distance makes the zoom factor
+non-finite or not positive is skipped instead of producing a degenerate
+camera.
+"""
+function trackball_update!(tc::TrackballControls)
+    cam = tc.camera
+    _, _, up = _validated_camera_view_vectors(cam, nameof(typeof(cam)))
+    target = _checked_control_vec3(tc.target, "TrackballControls target")
+    _checked_control_scalar(tc.rotate_speed, "TrackballControls rotate_speed")
+    _checked_control_scalar(tc.zoom_speed, "TrackballControls zoom_speed")
+    _checked_control_scalar(tc.pan_speed, "TrackballControls pan_speed")
+    _checked_control_scalar(tc.roll_speed, "TrackballControls roll_speed")
+    ddf = _checked_damping_factor(tc.dynamic_damping_factor,
+                                  "TrackballControls dynamic_damping_factor")
+    min_distance, max_distance = _checked_orbit_distances(tc.min_distance, tc.max_distance)
+    ortho = cam isa OrthographicCamera
+    zoom = ortho ? Float64(cam.zoom) : 1.0
+    if ortho
+        min_zoom, max_zoom = _checked_trackball_zoom_range(tc.min_zoom, tc.max_zoom)
+        _checked_control_scalar(cam.left, "OrthographicCamera left")
+        _checked_control_scalar(cam.right, "OrthographicCamera right")
+        _checked_control_scalar(cam.top, "OrthographicCamera top")
+        _checked_control_scalar(cam.bottom, "OrthographicCamera bottom")
+    end
+    eye = cam.position - target
+    move_prev = tc.move_prev
+    last_angle = tc.last_angle
+    last_axis = tc.last_axis
+    last_roll_angle = tc.last_roll_angle
+    zoom_start = tc.zoom_start
+    pan_start = tc.pan_start
+    touch_zoom_start = tc.touch_zoom_distance_start
+    if !tc.no_rotate
+        # _rotateCamera.
+        mx = tc.move_curr[1] - tc.move_prev[1]
+        my = tc.move_curr[2] - tc.move_prev[2]
+        angle = sqrt(mx * mx + my * my)
+        if angle != 0.0
+            eye_direction = _trackball_normalize(eye)
+            up_direction = _trackball_normalize(up)
+            sideways = _trackball_normalize(cross(up_direction, eye_direction))
+            move_direction = _trackball_set_length(up_direction, my) +
+                             _trackball_set_length(sideways, mx)
+            axis = _trackball_normalize(cross(move_direction, eye))
+            angle *= tc.rotate_speed
+            q = quat_from_axis_angle(axis, angle)
+            eye = quat_rotate_vector(q, eye)
+            up = quat_rotate_vector(q, up)
+            last_axis = axis
+            last_angle = angle
+        elseif !tc.static_moving && last_angle != 0.0
+            last_angle *= sqrt(1.0 - ddf)
+            q = quat_from_axis_angle(last_axis, last_angle)
+            eye = quat_rotate_vector(q, eye)
+            up = quat_rotate_vector(q, up)
+        end
+        move_prev = tc.move_curr
+        if tc.multi_touch_roll
+            # _rollCamera.
+            roll = _trackball_touch_roll_angle!(tc)
+            apply_roll = true
+            if roll != 0.0
+                last_roll_angle = roll * tc.roll_speed
+            elseif !tc.static_moving && last_roll_angle != 0.0
+                last_roll_angle *= sqrt(1.0 - ddf)
+            else
+                apply_roll = false
+            end
+            if apply_roll
+                q = quat_from_axis_angle(_trackball_normalize(eye), last_roll_angle)
+                up = quat_rotate_vector(q, up)
+            end
+        end
+    end
+    if !tc.no_zoom
+        # _zoomCamera.
+        if tc.state === :touch_zoom_pan
+            factor = touch_zoom_start / tc.touch_zoom_distance_end
+            touch_zoom_start = tc.touch_zoom_distance_end
+            if isfinite(factor) && factor > 0.0
+                if ortho
+                    zoom = max(min_zoom, min(max_zoom, zoom / factor))
+                else
+                    eye = eye * factor
+                end
+            end
+        else
+            factor = 1.0 + (tc.zoom_end[2] - zoom_start[2]) * tc.zoom_speed
+            if factor != 1.0 && factor > 0.0
+                if ortho
+                    zoom = max(min_zoom, min(max_zoom, zoom / factor))
+                else
+                    eye = eye * factor
+                end
+            end
+            zoom_start = tc.static_moving ? tc.zoom_end :
+                (zoom_start[1], zoom_start[2] + (tc.zoom_end[2] - zoom_start[2]) * ddf)
+        end
+    end
+    if !tc.no_pan
+        # _panCamera.
+        cx = tc.pan_end[1] - pan_start[1]
+        cy = tc.pan_end[2] - pan_start[2]
+        if cx * cx + cy * cy != 0.0
+            if ortho
+                _validate_trackball_input(tc)
+                cx *= (cam.right - cam.left) / zoom / tc.element_width
+                cy *= (cam.top - cam.bottom) / zoom / tc.element_width
+            end
+            scale = norm(eye) * tc.pan_speed
+            cx *= scale
+            cy *= scale
+            pan = _trackball_set_length(cross(eye, up), cx) + _trackball_set_length(up, cy)
+            target = target + pan
+            pan_start = tc.static_moving ? tc.pan_end :
+                (pan_start[1] + (tc.pan_end[1] - pan_start[1]) * ddf,
+                 pan_start[2] + (tc.pan_end[2] - pan_start[2]) * ddf)
+        end
+    end
+    if !ortho && (!tc.no_zoom || !tc.no_pan)
+        # _checkDistances.
+        if dot(eye, eye) > max_distance * max_distance
+            eye = _trackball_set_length(eye, max_distance)
+            zoom_start = tc.zoom_end
+        end
+        if dot(eye, eye) < min_distance * min_distance
+            eye = _trackball_set_length(eye, min_distance)
+            zoom_start = tc.zoom_end
+        end
+    end
+    position = _checked_control_vec3(target + eye, "TrackballControls camera position")
+    up = _checked_control_vec3(up, "TrackballControls camera up")
+    max(abs(up.x), abs(up.y), abs(up.z)) > 0.0 ||
+        throw(ArgumentError("TrackballControls camera up became zero"))
+    _checked_control_vec3(target, "TrackballControls target")
+    ortho && ((isfinite(zoom) && zoom > 0.0) || throw(ArgumentError(
+        "TrackballControls orthographic zoom must stay finite and positive")))
+    tc.move_prev = move_prev
+    tc.last_angle = last_angle
+    tc.last_axis = last_axis
+    tc.last_roll_angle = last_roll_angle
+    tc.zoom_start = zoom_start
+    tc.pan_start = pan_start
+    tc.touch_zoom_distance_start = touch_zoom_start
+    tc.target = target
+    ortho && (cam.zoom = zoom)
+    cam.up = up
+    cam.position = position
+    cam.target = target
+    _sync_camera_rotation_from_view!(cam)
     return tc
 end
 
@@ -2344,15 +2924,99 @@ mutable struct DragControls
     recursive::Bool
     transform_group::Bool
     raycaster::Raycaster
+    # three.js DragControls pointer input (see drag_pointer_down!).
+    enabled::Bool
+    rotate_speed::Float64
+    mouse_buttons::NamedTuple{(:left, :middle, :right), NTuple{3, Symbol}}
+    touches::NamedTuple{(:one,), Tuple{Symbol}}
+    element_left::Float64
+    element_top::Float64
+    element_width::Float64
+    element_height::Float64
+    state::Symbol
+    hovered::Union{Nothing, AbstractObject3D}
+    previous_pointer::NTuple{2, Float64}
+    plane_normal::Vec3{Float64}
+    plane_constant::Float64
+    offset::Vec3{Float64}
+    parent_inverse::Mat4{Float64}
+    rotate_up::Vec3{Float64}
+    rotate_right::Vec3{Float64}
 end
 
+const _DRAG_DEFAULT_MOUSE_BUTTONS = (left=:pan, middle=:pan, right=:rotate)
+const _DRAG_DEFAULT_TOUCHES = (one=:pan,)
+const _DRAG_ACTIONS = (:pan, :rotate, :none)
+
+DragControls(objects::Vector{AbstractObject3D}, camera::_OrbitCamera,
+             selected::Union{Nothing, AbstractObject3D}, recursive::Bool,
+             transform_group::Bool, raycaster::Raycaster) =
+    DragControls(objects, camera, selected, recursive, transform_group, raycaster,
+                 true, 1.0, _DRAG_DEFAULT_MOUSE_BUTTONS, _DRAG_DEFAULT_TOUCHES,
+                 0.0, 0.0, 0.0, 0.0, :none, nothing, (0.0, 0.0),
+                 Vec3(0.0, 0.0, 1.0), 0.0, Vec3(), Mat4(),
+                 Vec3(), Vec3())
+
+"""
+    DragControls(objects, camera; recursive=true, transform_group=false,
+                 raycaster=nothing, enabled=true, rotate_speed=1.0,
+                 mouse_buttons=(left=:pan, middle=:pan, right=:rotate),
+                 touches=(one=:pan,), element_left=0.0, element_top=0.0,
+                 element_width=0.0, element_height=0.0)
+
+Drag managed `objects` with a perspective or orthographic camera (three.js
+`DragControls`). [`drag_start!`](@ref), [`drag_pick_start!`](@ref),
+[`drag_move!`](@ref) and [`drag_end!`](@ref) move objects programmatically.
+[`drag_pointer_down!`](@ref), [`drag_pointer_move!`](@ref) and
+[`drag_pointer_up!`](@ref) reproduce three.js r186 pointer handling instead:
+`mouse_buttons` and `touches` map to `:pan` (move on the camera-facing plane
+through the object), `:rotate` (turn it about the camera's up and right axes
+by `rotate_speed` radians per unit of NDC movement) or `:none`, and pointer
+coordinates are client pixels inside the element rectangle `element_left`,
+`element_top`, `element_width`, `element_height` (the last two must be
+positive for pointer input).
+"""
 function DragControls(objects::AbstractVector{<:AbstractObject3D}, camera::_OrbitCamera;
                       recursive::Bool=true, transform_group::Bool=false,
-                      raycaster::Union{Nothing,Raycaster}=nothing)
+                      raycaster::Union{Nothing,Raycaster}=nothing,
+                      enabled::Bool=true, rotate_speed::Real=1.0,
+                      mouse_buttons::NamedTuple=_DRAG_DEFAULT_MOUSE_BUTTONS,
+                      touches::NamedTuple=_DRAG_DEFAULT_TOUCHES,
+                      element_left::Real=0.0, element_top::Real=0.0,
+                      element_width::Real=0.0, element_height::Real=0.0)
     rc = raycaster === nothing ?
         Raycaster(camera.position, Vec3(0.0, 0.0, -1.0)) : raycaster
-    DragControls(collect(AbstractObject3D, objects), camera, nothing,
-                 recursive, transform_group, rc)
+    dc = DragControls(collect(AbstractObject3D, objects), camera, nothing,
+                      recursive, transform_group, rc)
+    dc.enabled = enabled
+    dc.rotate_speed = _checked_control_scalar(rotate_speed, "DragControls rotate_speed")
+    dc.mouse_buttons = _checked_drag_mouse_buttons(mouse_buttons)
+    dc.touches = _checked_drag_touches(touches)
+    dc.element_left = _checked_control_scalar(element_left, "DragControls element_left")
+    dc.element_top = _checked_control_scalar(element_top, "DragControls element_top")
+    dc.element_width = _checked_control_scalar(element_width, "DragControls element_width")
+    dc.element_height = _checked_control_scalar(element_height, "DragControls element_height")
+    return dc
+end
+
+function _checked_drag_action(action, label::String)
+    action isa Symbol && action in _DRAG_ACTIONS || throw(ArgumentError(
+        "DragControls $label actions must be :pan, :rotate or :none"))
+    return action
+end
+
+function _checked_drag_mouse_buttons(buttons::NamedTuple)
+    keys(buttons) == (:left, :middle, :right) || throw(ArgumentError(
+        "DragControls mouse_buttons must be a NamedTuple (left=, middle=, right=)"))
+    return (left=_checked_drag_action(buttons.left, "mouse_buttons"),
+            middle=_checked_drag_action(buttons.middle, "mouse_buttons"),
+            right=_checked_drag_action(buttons.right, "mouse_buttons"))
+end
+
+function _checked_drag_touches(touches::NamedTuple)
+    keys(touches) == (:one,) || throw(ArgumentError(
+        "DragControls touches must be a NamedTuple (one=,)"))
+    return (one=_checked_drag_action(touches.one, "touches"),)
 end
 
 function _drag_contains(root::AbstractObject3D, obj::AbstractObject3D)
@@ -2410,6 +3074,191 @@ function drag_move!(dc::DragControls, delta::Vec3)
 end
 
 drag_end!(dc::DragControls) = (dc.selected = nothing; dc)
+
+# ---- DragControls pointer input (three.js DragControls.js r186) ------------
+
+function _validate_drag_input(dc::DragControls)
+    _checked_control_scalar(dc.rotate_speed, "DragControls rotate_speed")
+    _checked_drag_mouse_buttons(dc.mouse_buttons)
+    _checked_drag_touches(dc.touches)
+    left = _checked_control_scalar(dc.element_left, "DragControls element_left")
+    top = _checked_control_scalar(dc.element_top, "DragControls element_top")
+    width = _checked_control_scalar(dc.element_width, "DragControls element_width")
+    height = _checked_control_scalar(dc.element_height, "DragControls element_height")
+    (width > 0.0 && height > 0.0) || throw(ArgumentError(
+        "DragControls pointer input needs a positive element_width and element_height"))
+    return left, top, width, height
+end
+
+# DragControls._updatePointer: client pixels to NDC.
+function _drag_pointer_ndc(dc::DragControls, x, y)
+    left, top, width, height = _validate_drag_input(dc)
+    px = _checked_control_scalar(x, "DragControls pointer x")
+    py = _checked_control_scalar(y, "DragControls pointer y")
+    return (px - left) / width * 2 - 1, -(py - top) / height * 2 + 1
+end
+
+# Raycaster.intersectObjects(objects, recursive): hits sorted by distance.
+function _drag_intersections(dc::DragControls, ndc)
+    set_from_camera!(dc.raycaster, dc.camera, ndc[1], ndc[2])
+    hits = Intersection[]
+    for obj in dc.objects
+        append!(hits, raycast(dc.raycaster, obj; recursive=dc.recursive))
+    end
+    sort!(hits, by=h -> h.distance)
+    return hits
+end
+
+# DragControls.js findGroup: the outermost Group above (or at) `obj`, or
+# nothing when it has no Group ancestor.
+function _drag_find_group(obj::AbstractObject3D)
+    group = nothing
+    node = obj
+    while node !== nothing
+        node isa Group && (group = node)
+        node = get_parent(node)
+    end
+    return group
+end
+
+_drag_world_position(obj::AbstractObject3D) =
+    mat4_get_position(compute_world_matrix(obj)::Mat4{Float64})
+
+# Plane.setFromNormalAndCoplanarPoint(camera.getWorldDirection(), point).
+function _drag_set_plane!(dc::DragControls, point::Vec3)
+    q = _camera_local_quaternion(dc.camera)
+    normal = quat_rotate_vector(q, Vec3(0.0, 0.0, -1.0))
+    dc.plane_normal = normal
+    dc.plane_constant = -dot(point, normal)
+    return dc
+end
+
+function _drag_ray_plane(dc::DragControls)
+    ray = dc.raycaster.ray
+    return _orbit_ray_plane(ray.origin, ray.direction, dc.plane_normal,
+                            dc.plane_normal * -dc.plane_constant)
+end
+
+"""
+    drag_pointer_down!(controls::DragControls, x, y; button=0, pointer_type=:mouse)
+
+three.js `DragControls` `pointerdown` at client pixel `(x, y)`. The button
+(0 left, 1 middle, 2 right) or, for `pointer_type=:touch`, `touches.one`
+selects the action through `mouse_buttons`. The nearest object hit among
+`objects` (with their descendants when `recursive`) becomes `selected`, or,
+with `transform_group`, its outermost `Group` ancestor (nothing is selected
+when there is none, where three.js throws). A miss leaves `selected` as it was,
+like three.js.
+"""
+function drag_pointer_down!(dc::DragControls, x, y; button::Integer=0,
+                            pointer_type::Symbol=:mouse)
+    dc.enabled || return dc
+    _checked_pointer_type(pointer_type)
+    ndc = _drag_pointer_ndc(dc, x, y)
+    # DragControls._updateState.
+    action = if pointer_type === :touch
+        dc.touches.one
+    elseif button == 0
+        dc.mouse_buttons.left
+    elseif button == 1
+        dc.mouse_buttons.middle
+    elseif button == 2
+        dc.mouse_buttons.right
+    else
+        :none
+    end
+    dc.state = action
+    hits = _drag_intersections(dc, ndc)
+    if !isempty(hits)
+        hit = first(hits).object
+        selected = dc.transform_group ? _drag_find_group(hit) : hit
+        if selected === nothing
+            dc.selected = nothing
+        else
+            world_position = _drag_world_position(selected)
+            _drag_set_plane!(dc, world_position)
+            intersection = _drag_ray_plane(dc)
+            if intersection !== nothing
+                if dc.state === :pan
+                    parent = get_parent(selected)
+                    inverse = parent === nothing ? Mat4() :
+                        mat4_inverse(compute_world_matrix(parent)::Mat4{Float64})
+                    all(iszero, inverse.e) && throw(ArgumentError(
+                        "DragControls cannot pan an object whose parent has a singular world matrix"))
+                    dc.parent_inverse = inverse
+                    dc.offset = intersection - world_position
+                elseif dc.state === :rotate
+                    # "the controls only support Y+ up" (DragControls.js).
+                    q = _camera_local_quaternion(dc.camera)
+                    dc.rotate_up = normalize(quat_rotate_vector(q, Vec3(0.0, 1.0, 0.0)))
+                    dc.rotate_right = normalize(quat_rotate_vector(q, Vec3(1.0, 0.0, 0.0)))
+                end
+            end
+            dc.selected = selected
+        end
+    end
+    dc.previous_pointer = ndc
+    return dc
+end
+
+"""
+    drag_pointer_move!(controls::DragControls, x, y; pointer_type=:mouse)
+
+three.js `DragControls` `pointermove` at client pixel `(x, y)`. With a
+selection, `:pan` moves it so the point grabbed on the camera-facing plane
+follows the pointer, and `:rotate` turns it about the camera's up axis by the
+NDC x movement and about its right axis by minus the NDC y movement, both
+times `rotate_speed` (three.js `rotateOnWorldAxis`, exact for an unrotated
+parent). Without a selection a mouse or pen updates `hovered`.
+"""
+function drag_pointer_move!(dc::DragControls, x, y; pointer_type::Symbol=:mouse)
+    dc.enabled || return dc
+    _checked_pointer_type(pointer_type)
+    ndc = _drag_pointer_ndc(dc, x, y)
+    set_from_camera!(dc.raycaster, dc.camera, ndc[1], ndc[2])
+    selected = dc.selected
+    if selected !== nothing
+        if dc.state === :pan
+            intersection = _drag_ray_plane(dc)
+            if intersection !== nothing
+                position = mat4_transform_point(dc.parent_inverse, intersection - dc.offset)
+                _validate_object_transform(selected)
+                selected.position = _checked_control_vec3(
+                    position, "DragControls object position")
+            end
+        elseif dc.state === :rotate
+            dx = (ndc[1] - dc.previous_pointer[1]) * dc.rotate_speed
+            dy = (ndc[2] - dc.previous_pointer[2]) * dc.rotate_speed
+            rotate_on_world_axis!(selected, dc.rotate_up, dx)
+            dc.rotate_right = normalize(dc.rotate_right)
+            rotate_on_world_axis!(selected, dc.rotate_right, -dy)
+        end
+    elseif pointer_type === :mouse || pointer_type === :pen
+        hits = _drag_intersections(dc, ndc)
+        if isempty(hits)
+            dc.hovered = nothing
+        else
+            hovered = first(hits).object
+            _drag_set_plane!(dc, _drag_world_position(hovered))
+            dc.hovered = hovered
+        end
+    end
+    dc.previous_pointer = ndc
+    return dc
+end
+
+"""
+    drag_pointer_up!(controls::DragControls)
+
+three.js `DragControls` `pointerup`, `pointerleave` or `pointercancel`:
+release the selection and return to the idle state.
+"""
+function drag_pointer_up!(dc::DragControls)
+    dc.enabled || return dc
+    dc.selected = nothing
+    dc.state = :none
+    return dc
+end
 
 # TransformControls: attach one object and apply translate/rotate/scale deltas;
 # like three.js it accepts a perspective or orthographic camera.
