@@ -996,6 +996,402 @@ function pointerlock_move!(pc::PointerLockControls, movement_x, movement_y)
     return pc
 end
 
+# ---- Camera orientation as a three.js Object3D.quaternion -----------------
+
+# three.js MathUtils.DEG2RAD / RAD2DEG (MathUtils.js:1-2): the Float64 quotients
+# of Math.PI, so degree conversions round exactly like three.js.
+const _CONTROL_DEG2RAD = Float64(π) / 180.0
+const _CONTROL_RAD2DEG = 180.0 / Float64(π)
+
+# Local orientation of a camera as the quaternion three.js keeps in
+# `object.quaternion`: its rotation for a rotation-driven camera, otherwise the
+# rotation that `Object3D.lookAt(target)` with `camera.up` produces
+# (the transposed view rotation of `mat4_look_at`).
+function _camera_local_quaternion(cam::AbstractCamera)
+    if cam.rotation_driven
+        _validate_object_transform(cam)
+        r = cam.rotation
+        return quat_normalize(quat_from_euler(r.x, r.y, r.z; order=r.order))
+    end
+    position, target, up = _validated_camera_view_vectors(
+        cam, nameof(typeof(cam)))
+    return quat_from_rotation_matrix(
+        mat4_transpose(mat4_look_at(position, target, up)))
+end
+
+# Writes a local orientation back to a camera. A rotation-driven camera takes
+# it as its rotation; a target-driven camera keeps its target distance (1 when
+# the target is on the camera) and takes the rotated +y axis as `up`, so a roll
+# survives the round trip through position, target and up.
+function _set_camera_local_quaternion!(cam::AbstractCamera, q::Quaternion,
+                                       label::String)
+    q = quat_normalize(q)
+    forward = quat_rotate_vector(q, Vec3(0.0, 0.0, -1.0))
+    up = quat_rotate_vector(q, Vec3(0.0, 1.0, 0.0))
+    distance = norm(cam.target - cam.position)
+    (isfinite(distance) && distance > 0.0) || (distance = 1.0)
+    target = _checked_control_vec3(cam.position + forward * distance,
+                                   "$label camera target")
+    up = _checked_control_vec3(up, "$label camera up")
+    if cam.rotation_driven
+        euler = _transform_quaternion_to_euler(q, cam.rotation.order)
+        _checked_control_vec3(Vec3(euler.x, euler.y, euler.z),
+                              "$label camera rotation")
+        cam.rotation = euler
+    end
+    cam.target = target
+    cam.up = up
+    return cam
+end
+
+# three.js `object.lookAt(point)` for a camera: aim at `point` keeping
+# `camera.up` as the up hint (a rotation-driven camera takes the matching
+# rotation).
+function _camera_control_look_at!(cam::AbstractCamera, point::Vec3,
+                                  label::String)
+    cam.target = _checked_control_vec3(point, "$label look target")
+    _sync_camera_rotation_from_view!(cam)
+    return cam
+end
+
+# ---- FirstPersonControls ----------------------------------------------------
+
+"""
+    FirstPersonControls(camera; enabled=true, movement_speed=1.0,
+                        look_speed=0.005, damping_factor=0.1,
+                        look_vertical=true, auto_forward=false,
+                        height_speed=false, height_coef=1.0, height_min=0.0,
+                        height_max=1.0, constrain_vertical=false,
+                        vertical_min=0.0, vertical_max=π)
+
+three.js r186 `FirstPersonControls` for a `PerspectiveCamera` or an
+`OrthographicCamera`, with Julia calls standing in for the DOM events:
+[`first_person_key_down!`](@ref)/[`first_person_key_up!`](@ref) take a
+`KeyboardEvent.code` string, [`first_person_pointer_down!`](@ref),
+[`first_person_pointer_move!`](@ref) and [`first_person_pointer_up!`](@ref)
+take page coordinates in pixels, and [`first_person_update!`](@ref)`(controls,
+delta)` advances one frame of `delta` seconds.
+
+Keys move the camera along world axes from its yaw (W/S or the up/down
+arrows: forward/back in the xz-plane; A/D or the left/right arrows: strafe;
+R/F: along world y). The primary pointer button (or one touch) moves along the
+look direction, the secondary button (or a second touch) backward, and while a
+pointer is down its offset from where it went down turns the view at
+`look_speed` per pixel per second. Movement and look velocities ease toward
+their input by `damping_factor` per update (`1` disables the easing).
+`height_speed` adds `(clamp(y, height_min, height_max) - height_min) *
+height_coef` to the forward speed. The view latitude stays within ±85°;
+`constrain_vertical` maps the polar angle onto `[vertical_min, vertical_max]`.
+The heading and pitch are read from the camera at construction and by
+[`first_person_look_at!`](@ref). Fields carry the three.js property names in
+snake case and may be changed between updates.
+"""
+mutable struct FirstPersonControls
+    camera::_OrbitCamera
+    enabled::Bool
+    movement_speed::Float64
+    look_speed::Float64
+    damping_factor::Float64
+    look_vertical::Bool
+    auto_forward::Bool
+    height_speed::Bool
+    height_coef::Float64
+    height_min::Float64
+    height_max::Float64
+    constrain_vertical::Bool
+    vertical_min::Float64
+    vertical_max::Float64
+    mouse_drag_on::Bool
+    # three.js internals (FirstPersonControls.js:141-176).
+    velocity::Vec3{Float64}
+    pointer_x::Float64
+    pointer_y::Float64
+    pointer_down_x::Float64
+    pointer_down_y::Float64
+    pointer_count::Int
+    key_forward::Bool
+    key_backward::Bool
+    pointer_forward::Bool
+    pointer_backward::Bool
+    move_left::Bool
+    move_right::Bool
+    move_up::Bool
+    move_down::Bool
+    lat::Float64
+    lon::Float64
+    lon_velocity::Float64
+    lat_velocity::Float64
+end
+
+function FirstPersonControls(camera::_OrbitCamera; enabled::Bool=true,
+                             movement_speed::Real=1.0, look_speed::Real=0.005,
+                             damping_factor::Real=0.1, look_vertical::Bool=true,
+                             auto_forward::Bool=false, height_speed::Bool=false,
+                             height_coef::Real=1.0, height_min::Real=0.0,
+                             height_max::Real=1.0, constrain_vertical::Bool=false,
+                             vertical_min::Real=0.0, vertical_max::Real=π)
+    fc = FirstPersonControls(
+        camera, enabled,
+        _checked_control_scalar(movement_speed, "FirstPersonControls movement_speed"),
+        _checked_control_scalar(look_speed, "FirstPersonControls look_speed"),
+        _checked_damping_factor(damping_factor, "FirstPersonControls damping_factor"),
+        look_vertical, auto_forward, height_speed,
+        _checked_control_scalar(height_coef, "FirstPersonControls height_coef"),
+        _checked_control_scalar(height_min, "FirstPersonControls height_min"),
+        _checked_control_scalar(height_max, "FirstPersonControls height_max"),
+        constrain_vertical,
+        _checked_control_scalar(vertical_min, "FirstPersonControls vertical_min"),
+        _checked_control_scalar(vertical_max, "FirstPersonControls vertical_max"),
+        false, Vec3(0.0, 0.0, 0.0), 0.0, 0.0, 0.0, 0.0, 0,
+        false, false, false, false, false, false, false, false,
+        0.0, 0.0, 0.0, 0.0)
+    _validate_first_person(fc)
+    return _first_person_set_orientation!(fc)
+end
+
+function _validate_first_person(fc::FirstPersonControls)
+    _checked_control_scalar(fc.movement_speed, "FirstPersonControls movement_speed")
+    _checked_control_scalar(fc.look_speed, "FirstPersonControls look_speed")
+    _checked_damping_factor(fc.damping_factor, "FirstPersonControls damping_factor")
+    _checked_control_scalar(fc.height_coef, "FirstPersonControls height_coef")
+    _checked_control_scalar(fc.height_min, "FirstPersonControls height_min")
+    _checked_control_scalar(fc.height_max, "FirstPersonControls height_max")
+    vmin = _checked_control_scalar(fc.vertical_min, "FirstPersonControls vertical_min")
+    vmax = _checked_control_scalar(fc.vertical_max, "FirstPersonControls vertical_max")
+    # verticalLookRatio = π / (verticalMax - verticalMin) has no value for an
+    # empty range.
+    (!fc.constrain_vertical || vmax != vmin) || throw(ArgumentError(
+        "FirstPersonControls vertical_min and vertical_max must differ when constrain_vertical is set"))
+    return nothing
+end
+
+# FirstPersonControls.js _setOrientation: latitude and longitude (degrees) of
+# the camera's look direction.
+function _first_person_set_orientation!(fc::FirstPersonControls)
+    look = quat_rotate_vector(_camera_local_quaternion(fc.camera),
+                              Vec3(0.0, 0.0, -1.0))
+    s = cartesian_to_spherical(look)
+    fc.lat = 90 - s.phi * _CONTROL_RAD2DEG
+    fc.lon = s.theta * _CONTROL_RAD2DEG
+    return fc
+end
+
+"""
+    first_person_look_at!(controls::FirstPersonControls, target::Vec3)
+
+Turn the camera toward `target` and take its new heading and pitch as the
+look state (three.js `FirstPersonControls.lookAt`).
+"""
+function first_person_look_at!(fc::FirstPersonControls, target::Vec3)
+    _camera_control_look_at!(fc.camera, target, "FirstPersonControls")
+    return _first_person_set_orientation!(fc)
+end
+
+"""
+    first_person_key_down!(controls::FirstPersonControls, code::AbstractString)
+
+Press a key given by its `KeyboardEvent.code`, like three.js
+`FirstPersonControls`: `"KeyW"`/`"ArrowUp"` forward, `"KeyS"`/`"ArrowDown"`
+backward, `"KeyA"`/`"ArrowLeft"` left, `"KeyD"`/`"ArrowRight"` right, `"KeyR"`
+up and `"KeyF"` down. Other codes are ignored.
+"""
+first_person_key_down!(fc::FirstPersonControls, code::AbstractString) =
+    _first_person_key!(fc, code, true)
+
+"""
+    first_person_key_up!(controls::FirstPersonControls, code::AbstractString)
+
+Release the key `code`; see [`first_person_key_down!`](@ref).
+"""
+first_person_key_up!(fc::FirstPersonControls, code::AbstractString) =
+    _first_person_key!(fc, code, false)
+
+function _first_person_key!(fc::FirstPersonControls, code::AbstractString,
+                            pressed::Bool)
+    if code == "ArrowUp" || code == "KeyW"
+        fc.key_forward = pressed
+    elseif code == "ArrowLeft" || code == "KeyA"
+        fc.move_left = pressed
+    elseif code == "ArrowDown" || code == "KeyS"
+        fc.key_backward = pressed
+    elseif code == "ArrowRight" || code == "KeyD"
+        fc.move_right = pressed
+    elseif code == "KeyR"
+        fc.move_up = pressed
+    elseif code == "KeyF"
+        fc.move_down = pressed
+    end
+    return fc
+end
+
+@noinline function _throw_pointer_type(pointer_type)
+    throw(ArgumentError("pointer_type must be :mouse, :pen or :touch, got $(repr(pointer_type))"))
+end
+
+@inline function _checked_pointer_type(pointer_type::Symbol)
+    pointer_type === :mouse || pointer_type === :pen ||
+        pointer_type === :touch || _throw_pointer_type(pointer_type)
+    return pointer_type
+end
+
+"""
+    first_person_pointer_down!(controls::FirstPersonControls, page_x, page_y;
+                               button=0, pointer_type=:mouse)
+
+A pointer goes down at page position `(page_x, page_y)` pixels (three.js
+`pointerdown`). Button 0 moves forward and button 2 backward unless a
+forward/backward key is held; with `pointer_type=:touch` one touch moves
+forward and two or more move backward. Looking starts from this position.
+"""
+function first_person_pointer_down!(fc::FirstPersonControls, page_x, page_y;
+                                    button::Integer=0,
+                                    pointer_type::Symbol=:mouse)
+    x = _checked_control_scalar(page_x, "FirstPersonControls page_x")
+    y = _checked_control_scalar(page_y, "FirstPersonControls page_y")
+    touch = _checked_pointer_type(pointer_type) === :touch
+    fc.pointer_count += 1
+    if touch
+        fc.pointer_forward = fc.pointer_count == 1
+        fc.pointer_backward = fc.pointer_count >= 2
+    elseif button == 0
+        (fc.key_forward || fc.key_backward) || (fc.pointer_forward = true)
+    elseif button == 2
+        (fc.key_forward || fc.key_backward) || (fc.pointer_backward = true)
+    end
+    fc.pointer_down_x = x
+    fc.pointer_down_y = y
+    fc.pointer_x = 0.0
+    fc.pointer_y = 0.0
+    fc.mouse_drag_on = true
+    return fc
+end
+
+"""
+    first_person_pointer_move!(controls::FirstPersonControls, page_x, page_y)
+
+A pointer moves to page position `(page_x, page_y)` pixels while one is down
+(three.js `pointermove`); its offset from the press position sets the look
+velocity.
+"""
+function first_person_pointer_move!(fc::FirstPersonControls, page_x, page_y)
+    x = _checked_control_scalar(page_x, "FirstPersonControls page_x")
+    y = _checked_control_scalar(page_y, "FirstPersonControls page_y")
+    fc.mouse_drag_on || return fc
+    fc.pointer_x = x - fc.pointer_down_x
+    fc.pointer_y = y - fc.pointer_down_y
+    return fc
+end
+
+"""
+    first_person_pointer_up!(controls::FirstPersonControls; button=0,
+                             pointer_type=:mouse)
+
+A pointer is released or cancelled (three.js `pointerup`/`pointercancel`).
+Looking stops once no pointer is down.
+"""
+function first_person_pointer_up!(fc::FirstPersonControls; button::Integer=0,
+                                  pointer_type::Symbol=:mouse)
+    touch = _checked_pointer_type(pointer_type) === :touch
+    fc.mouse_drag_on || return fc
+    fc.pointer_count -= 1
+    if touch
+        fc.pointer_forward = fc.pointer_count == 1
+        fc.pointer_backward = false
+    elseif button == 0
+        fc.pointer_forward = false
+    elseif button == 2
+        fc.pointer_backward = false
+    end
+    fc.pointer_x = 0.0
+    fc.pointer_y = 0.0
+    fc.pointer_count == 0 && (fc.mouse_drag_on = false)
+    return fc
+end
+
+"""
+    first_person_update!(controls::FirstPersonControls, delta)
+
+Advance the controls by `delta` seconds (three.js
+`FirstPersonControls.update`): ease the velocity toward the key and pointer
+input, move the camera by it, ease the look velocity toward the pointer
+offset, and aim the camera at the resulting heading and pitch. Does nothing
+while `enabled` is false.
+"""
+function first_person_update!(fc::FirstPersonControls, delta)
+    fc.enabled || return fc
+    _validate_first_person(fc)
+    dt = _checked_control_scalar(delta, "FirstPersonControls delta")
+    cam = fc.camera
+    look = quat_rotate_vector(_camera_local_quaternion(cam), Vec3(0.0, 0.0, -1.0))
+    drive = Int(fc.key_forward) - Int(fc.key_backward)
+    look_move = Int(fc.pointer_forward) - Int(fc.pointer_backward)
+    fc.auto_forward && drive == 0 && look_move == 0 && (look_move = 1)
+    speed = fc.movement_speed
+    forward_speed = speed
+    if fc.height_speed
+        # MathUtils.clamp(y, min, max) = max(min, min(max, y)).
+        y = max(fc.height_min, min(fc.height_max, cam.position.y))
+        forward_speed += (y - fc.height_min) * fc.height_coef
+    end
+    yaw = fc.lon * _CONTROL_DEG2RAD
+    sin_yaw, cos_yaw = sin(yaw), cos(yaw)
+    strafe = Float64(Int(fc.move_right) - Int(fc.move_left))
+    climb = Float64(Int(fc.move_up) - Int(fc.move_down))
+    drive_f = Float64(drive)
+    key_scale = 1 / max(1.0, sqrt(strafe * strafe + climb * climb + drive_f * drive_f))
+    strafe *= speed * key_scale
+    climb *= speed * key_scale
+    drive_f *= (drive_f > 0 ? forward_speed : speed) * key_scale
+    target_velocity = Vec3(sin_yaw * drive_f - cos_yaw * strafe, climb,
+                           cos_yaw * drive_f + sin_yaw * strafe)
+    if look_move != 0
+        s = look_move * (look_move > 0 ? forward_speed : speed)
+        target_velocity = Vec3(target_velocity.x + look.x * s,
+                               target_velocity.y + look.y * s,
+                               target_velocity.z + look.z * s)
+    end
+    # Vector3.lerp: v += (target - v) * alpha.
+    f = fc.damping_factor
+    v = fc.velocity
+    velocity = Vec3(v.x + (target_velocity.x - v.x) * f,
+                    v.y + (target_velocity.y - v.y) * f,
+                    v.z + (target_velocity.z - v.z) * f)
+    p = cam.position
+    position = _checked_control_vec3(
+        Vec3(p.x + velocity.x * dt, p.y + velocity.y * dt, p.z + velocity.z * dt),
+        "FirstPersonControls camera position")
+    vertical_ratio = fc.constrain_vertical ?
+        Float64(π) / (fc.vertical_max - fc.vertical_min) : 1.0
+    target_lon = fc.mouse_drag_on ? -fc.pointer_x * fc.look_speed : 0.0
+    target_lat = (fc.mouse_drag_on && fc.look_vertical) ?
+        -fc.pointer_y * fc.look_speed * vertical_ratio : 0.0
+    # MathUtils.lerp(x, y, t) = (1 - t) * x + t * y.
+    lon_velocity = (1 - f) * fc.lon_velocity + f * target_lon
+    lat_velocity = (1 - f) * fc.lat_velocity + f * target_lat
+    lon = fc.lon + lon_velocity * dt
+    lat = max(-85.0, min(85.0, fc.lat + lat_velocity * dt))
+    phi = (90 - lat) * _CONTROL_DEG2RAD
+    theta = lon * _CONTROL_DEG2RAD
+    if fc.constrain_vertical
+        # MathUtils.mapLinear(phi, 0, π, verticalMin, verticalMax).
+        phi = fc.vertical_min + phi * (fc.vertical_max - fc.vertical_min) / Float64(π)
+    end
+    look_target = _checked_control_vec3(
+        position + spherical_to_cartesian(Spherical(1.0, phi, theta)),
+        "FirstPersonControls look target")
+    _checked_control_vec3(velocity, "FirstPersonControls velocity")
+    _checked_control_scalar(lon, "FirstPersonControls longitude")
+    _checked_control_scalar(lat, "FirstPersonControls latitude")
+    fc.velocity = velocity
+    fc.lon_velocity = lon_velocity
+    fc.lat_velocity = lat_velocity
+    fc.lon = lon
+    fc.lat = lat
+    cam.position = position
+    _camera_control_look_at!(cam, look_target, "FirstPersonControls")
+    return fc
+end
+
 # DragControls: programmatic object selection and world-space drag movement,
 # with a perspective or orthographic camera like three.js.
 mutable struct DragControls
