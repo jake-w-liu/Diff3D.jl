@@ -984,9 +984,9 @@ function _signed_distance_to_triangle_area(px, py, ax, ay, bx, by, cx, cy, area)
 
     if w0 >= 0 && w1 >= 0 && w2 >= 0
         # Inside — distance is min distance to any edge
-        d1 = point_line_distance(px, py, ax, ay, bx, by)
-        d2 = point_line_distance(px, py, bx, by, cx, cy)
-        d3 = point_line_distance(px, py, cx, cy, ax, ay)
+        d1 = _soft_inside_line_distance(px, py, ax, ay, bx, by, area)
+        d2 = _soft_inside_line_distance(px, py, bx, by, cx, cy, area)
+        d3 = _soft_inside_line_distance(px, py, cx, cy, ax, ay, area)
         return min(d1, d2, d3)
     else
         # Outside — negative of min distance to edges/vertices
@@ -1096,6 +1096,33 @@ end
     dy = by - ay
     len = hypot(dx, dy)
     abs((px - ax) * dy - (py - ay) * dx) / max(len, _soft_constant(typeof(len), 1e-20))
+end
+
+# `point_line_distance` for a point inside (or on the boundary of) a triangle
+# of signed doubled `area`, of which (a, b) is one edge. The value is the same.
+# Exactly on the line the absolute value has a kink; a boundary point counts as
+# inside, so its derivative is that of the interior side, whose edge function
+# has the sign of `area`, for either winding and in both AD modes.
+@inline _soft_inside_line_distance(px::Float64, py::Float64, ax::Float64,
+                                   ay::Float64, bx::Float64, by::Float64,
+                                   ::Float64) =
+    point_line_distance(px, py, ax, ay, bx, by)
+
+@inline function _soft_inside_line_distance(px, py, ax, ay, bx, by, area)
+    dx = bx - ax
+    dy = by - ay
+    len = hypot(dx, dy)
+    numerator = (px - ax) * dy - (py - ay) * dx
+    value = _primal_value(numerator)
+    if value > 0
+        signed = numerator
+    elseif value < 0
+        signed = -numerator
+    else
+        # Adding zero keeps the value +0.0 after the negation.
+        signed = (_primal_value(area) < 0 ? -numerator : numerator) + zero(value)
+    end
+    return signed / max(len, _soft_constant(typeof(len), 1e-20))
 end
 
 # Clamped projection parameter of (px, py) onto segment (ax, ay)-(bx, by) of

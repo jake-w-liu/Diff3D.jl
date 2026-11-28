@@ -216,7 +216,8 @@ end
 # Generic `point_line_distance` value and its gradient w.r.t. (ax, ay, bx, by).
 @inline function _soft_line_distance_gradient(px::Float64, py::Float64,
                                               ax::Float64, ay::Float64,
-                                              bx::Float64, by::Float64)
+                                              bx::Float64, by::Float64,
+                                              interior_negative::Bool)
     dx = bx - ax
     dy = by - ay
     len = hypot(dx, dy)
@@ -225,7 +226,10 @@ end
     numerator = qx * dy - qy * dx
     floor_len = max(len, 1e-20)
     d = abs(numerator) / floor_len
-    numerator_bar = (numerator < 0 ? -1.0 : 1.0) / floor_len
+    # A point exactly on the line counts as inside the triangle, so it takes
+    # the derivative of the interior side (`_soft_inside_line_distance`).
+    negative = numerator < 0 || (numerator == 0 && interior_negative)
+    numerator_bar = (negative ? -1.0 : 1.0) / floor_len
     len_bar = len >= 1e-20 ? -d / floor_len : 0.0
     hx, hy = _scaled_hypot_partials(dx, dy)
     dx_bar = -numerator_bar * qy + len_bar * hx
@@ -296,9 +300,10 @@ end
     w2 = edge_function(ax, ay, bx, by, px, py) / area
     inside = w0 >= 0 && w1 >= 0 && w2 >= 0
     if inside
-        d1, a1x, a1y, b1x, b1y = _soft_line_distance_gradient(px, py, ax, ay, bx, by)
-        d2, a2x, a2y, b2x, b2y = _soft_line_distance_gradient(px, py, bx, by, cx, cy)
-        d3, a3x, a3y, b3x, b3y = _soft_line_distance_gradient(px, py, cx, cy, ax, ay)
+        interior_negative = area < 0
+        d1, a1x, a1y, b1x, b1y = _soft_line_distance_gradient(px, py, ax, ay, bx, by, interior_negative)
+        d2, a2x, a2y, b2x, b2y = _soft_line_distance_gradient(px, py, bx, by, cx, cy, interior_negative)
+        d3, a3x, a3y, b3x, b3y = _soft_line_distance_gradient(px, py, cx, cy, ax, ay, interior_negative)
     else
         d1, a1x, a1y, b1x, b1y = _soft_segment_distance_gradient(px, py, ax, ay, bx, by)
         d2, a2x, a2y, b2x, b2y = _soft_segment_distance_gradient(px, py, bx, by, cx, cy)
@@ -630,9 +635,9 @@ function _soft_render_screen(::Type{ADVar}, screen_tris, n_screen_tris::Int,
             n_screen_tris, W, H, σ_value, γ_value, bg_value, eps_value,
             use_relative_depth, background_value, 0.0, zero_color)
         @inbounds for py in 1:H, px in 1:W
-            image[py, px, 1] = _ad_record(values[py, px, 1], (), ())
-            image[py, px, 2] = _ad_record(values[py, px, 2], (), ())
-            image[py, px, 3] = _ad_record(values[py, px, 3], (), ())
+            image[py, px, 1] = _ad_dependent_leaf(values[py, px, 1])
+            image[py, px, 2] = _ad_dependent_leaf(values[py, px, 2])
+            image[py, px, 3] = _ad_dependent_leaf(values[py, px, 3])
         end
     else
         for py in 1:H
@@ -641,9 +646,9 @@ function _soft_render_screen(::Type{ADVar}, screen_tris, n_screen_tris::Int,
                     _soft_pixel_center(Float64, px), _soft_pixel_center(Float64, py),
                     σ_value, γ_value, bg_value, eps_value, use_relative_depth,
                     background_value, 0.0, zero_color)
-                image[py, px, 1] = _ad_record(color.r, (), ())
-                image[py, px, 2] = _ad_record(color.g, (), ())
-                image[py, px, 3] = _ad_record(color.b, (), ())
+                image[py, px, 1] = _ad_dependent_leaf(color.r)
+                image[py, px, 2] = _ad_dependent_leaf(color.g)
+                image[py, px, 3] = _ad_dependent_leaf(color.b)
             end
         end
     end
@@ -704,7 +709,7 @@ function _ad_image_loss(image::Array, target::Array, squared::Bool)
     target_values = _ad_loss_primal(target)
     value = squared ? loss_mse(image_values, target_values) :
         loss_l1(image_values, target_values)
-    output = _ad_record(Float64(value), (), ())
+    output = _ad_dependent_leaf(Float64(value))
     if _ad_recording()
         differences = Vector{Float64}(undef, length(image))
         @inbounds for i in eachindex(differences, image_values, target_values)
