@@ -3698,6 +3698,19 @@ end
 const _ArcballMouseAction = NamedTuple{(:operation, :mouse, :key),
     Tuple{Symbol, Union{Int, Symbol}, Union{Nothing, Symbol}}}
 
+# Copies of the pointer and frame vectors taken before an entry point runs, so
+# a call that fails can be undone; they keep their capacity between calls.
+struct _ArcballBackup
+    touch_start::Vector{_ArcballPointer}
+    touch_current::Vector{_ArcballPointer}
+    down_events::Vector{_ArcballPointer}
+    active_touches::Vector{Int}
+    frames::Vector{_ArcballFrame}
+end
+
+_ArcballBackup() = _ArcballBackup(_ArcballPointer[], _ArcballPointer[],
+                                  _ArcballPointer[], Int[], _ArcballFrame[])
+
 # Fixed parameters of ArcballControls.js r186 (constructor, :221-224, :208,
 # :1090, :3385, :736, :861, :93, :236).
 const _ARCBALL_MAX_DOWN_TIME = 250.0
@@ -3746,10 +3759,22 @@ next [`arcball_update!`](@ref).
 
 Units follow Diff3D: `min_fov` and `max_fov` are radians (three.js: degrees;
 the defaults are 5° and 90°), like `camera.fov`. Times are milliseconds, as
-three.js `performance.now()` and `focusAnimationTime`: every pointer call
-takes `time`, and animations advance only through
+three.js `performance.now()` and `focusAnimationTime`: pointer down, move and
+up take `time` (it stands for both the event's `timeStamp` and
+`performance.now()`), and animations advance only through
 [`arcball_animation_frame!`](@ref)`(controls, time)`, the stand-in for
 `requestAnimationFrame`, so results are deterministic.
+
+The camera may be a child of an untransformed root `Scene` only; three.js
+requires a child of the scene and mixes its world and local frames when that
+scene is transformed. `radius_factor` must be positive. A call that would
+leave a non-finite camera or trackball state, or put the camera on the
+trackball centre (for example a wheel step whose `scale_factor` power
+overflows, or a pinch started with both fingers on one pixel), raises
+`ArgumentError` and changes nothing; three.js would carry on with NaN or a
+collapsed camera. Where the last two drag samples of a rotation coincide the
+inertia has no axis; three.js then scales and dollies the camera through
+`makeRotationAxis` with a zero axis, Diff3D keeps it still.
 
 Input: [`arcball_pointer_down!`](@ref), [`arcball_pointer_move!`](@ref),
 [`arcball_pointer_up!`](@ref), [`arcball_pointer_cancel!`](@ref) and
@@ -3768,7 +3793,10 @@ The camera state is written to `camera` (position, orientation, `zoom`,
 and turns it with every rotation; that vector is `controls.up` here. Diff3D
 cameras are aimed through position, target and up, so between
 [`arcball_update!`](@ref) calls (which aim at the gizmo with `controls.up`, as
-three.js `lookAt` does) the camera's own `up` is its local +y axis.
+three.js `lookAt` does) the camera's own `up` is its local +y axis. three.js
+turns the up vector by the camera's whole rotation, not by the change, so
+with an up other than +y it can end parallel to the view direction; aiming
+along it is then undefined in three.js and gives some valid orientation here.
 
 The gizmos and the pan grid are not scene objects here: their transform
 (`gizmo_position`, `gizmo_quaternion`, `gizmo_scale`), circle radius
@@ -3883,6 +3911,7 @@ mutable struct ArcballControls
     cursor_pos_curr::Vec3{Float64}
     w_prev::Float64
     w_curr::Float64
+    backup::_ArcballBackup
 end
 
 """
@@ -3951,47 +3980,180 @@ function ArcballControls(camera::_OrbitCamera,
         1.0, true, false, false, identity, identity, 1 * _CONTROL_DEG2RAD,
         zero3, 1.0, 0.0, 0.0, zero3, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, identity,
         identity, zero3, -1.0, -1, _ArcballFrame[], _ArcballFrame[], 0, 0.0,
-        0.0, 0.0, 0.0, zero3, zero3, 0.0, 0.0)
+        0.0, 0.0, 0.0, zero3, zero3, 0.0, 0.0, _ArcballBackup())
     _validate_arcball(ac)
-    _arcball_set_camera!(ac, camera)
+    _checked_arcball_new_camera(ac, camera)
+    _prepare_camera_control_up!(camera)
+    _arcball_set_camera!(ac, camera, camera.up)
     _arcball_initialize_mouse_actions!(ac)
     return ac
 end
 
+@noinline _throw_arcball(message::String) = throw(ArgumentError(message))
+
+@inline _arcball_finite(v::Vec3) = isfinite(v.x) && isfinite(v.y) && isfinite(v.z)
+@inline _arcball_finite(q::Quaternion) =
+    isfinite(q.x) && isfinite(q.y) && isfinite(q.z) && isfinite(q.w)
+@inline _arcball_finite(m::Mat4) = all(isfinite, m.e)
+@inline _arcball_is_zero(v::Vec3) = v.x == 0.0 && v.y == 0.0 && v.z == 0.0
+
+# three.js documents that the camera may only be a child of the scene. It aims
+# the camera at `target` in world space (Object3D.lookAt) and takes the roll
+# axis from the world matrix, but moves the camera through its local matrix,
+# so a transformed parent mixes two frames; Diff3D keeps everything in the
+# camera's local frame and therefore accepts only an untransformed root Scene.
 function _checked_arcball_camera(cam::_OrbitCamera)
     _validated_camera_view_vectors(cam, nameof(typeof(cam)))
     parent = get_parent(cam)
-    (parent === nothing || parent isa Scene) || throw(ArgumentError(
-        "ArcballControls camera must not be a child of an object other than a Scene (three.js requirement)"))
+    parent === nothing && return cam
+    parent isa Scene || _throw_arcball(
+        "ArcballControls camera must not be a child of an object other than a Scene (three.js requirement)")
+    r = parent.rotation
+    (get_parent(parent) === nothing && parent.position == Vec3(0.0, 0.0, 0.0) &&
+     r.x == 0.0 && r.y == 0.0 && r.z == 0.0 && parent.scale == Vec3(1.0, 1.0, 1.0)) ||
+        _throw_arcball("ArcballControls camera parent Scene must be an untransformed root")
     return cam
 end
 
 function _validate_arcball(ac::ArcballControls)
-    label = "ArcballControls"
     _checked_arcball_camera(ac.camera)
-    _checked_control_vec3(ac.target, "$label target")
-    _checked_control_scalar(ac.radius_factor, "$label radius_factor")
-    scale_factor = _checked_control_scalar(ac.scale_factor, "$label scale_factor")
-    scale_factor > 0.0 || throw(ArgumentError("$label scale_factor must be positive"))
-    damping = _checked_control_scalar(ac.damping_factor, "$label damping_factor")
-    damping >= 0.0 || throw(ArgumentError("$label damping_factor must be non-negative"))
-    isnan(ac.w_max) && throw(ArgumentError("$label w_max must not be NaN"))
+    _checked_control_vec3(ac.target, "ArcballControls target")
+    radius = _checked_control_scalar(ac.radius_factor, "ArcballControls radius_factor")
+    radius > 0.0 || _throw_arcball("ArcballControls radius_factor must be positive")
+    scale_factor = _checked_control_scalar(ac.scale_factor, "ArcballControls scale_factor")
+    scale_factor > 0.0 || _throw_arcball("ArcballControls scale_factor must be positive")
+    damping = _checked_control_scalar(ac.damping_factor, "ArcballControls damping_factor")
+    damping >= 0.0 || _throw_arcball("ArcballControls damping_factor must be non-negative")
+    isnan(ac.w_max) && _throw_arcball("ArcballControls w_max must not be NaN")
     focus_time = _checked_control_scalar(ac.focus_animation_time,
-                                         "$label focus_animation_time")
-    focus_time > 0.0 || throw(ArgumentError("$label focus_animation_time must be positive"))
-    min_fov = _checked_control_scalar(ac.min_fov, "$label min_fov")
-    max_fov = _checked_control_scalar(ac.max_fov, "$label max_fov")
-    0.0 < min_fov <= max_fov < Float64(π) || throw(ArgumentError(
-        "$label FOV limits must satisfy 0 < min_fov <= max_fov < pi radians"))
-    _checked_control_scalar(ac.rotate_speed, "$label rotate_speed")
+                                         "ArcballControls focus_animation_time")
+    focus_time > 0.0 || _throw_arcball("ArcballControls focus_animation_time must be positive")
+    min_fov = _checked_control_scalar(ac.min_fov, "ArcballControls min_fov")
+    max_fov = _checked_control_scalar(ac.max_fov, "ArcballControls max_fov")
+    0.0 < min_fov <= max_fov < Float64(π) || _throw_arcball(
+        "ArcballControls FOV limits must satisfy 0 < min_fov <= max_fov < pi radians")
+    _checked_control_scalar(ac.rotate_speed, "ArcballControls rotate_speed")
     _checked_orbit_distances(ac.min_distance, ac.max_distance)
     _checked_orbit_zoom_limits(ac.min_zoom, ac.max_zoom)
-    for name in (:element_left, :element_top, :element_width, :element_height)
-        _checked_control_scalar(getfield(ac, name), "$label $name")
+    _checked_control_scalar(ac.element_left, "ArcballControls element_left")
+    _checked_control_scalar(ac.element_top, "ArcballControls element_top")
+    _checked_control_scalar(ac.element_width, "ArcballControls element_width")
+    _checked_control_scalar(ac.element_height, "ArcballControls element_height")
+    ratio = _checked_control_scalar(ac.device_pixel_ratio, "ArcballControls device_pixel_ratio")
+    ratio > 0.0 || _throw_arcball("ArcballControls device_pixel_ratio must be positive")
+    _checked_control_vec3(ac.up, "ArcballControls up")
+    _arcball_is_zero(ac.up) && _throw_arcball("ArcballControls up must not be zero")
+    return ac
+end
+
+# ---- transactions ----------------------------------------------------------
+#
+# A public call either completes with a finite camera off the trackball centre
+# or raises ArgumentError and restores the controls and the camera. Arithmetic
+# three.js would carry on with as NaN (a wheel notch count that overflows the
+# zoom, a zero finger distance, astronomically far pointers) is caught here.
+
+const _ARCBALL_VECTOR_FIELDS = (:mouse_actions, :touch_start, :touch_current,
+                                :active_touches, :down_events, :frames, :running,
+                                :backup)
+# Fields saved one by one (references); the plain-data rest is saved as one
+# isbits tuple, which stays off the heap across the try block.
+const _ARCBALL_REFERENCE_FIELDS = (:camera, :scene, :state, :input, :mouse_op)
+const _ARCBALL_PLAIN_FIELDS =
+    Tuple(f for f in fieldnames(ArcballControls)
+          if !(f in _ARCBALL_VECTOR_FIELDS) && !(f in _ARCBALL_REFERENCE_FIELDS))
+
+@eval _arcball_capture(ac::ArcballControls) =
+    ($((:(getfield(ac, $(QuoteNode(f)))) for f in _ARCBALL_PLAIN_FIELDS)...),)
+
+@eval function _arcball_restore_fields!(ac::ArcballControls, saved::Tuple)
+    $((:(setfield!(ac, $(QuoteNode(f)), saved[$i]))
+       for (i, f) in enumerate(_ARCBALL_PLAIN_FIELDS))...)
+    return ac
+end
+
+# The camera fields the controls write, apart from the rotation order.
+function _arcball_camera_capture(cam::_OrbitCamera)
+    r = cam.rotation
+    fov = cam isa PerspectiveCamera ? cam.fov : 0.0
+    return (cam.position, cam.target, cam.up, r.x, r.y, r.z, cam.zoom, cam.near,
+            cam.far, fov)
+end
+
+function _arcball_camera_restore!(cam::_OrbitCamera, saved::Tuple, order::Symbol)
+    setfield!(cam, :position, saved[1])
+    setfield!(cam, :target, saved[2])
+    setfield!(cam, :up, saved[3])
+    setfield!(cam, :rotation, Euler(saved[4], saved[5], saved[6], order))
+    setfield!(cam, :zoom, saved[7])
+    setfield!(cam, :near, saved[8])
+    setfield!(cam, :far, saved[9])
+    cam isa PerspectiveCamera && setfield!(cam, :fov, saved[10])
+    return cam
+end
+
+function _arcball_check_result(ac::ArcballControls)
+    cam = ac.camera
+    ok = _arcball_finite(cam.position) && _arcball_finite(cam.target) &&
+         _arcball_finite(cam.up) && isfinite(cam.zoom) && cam.zoom > 0.0 &&
+         !isnan(cam.near) && !isnan(cam.far) &&
+         (!(cam isa PerspectiveCamera) || isfinite(cam.fov)) &&
+         _arcball_finite(ac.gizmo_position) && _arcball_finite(ac.gizmo_quaternion) &&
+         _arcball_finite(ac.gizmo_scale) && isfinite(ac.gizmo_radius) &&
+         isfinite(ac.tb_radius) && _arcball_finite(ac.camera_matrix_state) &&
+         _arcball_finite(ac.gizmo_matrix_state) && isfinite(ac.fov_state) &&
+         isfinite(ac.zoom_state) && _arcball_finite(ac.up) &&
+         _arcball_finite(ac.start_cursor_position) &&
+         _arcball_finite(ac.current_cursor_position) && _arcball_finite(ac.rotation_axis) &&
+         _arcball_finite(ac.cursor_pos_prev) && _arcball_finite(ac.cursor_pos_curr) &&
+         isfinite(ac.w_prev) && isfinite(ac.w_curr) && isfinite(ac.angle_prev) &&
+         isfinite(ac.angle_current) && isfinite(ac.start_finger_distance) &&
+         isfinite(ac.current_finger_distance) && isfinite(ac.start_finger_rotation) &&
+         isfinite(ac.current_finger_rotation)
+    ok || _throw_arcball("ArcballControls input would leave a non-finite camera or trackball state")
+    (cam.position == ac.gizmo_position || cam.position == cam.target ||
+     _arcball_is_zero(cam.up) || _arcball_is_zero(ac.up)) &&
+        _throw_arcball("ArcballControls input would put the camera on the trackball centre")
+    _arcball_finite(_arcball_camera_quaternion(ac)) ||
+        _throw_arcball("ArcballControls input would leave an undefined camera orientation")
+    return ac
+end
+
+function _arcball_transaction(f::F, ac::ArcballControls) where {F}
+    return _arcball_transaction(f, ac, ac.camera)
+end
+
+function _arcball_transaction(f::F, ac::ArcballControls, cam::C) where {F, C <: _OrbitCamera}
+    saved = _arcball_capture(ac)
+    camera0, scene0, state0, input0, mouse_op0 = ac.camera, ac.scene, ac.state,
+                                                 ac.input, ac.mouse_op
+    saved_camera = _arcball_camera_capture(cam)
+    order0 = cam.rotation.order
+    b = ac.backup
+    copy!(b.touch_start, ac.touch_start)
+    copy!(b.touch_current, ac.touch_current)
+    copy!(b.down_events, ac.down_events)
+    copy!(b.active_touches, ac.active_touches)
+    copy!(b.frames, ac.frames)
+    try
+        f()
+        _arcball_check_result(ac)
+    catch err
+        _arcball_restore_fields!(ac, saved)
+        ac.camera, ac.scene, ac.state, ac.input, ac.mouse_op =
+            camera0, scene0, state0, input0, mouse_op0
+        _arcball_camera_restore!(cam, saved_camera, order0)
+        copy!(ac.touch_start, b.touch_start)
+        copy!(ac.touch_current, b.touch_current)
+        copy!(ac.down_events, b.down_events)
+        copy!(ac.active_touches, b.active_touches)
+        copy!(ac.frames, b.frames)
+        empty!(ac.running)
+        # sin/cos of an infinite angle: three.js would continue with NaN.
+        err isa DomainError && _throw_arcball(
+            "ArcballControls input would leave a non-finite camera or trackball state")
+        rethrow()
     end
-    ratio = _checked_control_scalar(ac.device_pixel_ratio, "$label device_pixel_ratio")
-    ratio > 0.0 || throw(ArgumentError("$label device_pixel_ratio must be positive"))
-    _checked_control_vec3(ac.up, "$label up")
     return ac
 end
 
@@ -4113,12 +4275,35 @@ _arcball_camera_matrix(ac::ArcballControls) =
 _arcball_gizmo_matrix(ac::ArcballControls) =
     mat4_compose(ac.gizmo_position, ac.gizmo_quaternion, ac.gizmo_scale)
 
-# Writes a decomposed camera matrix (position and orientation) to the camera.
+# Writes a decomposed camera matrix (position and orientation) to the camera,
+# as _set_camera_pose! does, with the target on the view ray at the gizmo
+# distance. When that distance is below 1e-3 of the camera's distance from
+# the origin, the ray takes the latter length instead, so that target -
+# position keeps the orientation to full precision (three.js stores the
+# quaternion itself).
 function _arcball_set_camera_pose!(ac::ArcballControls, position::Vec3,
                                    q::Quaternion)
-    _set_camera_pose!(ac.camera, position, q,
-                      _arcball_distance(ac.gizmo_position, position),
-                      "ArcballControls")
+    cam = ac.camera
+    q = quat_normalize(q)
+    _arcball_finite(position) || _throw_arcball("ArcballControls camera position must be finite")
+    forward = quat_rotate_vector(q, Vec3(0.0, 0.0, -1.0))
+    up = quat_rotate_vector(q, Vec3(0.0, 1.0, 0.0))
+    _arcball_finite(up) || _throw_arcball("ArcballControls camera up must be finite")
+    distance = _arcball_distance(ac.gizmo_position, position)
+    reach = _arcball_length(position)
+    distance < 1e-3 * reach && (distance = reach)
+    (isfinite(distance) && distance > 0.0) || (distance = 1.0)
+    target = position + forward * distance
+    _arcball_finite(target) || _throw_arcball("ArcballControls camera target must be finite")
+    if cam.rotation_driven
+        euler = _transform_quaternion_to_euler(q, cam.rotation.order)
+        _arcball_finite(Vec3(euler.x, euler.y, euler.z)) ||
+            _throw_arcball("ArcballControls camera rotation must be finite")
+        cam.rotation = euler
+    end
+    cam.position = position
+    cam.target = target
+    cam.up = up
     return q
 end
 
@@ -4137,8 +4322,11 @@ end
 
 # Object3D.lookAt(point) for the camera, with three.js camera.up.
 function _arcball_look_at!(ac::ArcballControls, point::Vec3)
-    ac.camera.up = ac.up
-    _camera_control_look_at!(ac.camera, point, "ArcballControls")
+    _arcball_finite(point) || _throw_arcball("ArcballControls look target must be finite")
+    cam = ac.camera
+    cam.up = ac.up
+    cam.target = point
+    _sync_camera_rotation_from_view!(cam)
     return ac
 end
 
@@ -4195,12 +4383,10 @@ function _arcball_update_tb_state!(ac::ArcballControls, state::Symbol,
     return ac
 end
 
-# setCamera (ArcballControls.js:1913-1950).
-function _arcball_set_camera!(ac::ArcballControls, cam::_OrbitCamera)
-    _prepare_camera_control_up!(cam)
-    _checked_arcball_camera(cam)
+# setCamera (ArcballControls.js:1913-1950) with `up` as three.js camera.up.
+function _arcball_set_camera!(ac::ArcballControls, cam::_OrbitCamera, up::Vec3)
     ac.camera = cam
-    ac.up = cam.up
+    ac.up = up
     _arcball_look_at!(ac, ac.target)
     if cam isa PerspectiveCamera
         ac.fov0 = cam.fov
@@ -4429,6 +4615,10 @@ function _arcball_pan(ac::ArcballControls, p0::Vec3, p1::Vec3, adjust::Bool=fals
 end
 
 function _arcball_rotate(ac::ArcballControls, axis::Vec3, angle::Float64)
+    # A zero axis (the last two drag samples coincide) is no rotation here;
+    # three.js makeRotationAxis turns it into a scaling by cos(angle) that
+    # dollies the camera towards, and past, the gizmo during the inertia.
+    _arcball_is_zero(axis) && return _arcball_transformation(Mat4())
     point = ac.gizmo_position
     m = _arcball_multiply(_arcball_translation(point),
                           _arcball_rotation_axis_matrix(axis, -angle))
@@ -4992,12 +5182,14 @@ Returns `controls`.
 function arcball_animation_frame!(ac::ArcballControls, time)
     t = _checked_control_scalar(time, "ArcballControls frame time")
     _validate_arcball(ac)
-    append!(ac.running, ac.frames)
-    empty!(ac.frames)
-    while !isempty(ac.running)
-        _arcball_run_frame!(ac, popfirst!(ac.running), t)
+    isempty(ac.frames) && return ac
+    return _arcball_transaction(ac) do
+        append!(ac.running, ac.frames)
+        empty!(ac.frames)
+        while !isempty(ac.running)
+            _arcball_run_frame!(ac, popfirst!(ac.running), t)
+        end
     end
-    return ac
 end
 
 # ---- mouse actions (ArcballControls.js:1274-1508) --------------------------
@@ -5018,6 +5210,9 @@ end
 _arcball_mouse_matches(action, mouse, key) =
     action.mouse == mouse && action.key === key
 
+_arcball_valid_mouse(mouse) =
+    mouse === :wheel || (mouse isa Integer && !(mouse isa Bool) && 0 <= mouse <= 2)
+
 """
     arcball_set_mouse_action!(controls::ArcballControls, operation, mouse,
                               key=nothing) -> Bool
@@ -5032,8 +5227,7 @@ on the wheel.
 function arcball_set_mouse_action!(ac::ArcballControls, operation::Symbol, mouse,
                                    key::Union{Nothing, Symbol}=nothing)
     operation in (:pan, :rotate, :zoom, :fov) || return false
-    (mouse === :wheel || (mouse isa Integer && !(mouse isa Bool) && 0 <= mouse <= 2)) ||
-        return false
+    _arcball_valid_mouse(mouse) || return false
     key in (:ctrl, :shift, nothing) || return false
     (mouse === :wheel && !(operation in (:zoom, :fov))) && return false
     button = mouse isa Integer ? Int(mouse) : mouse
@@ -5058,7 +5252,7 @@ modifier `key` (`:ctrl`, `:shift` or `nothing`) (three.js
 """
 function arcball_unset_mouse_action!(ac::ArcballControls, mouse,
                                      key::Union{Nothing, Symbol}=nothing)
-    mouse isa Bool && return false
+    _arcball_valid_mouse(mouse) || return false
     button = mouse isa Integer ? Int(mouse) : mouse
     for i in eachindex(ac.mouse_actions)
         if _arcball_mouse_matches(ac.mouse_actions[i], button, key)
@@ -5111,11 +5305,17 @@ function _arcball_primary_up!(ac::ArcballControls, touch::Bool, id::Int)
     return primary
 end
 
-function _arcball_event(ac::ArcballControls, x, y, time, pointer_id, label::String)
-    return _ArcballPointer(Int(pointer_id),
-                           _checked_control_scalar(x, "ArcballControls $label x"),
-                           _checked_control_scalar(y, "ArcballControls $label y"),
-                           _checked_control_scalar(time, "ArcballControls $label time"))
+@inline function _checked_arcball_int(value::Integer, label::String)
+    typemin(Int) <= value <= typemax(Int) || _throw_arcball(label)
+    return Int(value)
+end
+
+function _arcball_event(x, y, time, pointer_id::Integer)
+    return _ArcballPointer(
+        _checked_arcball_int(pointer_id, "ArcballControls pointer_id must fit in an Int"),
+        _checked_control_scalar(x, "ArcballControls pointer x"),
+        _checked_control_scalar(y, "ArcballControls pointer y"),
+        _checked_control_scalar(time, "ArcballControls pointer time"))
 end
 
 """
@@ -5136,9 +5336,19 @@ function arcball_pointer_down!(ac::ArcballControls, x, y; time, button::Integer=
                                ctrl_key::Bool=false, meta_key::Bool=false,
                                shift_key::Bool=false,
                                is_primary::Union{Nothing, Bool}=nothing)
-    event = _arcball_event(ac, x, y, time, pointer_id, "pointer")
+    event = _arcball_event(x, y, time, pointer_id)
+    b = _checked_arcball_int(button, "ArcballControls button must fit in an Int")
     touch = _checked_pointer_type(pointer_type) === :touch
     _validate_arcball_input(ac)
+    return _arcball_transaction(ac) do
+        _arcball_pointer_down!(ac, event, b, touch,
+                               _arcball_modifier(ctrl_key, meta_key, shift_key), is_primary)
+    end
+end
+
+function _arcball_pointer_down!(ac::ArcballControls, event::_ArcballPointer, button::Int,
+                                touch::Bool, modifier::Union{Nothing, Symbol},
+                                is_primary::Union{Nothing, Bool})
     primary = _arcball_primary_down!(ac, touch, event.id)
     is_primary === nothing || (primary = is_primary)
     if button == 0 && primary
@@ -5164,12 +5374,11 @@ function arcball_pointer_down!(ac::ArcballControls, x, y; time, button::Integer=
             _arcball_triple_pan_start!(ac)
         end
     elseif !touch && ac.input === :none
-        modifier = _arcball_modifier(ctrl_key, meta_key, shift_key)
-        ac.mouse_op = _arcball_op_from_action(ac, Int(button), modifier)
+        ac.mouse_op = _arcball_op_from_action(ac, button, modifier)
         if ac.mouse_op !== nothing
             ac.listening = true
             ac.input = :cursor
-            ac.button = Int(button)
+            ac.button = button
             _arcball_single_pan_start!(ac, event, ac.mouse_op)
         end
     end
@@ -5198,10 +5407,17 @@ function arcball_pointer_move!(ac::ArcballControls, x, y; time,
                                pointer_type::Symbol=:mouse, pointer_id::Integer=1,
                                ctrl_key::Bool=false, meta_key::Bool=false,
                                shift_key::Bool=false)
-    event = _arcball_event(ac, x, y, time, pointer_id, "pointer")
+    event = _arcball_event(x, y, time, pointer_id)
     touch = _checked_pointer_type(pointer_type) === :touch
-    ac.listening || return ac
     _validate_arcball_input(ac)
+    ac.listening || return ac
+    return _arcball_transaction(ac) do
+        _arcball_pointer_move!(ac, event, touch, _arcball_modifier(ctrl_key, meta_key, shift_key))
+    end
+end
+
+function _arcball_pointer_move!(ac::ArcballControls, event::_ArcballPointer, touch::Bool,
+                                modifier::Union{Nothing, Symbol})
     if touch && ac.input !== :cursor
         if ac.input === :one_finger
             _arcball_update_touch_event!(ac, event)
@@ -5224,11 +5440,12 @@ function arcball_pointer_move!(ac::ArcballControls, x, y; time,
             _arcball_triple_pan_move!(ac)
         end
     elseif !touch && ac.input === :cursor
-        modifier = _arcball_modifier(ctrl_key, meta_key, shift_key)
         op_state = _arcball_op_state_from_action(ac, ac.button, modifier)
         op_state === nothing || _arcball_single_pan_move!(ac, event, op_state)
     end
-    if ac.down_valid
+    # With no stored down event (a double click completed while a touch held
+    # the listeners) three.js throws a TypeError here, ending the handler.
+    if ac.down_valid && !isempty(ac.down_events)
         movement = _arcball_pointer_distance(ac.down_events[end], event) *
                    ac.device_pixel_ratio
         movement > _ARCBALL_MOVEMENT_THRESHOLD && (ac.down_valid = false)
@@ -5252,9 +5469,16 @@ under the pointer (animated when `enable_animations`).
 function arcball_pointer_up!(ac::ArcballControls, x, y; time,
                              pointer_type::Symbol=:mouse, pointer_id::Integer=1,
                              is_primary::Union{Nothing, Bool}=nothing)
-    event = _arcball_event(ac, x, y, time, pointer_id, "pointer")
+    event = _arcball_event(x, y, time, pointer_id)
     touch = _checked_pointer_type(pointer_type) === :touch
     _validate_arcball_input(ac)
+    return _arcball_transaction(ac) do
+        _arcball_pointer_up!(ac, event, touch, is_primary)
+    end
+end
+
+function _arcball_pointer_up!(ac::ArcballControls, event::_ArcballPointer, touch::Bool,
+                              is_primary::Union{Nothing, Bool})
     primary = _arcball_primary_up!(ac, touch, event.id)
     is_primary === nothing || (primary = is_primary)
     ac.listening || return ac
@@ -5291,6 +5515,11 @@ function arcball_pointer_up!(ac::ArcballControls, x, y; time,
         empty!(ac.down_events)
         return ac
     end
+    # three.js reads the last (below: the second) stored down event without a
+    # check and throws a TypeError, ending the handler, when it is missing:
+    # after a double click completed while a touch held the listeners, or a
+    # second pointer up without a pointer down.
+    isempty(ac.down_events) && return ac
     if event.time - ac.down_events[end].time > _ARCBALL_MAX_DOWN_TIME
         ac.down_valid = false
         ac.nclicks = 0
@@ -5303,6 +5532,7 @@ function arcball_pointer_up!(ac::ArcballControls, x, y; time,
         return ac
     end
     click_interval = event.time - ac.click_start
+    length(ac.down_events) < 2 && return ac
     movement = _arcball_pointer_distance(ac.down_events[2], ac.down_events[1]) *
                ac.device_pixel_ratio
     if click_interval <= _ARCBALL_MAX_INTERVAL && movement <= _ARCBALL_POS_THRESHOLD
@@ -5327,8 +5557,9 @@ left it.
 """
 function arcball_pointer_cancel!(ac::ArcballControls; pointer_type::Symbol=:mouse,
                                  pointer_id::Integer=1)
+    id = _checked_arcball_int(pointer_id, "ArcballControls pointer_id must fit in an Int")
     touch = _checked_pointer_type(pointer_type) === :touch
-    _arcball_primary_up!(ac, touch, Int(pointer_id))
+    _arcball_primary_up!(ac, touch, id)
     empty!(ac.touch_start)
     empty!(ac.touch_current)
     ac.input = :none
@@ -5359,6 +5590,13 @@ function arcball_wheel!(ac::ArcballControls, delta_y; delta_x=0.0, x=0.0, y=0.0,
     operation = _arcball_op_from_action(
         ac, :wheel, _arcball_modifier(ctrl_key, meta_key, shift_key))
     (operation === :zoom || operation === :fov) || return ac
+    return _arcball_transaction(ac) do
+        _arcball_wheel!(ac, operation, dy, dx, px, py)
+    end
+end
+
+function _arcball_wheel!(ac::ArcballControls, operation::Symbol, dy::Float64,
+                         dx::Float64, px::Float64, py::Float64)
     sf = ac.scale_factor
     notch_size(s) = s > 0 ? 1 / (sf^s) : s < 0 ? sf^(-s) : 1.0
     if operation === :zoom
@@ -5413,6 +5651,10 @@ trackball radius and aims the camera at the gizmo centre with
 """
 function arcball_update!(ac::ArcballControls)
     _validate_arcball(ac)
+    return _arcball_transaction(() -> _arcball_update!(ac), ac)
+end
+
+function _arcball_update!(ac::ArcballControls)
     cam = ac.camera
     if ac.target != ac.current_target
         ac.gizmo_position = ac.target
@@ -5455,10 +5697,28 @@ end
 
 three.js `setCamera`: control `camera` from now on. It is aimed at `target`,
 and its pose, zoom, FOV, near and far become the reset state and the
-reference for `adjust_near_far`; the gizmo is rebuilt around `target`.
+reference for `adjust_near_far`; the gizmo is rebuilt around `target`. The
+up vector is `camera.up`, except for the camera already controlled, which
+keeps `controls.up` (the three.js `camera.up` it has been turning).
 """
 function arcball_set_camera!(ac::ArcballControls, camera::_OrbitCamera)
-    return _arcball_set_camera!(ac, camera)
+    _validate_arcball(ac)
+    _checked_arcball_new_camera(ac, camera)
+    return _arcball_transaction(ac, camera) do
+        if camera === ac.camera
+            _arcball_set_camera!(ac, camera, ac.up)
+        else
+            _prepare_camera_control_up!(camera)
+            _arcball_set_camera!(ac, camera, camera.up)
+        end
+    end
+end
+
+function _checked_arcball_new_camera(ac::ArcballControls, cam::_OrbitCamera)
+    _checked_arcball_camera(cam)
+    cam.position == ac.target &&
+        _throw_arcball("ArcballControls camera position must differ from target")
+    return cam
 end
 
 """
@@ -5493,8 +5753,12 @@ next run.
 """
 function arcball_reset!(ac::ArcballControls)
     _validate_arcball(ac)
-    cam = ac.camera
     zoom = _validated_camera_zoom(ac.zoom0)
+    return _arcball_transaction(() -> _arcball_reset!(ac, zoom), ac)
+end
+
+function _arcball_reset!(ac::ArcballControls, zoom::Float64)
+    cam = ac.camera
     ac.target = ac.target0
     cam.zoom = zoom
     cam isa PerspectiveCamera && (cam.fov = ac.fov0)
@@ -5555,6 +5819,15 @@ function arcball_paste_state!(ac::ArcballControls, st::ArcballState)
             "$label has no camera_fov for a PerspectiveCamera"))
         fov = _checked_control_scalar(st.camera_fov, "$label camera_fov")
     end
+    return _arcball_transaction(ac) do
+        _arcball_paste_state!(ac, st, target, up, zoom, near, far, fov)
+    end
+end
+
+function _arcball_paste_state!(ac::ArcballControls, st::ArcballState, target::Vec3,
+                               up::Vec3, zoom::Float64, near::Float64, far::Float64,
+                               fov::Union{Nothing, Float64})
+    cam = ac.camera
     ac.target = target
     ac.camera_matrix_state = st.camera_matrix
     _arcball_set_camera_from_matrix!(ac, ac.camera_matrix_state)
@@ -5583,8 +5856,15 @@ gizmo circles.
 """
 function arcball_set_tb_radius!(ac::ArcballControls, value)
     factor = _checked_control_scalar(value, "ArcballControls radius_factor")
+    factor > 0.0 || _throw_arcball("ArcballControls radius_factor must be positive")
+    previous = ac.radius_factor
     ac.radius_factor = factor
-    _validate_arcball(ac)
+    try
+        _validate_arcball(ac)
+    catch
+        ac.radius_factor = previous
+        rethrow()
+    end
     ac.tb_radius = _arcball_tb_radius(ac)
     ac.gizmo_radius = ac.tb_radius
     return ac

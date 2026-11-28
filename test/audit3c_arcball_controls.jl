@@ -866,8 +866,8 @@ end
     @test_throws ArgumentError Diff3D.ArcballControls(cam; device_pixel_ratio=0)
     @test_throws ArgumentError Diff3D.ArcballControls(cam; rotate_speed=NaN)
     @test_throws ArgumentError Diff3D.ArcballControls(cam; target=Vec3(NaN, 0.0, 0.0))
-    # A camera parented to a non-Scene object is rejected (setCamera,
-    # ArcballControls.js:1915-1919).
+    # A camera parented to a non-Scene object is rejected (the constructor's
+    # documented requirement, ArcballControls.js:117).
     holder = Group()
     child = _a3c_arc_persp()
     add!(holder, child)
@@ -880,6 +880,238 @@ end
     @test_throws ArgumentError Diff3D.arcball_set_tb_radius!(ac, NaN)
     ac.scale_factor = -1.0
     @test_throws ArgumentError Diff3D.arcball_update!(ac)
+end
+
+# The expected values below come from the same kind of harness running
+# unpatched three.js r186 (no change to the state JSON); every step of each
+# sequence agreed within 5e-15.
+
+# A double click completed while a touch holds the listeners leaves no stored
+# down event: three.js then throws a TypeError at the next pointer move or up
+# (onPointerMove 3143-3231, onPointerUp 3233-3360), ending that handler.
+@testset "ArcballControls pointer events without a stored down event" begin
+    ac = _a3c_arc_controls(_a3c_arc_persp())
+    steps = [
+        (pd=(300.0, 300.0), t=:touch, id=4, time=16.0),
+        (pd=(400.0, 300.0), time=32.0), (pu=(400.0, 300.0), time=48.0),
+        (pd=(400.0, 300.0), time=64.0), (pu=(400.0, 300.0), time=80.0),
+        (pm=(330.0, 320.0), t=:touch, id=4, time=96.0),
+        (pd=(400.0, 300.0), time=112.0), (pu=(400.0, 300.0), time=128.0),
+        (pu=(400.0, 300.0), time=133.0), (pu=(400.0, 300.0), time=138.0),
+        (pm=(360.0, 340.0), t=:touch, id=4, time=154.0),
+        (pu=(360.0, 340.0), t=:touch, id=4, time=170.0),
+    ]
+    expected = [
+        (step=10, p=(0.32709707047040726, 2.3346364022585004, 4.943933694512818), q=(-0.21772736175495197, 0.03574159193629625, 0.022924855719719302, 0.9750855272945638), up=(-0.06027123508965228, 0.9041384938669167, -0.42296685700989783), zoom=1.0, fov=0.8726646259971648, near=0.1, far=100.0, target=(0.0, 0.0, 0.0), tb=1.7112283948296336, anim=-1),
+        (step=11, p=(-0.2845148454006938, 2.6315235625605253, 4.795220020232166), q=(-0.24870834934273073, -0.020061441131968363, 0.026347384414147575, 0.9680121439741631), up=(-0.04103028033096446, 0.8748999446034946, -0.48256253794587534), zoom=1.0, fov=0.8726646259971648, near=0.1, far=100.0, target=(0.0, 0.0, 0.0), tb=1.7112283948296336, anim=-1),
+        (step=12, p=(-0.2845148454006938, 2.6315235625605253, 4.795220020232166), q=(-0.24870834934273073, -0.020061441131968363, 0.026347384414147575, 0.9680121439741631), up=(-0.04103028033096446, 0.8748999446034946, -0.48256253794587534), zoom=1.0, fov=0.8726646259971648, near=0.1, far=100.0, target=(0.0, 0.0, 0.0), tb=1.7112283948296336, anim=1),
+    ]
+    states, _ = _a3c_arc_run(ac, steps)
+    for e in expected
+        _a3c_arc_check(states[e.step + 1], e)
+    end
+end
+
+# setCamera on the controlled camera reads three.js camera.up, which the
+# rotation has turned (applyTransformMatrix 1551-1563); here that is
+# controls.up, not the camera's local +y axis (setCamera 1913-1950).
+@testset "ArcballControls set_camera keeps the controlled camera's up" begin
+    cam = _a3c_arc_persp(up=(0.1, 1.0, 0.2))
+    ac = _a3c_arc_controls(cam; target=(0.5, 0.0, 0.0))
+    steps = [
+        (pd=(400.0, 300.0), time=16.0), (pm=(430.0, 290.0), time=32.0),
+        (pm=(480.0, 260.0), time=48.0), (pu=(480.0, 260.0), time=348.0),
+        (setcam=true,), (u=1,),
+    ]
+    expected = [
+        (step=4, p=(-0.5208635332864553, 1.303692700295117, 5.148613695899423), q=(-0.12189195373966184, -0.09567051294055767, -0.0011162265180488095, 0.9879211803608521), up=(0.0859460536965871, 1.0206045287988517, -0.031299706855774545), zoom=1.0, fov=0.8726646259971648, near=0.1, far=100.0, target=(0.5, 0.0, 0.0), tb=1.7112283948296336, anim=-1),
+        (step=5, p=(-0.5208635332864553, 1.303692700295117, 5.148613695899423), q=(-0.11697492575066756, -0.10162363001982908, -0.05032685191247186, 0.9866390994400124), up=(0.0859460536965871, 1.0206045287988517, -0.031299706855774545), zoom=1.0, fov=0.8726646259971648, near=0.1, far=100.0, target=(0.5, 0.0, 0.0), tb=1.6897026524774779, anim=-1),
+        (step=6, p=(-0.5208635332864553, 1.303692700295117, 5.148613695899423), q=(-0.11697492575066756, -0.10162363001982908, -0.05032685191247186, 0.9866390994400124), up=(0.0859460536965871, 1.0206045287988517, -0.031299706855774545), zoom=1.0, fov=0.8726646259971648, near=0.1, far=100.0, target=(0.5, 0.0, 0.0), tb=1.6897026524774779, anim=-1),
+    ]
+    states, _ = _a3c_arc_run(ac, steps)
+    for e in expected
+        _a3c_arc_check(states[e.step + 1], e)
+    end
+    # Another camera brings its own up.
+    other = _a3c_arc_persp(up=(0.0, 0.0, 1.0))
+    Diff3D.arcball_set_camera!(ac, other)
+    @test ac.camera === other && ac.up == Vec3(0.0, 0.0, 1.0)
+end
+
+# 330 wheel notches bring the camera within 2e-13 of a gizmo 112 units from
+# the origin; the orientation must survive that (three.js keeps the quaternion).
+@testset "ArcballControls keeps the orientation next to an off-origin gizmo" begin
+    cam = _a3c_arc_persp()
+    cam.position = Vec3(100.0, 50.0, 10.0)
+    ac = _a3c_arc_controls(cam; target=(100.0, 50.0, 0.0))
+    steps = vcat([(w=-125.0,) for _ in 1:330],
+                 [(pd=(400.0, 300.0), time=16.0), (pm=(440.0, 320.0), time=32.0),
+                  (pm=(470.0, 340.0), time=48.0), (pu=(470.0, 340.0), time=348.0), (u=1,)])
+    expected = [
+        (step=333, p=(99.99999999999994, 50.00000000000003, 2.0961010704922955e-13), q=(-0.06858801746491586, -0.1213800131085352, 0.005983545587400761, 0.990215518692879), up=(0.004800429523058793, 0.9905197620848717, -0.13728640426394426), zoom=1.0, fov=0.8726646259971648, near=0.1, far=100.0, target=(100.0, 50.0, 0.0), tb=6.841656227313115e-14, anim=-1),
+        (step=335, p=(99.99999999999994, 50.00000000000003, 2.0961010704922955e-13), q=(-0.06650259063685456, -0.13071789549663243, 0.006899154417365907, 0.9891625947759264), up=(0.004800429523058793, 0.9905197620848717, -0.13728640426394426), zoom=1.0, fov=0.8726646259971648, near=0.1, far=100.0, target=(100.0, 50.0, 0.0), tb=6.843156835828525e-14, anim=-1),
+    ]
+    states, _ = _a3c_arc_run(ac, steps)
+    for e in expected
+        _a3c_arc_check(states[e.step + 1], e)
+        @test abs(states[e.step + 1].p.z - e.p[3]) <= 1e-11 * e.p[3]
+    end
+end
+
+# Two drag samples at one place give the inertia a zero axis; three.js then
+# scales and dollies the camera (makeRotationAxis with a zero axis); here the
+# camera stays where the drag left it while the animation runs out.
+@testset "ArcballControls inertia without an axis keeps the camera still" begin
+    ac = _a3c_arc_controls(_a3c_arc_persp())
+    Diff3D.arcball_pointer_down!(ac, 400, 300; time=0.0)
+    Diff3D.arcball_pointer_move!(ac, 440, 300; time=10.0)
+    Diff3D.arcball_pointer_move!(ac, 440, 300; time=20.0)
+    Diff3D.arcball_pointer_up!(ac, 440, 300; time=25.0)
+    p, q = ac.camera.position, Diff3D._camera_local_quaternion(ac.camera)
+    @test ac.animation_id != -1
+    frames = 0
+    for t in 41.0:16.0:2000.0
+        Diff3D.arcball_animation_frame!(ac, t)
+        frames += 1
+        @test ac.camera.position == p
+        r = Diff3D._camera_local_quaternion(ac.camera)
+        @test _a3c_arc_near((r.x, r.y, r.z, r.w), (q.x, q.y, q.z, q.w); tol=1e-14)
+        ac.animation_id == -1 && break
+    end
+    @test ac.animation_id == -1 && frames > 2 && ac.state === :idle
+    @test ac.camera.scale == Vec3(1.0, 1.0, 1.0)
+end
+
+function _a3c_arc_fields(ac)
+    cam = ac.camera
+    out = Any[getfield(cam, f) for f in fieldnames(typeof(cam)) if f ∉ (:parent, :children)]
+    for f in fieldnames(typeof(ac))
+        f in (:camera, :scene, :backup) && continue
+        v = getfield(ac, f)
+        push!(out, v isa Vector ? copy(v) : v)
+    end
+    return out
+end
+
+function _a3c_arc_rejects(f, ac)
+    before = _a3c_arc_fields(ac)
+    thrown = try
+        f()
+        nothing
+    catch err
+        err
+    end
+    return thrown isa ArgumentError && isequal(_a3c_arc_fields(ac), before)
+end
+
+function _a3c_arc_finite(ac)
+    cam = ac.camera
+    return all(isfinite, (cam.position.x, cam.position.y, cam.position.z,
+                          cam.target.x, cam.target.y, cam.target.z, ac.tb_radius))
+end
+
+@testset "ArcballControls rejects input that would break the camera" begin
+    # Wheel notch counts whose scale_factor power overflows or underflows.
+    ac = _a3c_arc_controls(_a3c_arc_ortho())
+    @test _a3c_arc_rejects(() -> Diff3D.arcball_wheel!(ac, -1e6), ac)
+    ac = _a3c_arc_controls(_a3c_arc_persp())
+    @test _a3c_arc_rejects(() -> Diff3D.arcball_wheel!(ac, 1e6), ac)
+    # Pointers astronomically far outside the element, mid-gesture: rotating
+    # and panning overflow and are rejected; the gesture then carries on.
+    for button in (0, 2)
+        ac = _a3c_arc_controls(_a3c_arc_persp())
+        Diff3D.arcball_pointer_down!(ac, 400, 300; time=0.0, button=button)
+        Diff3D.arcball_pointer_move!(ac, 420, 310; time=10.0)
+        @test _a3c_arc_rejects(() -> Diff3D.arcball_pointer_move!(ac, 1e300, -1e300; time=20.0), ac)
+        Diff3D.arcball_pointer_move!(ac, 430, 320; time=30.0)
+        @test _a3c_arc_finite(ac)
+    end
+    # A zoom drag that far reaches min_distance = 0 (within rounding) and
+    # stays finite; dragging back zooms out again.
+    ac = _a3c_arc_controls(_a3c_arc_persp())
+    Diff3D.arcball_pointer_down!(ac, 400, 300; time=0.0, button=1)
+    Diff3D.arcball_pointer_move!(ac, 1e300, -1e300; time=10.0)
+    @test _a3c_arc_finite(ac) && Diff3D.norm(ac.camera.position) < 1e-12
+    Diff3D.arcball_pointer_move!(ac, 400, 310; time=20.0)
+    @test _a3c_arc_finite(ac) && Diff3D.norm(ac.camera.position) > 1.0
+    # A rotation angle that overflows (sin/cos of Inf would be a DomainError).
+    ac = _a3c_arc_controls(_a3c_arc_persp(); cfg=(rotate_speed=floatmax(Float64),))
+    Diff3D.arcball_pointer_down!(ac, 400, 300; time=0.0)
+    @test _a3c_arc_rejects(() -> Diff3D.arcball_pointer_move!(ac, 700, 100; time=10.0), ac)
+    # max_distance = 0 moves the camera to the gizmo within rounding, finite.
+    ac = _a3c_arc_controls(_a3c_arc_persp())
+    ac.max_distance = 0.0
+    Diff3D.arcball_update!(ac)
+    @test _a3c_arc_finite(ac)
+    # Integers that do not fit, a zero up vector, a non-positive radius factor.
+    ac = _a3c_arc_controls(_a3c_arc_persp())
+    @test _a3c_arc_rejects(() -> Diff3D.arcball_pointer_down!(ac, 1, 1; time=0.0, pointer_id=typemax(UInt64)), ac)
+    @test _a3c_arc_rejects(() -> Diff3D.arcball_pointer_down!(ac, 1, 1; time=0.0, button=typemax(UInt64)), ac)
+    @test _a3c_arc_rejects(() -> Diff3D.arcball_pointer_cancel!(ac; pointer_id=typemax(UInt64)), ac)
+    @test _a3c_arc_rejects(() -> Diff3D.arcball_set_tb_radius!(ac, 0.0), ac)
+    @test_throws ArgumentError Diff3D.ArcballControls(_a3c_arc_persp(); radius_factor=0.0)
+    @test_throws ArgumentError Diff3D.ArcballControls(_a3c_arc_persp(); radius_factor=-0.5)
+    ac.up = Vec3(0.0, 0.0, 0.0)
+    @test _a3c_arc_rejects(() -> Diff3D.arcball_update!(ac), ac)
+    ac = _a3c_arc_controls(_a3c_arc_persp())
+    ac.element_width = 0.0
+    @test _a3c_arc_rejects(() -> Diff3D.arcball_pointer_move!(ac, 1, 1; time=0.0), ac)
+    @test Diff3D.arcball_unset_mouse_action!(ac, missing) === false
+    @test Diff3D.arcball_unset_mouse_action!(ac, 7) === false
+    # set_tb_radius validates before it changes anything.
+    ac = _a3c_arc_controls(_a3c_arc_persp())
+    ac.damping_factor = -1.0
+    @test _a3c_arc_rejects(() -> Diff3D.arcball_set_tb_radius!(ac, 0.5), ac)
+    # A camera at the target cannot be aimed.
+    cam = _a3c_arc_persp()
+    cam.position = Vec3(0.0, 0.0, 0.0)
+    @test_throws ArgumentError Diff3D.ArcballControls(cam)
+    ac = _a3c_arc_controls(_a3c_arc_persp())
+    @test _a3c_arc_rejects(() -> Diff3D.arcball_set_camera!(ac, cam), ac)
+    # Only an untransformed root Scene may hold the camera.
+    scene = Scene()
+    held = _a3c_arc_persp()
+    add!(scene, held)
+    ac = Diff3D.ArcballControls(held, scene)
+    @test ac.camera === held
+    scene.rotation = Euler(0.0, 0.3, 0.0, :XYZ)
+    @test _a3c_arc_rejects(() -> Diff3D.arcball_update!(ac), ac)
+    moved = Scene()
+    moved.position = Vec3(1.0, 0.0, 0.0)
+    cam = _a3c_arc_persp()
+    add!(moved, cam)
+    @test_throws ArgumentError Diff3D.ArcballControls(cam)
+end
+
+function _a3c_arc_move_bytes(ac, n)
+    Diff3D.arcball_pointer_move!(ac, 400 + n, 300; time=Float64(n))
+    return @allocated Diff3D.arcball_pointer_move!(ac, 401 + n, 300; time=n + 1.0)
+end
+
+_a3c_arc_wheel_bytes(ac) = (Diff3D.arcball_wheel!(ac, 125.0; x=300, y=200);
+                            @allocated Diff3D.arcball_wheel!(ac, -125.0; x=300, y=200))
+_a3c_arc_update_bytes(ac) = (Diff3D.arcball_update!(ac); @allocated Diff3D.arcball_update!(ac))
+_a3c_arc_frame_bytes(ac, t) = (Diff3D.arcball_animation_frame!(ac, t);
+                               @allocated Diff3D.arcball_animation_frame!(ac, t + 16.0))
+
+@testset "ArcballControls pointer, wheel, update and frame calls do not allocate" begin
+    # Allocation counts are only meaningful for optimized code.
+    if Base.JLOptions().opt_level > 0
+        for cam in (_a3c_arc_persp(), _a3c_arc_ortho()), button in (0, 1, 2)
+            ac = _a3c_arc_controls(cam; cfg=(adjust_near_far=true, cursor_zoom=true))
+            Diff3D.arcball_pointer_down!(ac, 400, 300; time=0.0, button=button)
+            @test _a3c_arc_move_bytes(ac, 1) == 0
+            Diff3D.arcball_pointer_up!(ac, 403, 300; time=500.0)
+            @test _a3c_arc_wheel_bytes(ac) == 0
+            @test _a3c_arc_update_bytes(ac) == 0
+        end
+        ac = _a3c_arc_controls(_a3c_arc_persp(); cfg=(damping_factor=0.0,))
+        Diff3D.arcball_pointer_down!(ac, 400, 300; time=0.0)
+        Diff3D.arcball_pointer_move!(ac, 410, 300; time=10.0)
+        Diff3D.arcball_pointer_move!(ac, 430, 300; time=20.0)
+        Diff3D.arcball_pointer_up!(ac, 430, 300; time=25.0)
+        @test _a3c_arc_frame_bytes(ac, 41.0) == 0
+    end
 end
 
 @testset "ArcballControls public names are documented" begin
