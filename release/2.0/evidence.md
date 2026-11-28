@@ -94,8 +94,25 @@ Release-validation run 46035496739 on `bb4f22e` (Linux, macOS and Windows on
 Julia 1.10 and 1.13; Chromium, Firefox and WebKit; installed consumers; the
 pinned three.js comparison): every completed job passed except the two Windows
 shard-4 jobs, which failed on the `save_webgl_html` allocation budget described
-above. The validation run for the released commit is linked from the GitHub
-release.
+above.
+
+Release-validation run 46040411601 on `65450d9` (with the staging-buffer fix)
+passed 66 of 66 jobs. The released commit `6b7e848` differs from it only by
+removing a stray patch backup of the test suite; release-validation run
+46048318361 on `6b7e848` passed 66 of 66 jobs, as did the CI and documentation
+runs for the same commit.
+
+## Publication
+
+- `v2.0.0` is an annotated tag at `6b7e8485c086930b2501faf449e178bb61092baf`
+  (tree `961f7ef88248fa7d5b538aac3f462e15dc37f95b`).
+- JuliaRegistries/General pull request 178042 registered that tree and merged
+  on 2026-11-27; the release notes carry the breaking-changes section that
+  AutoMerge requires for a major version.
+- The tag push deployed versioned documentation; `/v2.0.0/` and `/stable/`
+  both served HTTP 200 afterwards.
+- `Pkg.add(name="Diff3D", version="2.0.0")` in a fresh environment installed
+  2.0.0 from General with the same tree hash and rendered a test scene.
 
 ## Not verified here
 
