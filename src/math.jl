@@ -2072,7 +2072,8 @@ line3_delta(l::Line3)  = l.finish - l.start
 line3_length(l::Line3) = norm(line3_delta(l))
 
 @inline function _stable_midpoint(a, b)
-    return _stable_lerp(a, b, 0.5)
+    # A half in the operands' own float type, so Float32 stays Float32.
+    return _stable_lerp(a, b, one(float(promote_type(typeof(a), typeof(b)))) / 2)
 end
 
 line3_center(l::Line3) = Vec3(

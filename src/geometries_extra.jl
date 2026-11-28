@@ -2027,12 +2027,37 @@ function _catmull_rom_normalized_intervals(
     end
 end
 
+# three.js `CubicPoly.initNonuniformCatmullRom` and `calc`
+# (CatmullRomCurve3.js:38-74): the Hermite form of the non-uniform segment.
+function _catmull_rom_hermite(p0::Vec3, p1::Vec3, p2::Vec3, p3::Vec3, u::Float64,
+                              dt0::Float64, dt1::Float64, dt2::Float64)
+    # The polynomial rounds at its ends; the segment interpolates p1 and p2.
+    u == 0.0 && return p1
+    u == 1.0 && return p2
+    tangent1 = ((p1 - p0) / dt0 - (p2 - p0) / (dt0 + dt1) + (p2 - p1) / dt1) * dt1
+    tangent2 = ((p2 - p1) / dt1 - (p3 - p1) / (dt1 + dt2) + (p3 - p2) / dt2) * dt1
+    c2 = p1 * -3.0 + p2 * 3.0 - tangent1 * 2.0 - tangent2
+    c3 = p1 * 2.0 - p2 * 2.0 + tangent1 + tangent2
+    return p1 + tangent1 * u + c2 * (u * u) + c3 * (u * u * u)
+end
+
 function _catmull_rom_nonuniform(p0::Vec3, p1::Vec3, p2::Vec3, p3::Vec3,
                                  u::Float64, alpha::Float64)
     t0 = 0.0
     interval1 = _catmull_rom_interval(p0, p1, alpha)
     interval2 = _catmull_rom_interval(p1, p2, alpha)
     interval3 = _catmull_rom_interval(p2, p3, alpha)
+    if (iszero(interval1) || iszero(interval2) || iszero(interval3)) &&
+       isfinite(interval1) && isfinite(interval2) && isfinite(interval3)
+        # Coincident control points: three.js replaces a zero middle interval
+        # by 1 and a zero outer interval by the middle one
+        # (CatmullRomCurve3.js:230-237). Only exactly repeated points take
+        # this path; tiny distinct intervals keep the scale-relative rule below.
+        dt1 = iszero(interval2) ? 1.0 : interval2
+        dt0 = iszero(interval1) ? dt1 : interval1
+        dt2 = iszero(interval3) ? dt1 : interval3
+        return _catmull_rom_hermite(p0, p1, p2, p3, u, dt0, dt1, dt2)
+    end
     resolution_limited =
         !(isfinite(interval1) && interval1 > eps(Float64)) ||
         !(isfinite(interval2) && interval2 > eps(Float64)) ||
@@ -4421,8 +4446,10 @@ end
 @inline _axis_component(v::Vec3, axis::Int) = axis == 1 ? v.x : axis == 2 ? v.y : v.z
 
 # RoundedBoxGeometry.js:6-43 `getUv`.
+# `coordinate` is the unit-box coordinate of the vertex along `uv_axis`.
 function _rounded_box_uv(face_dir::Vec3{Float64}, normal::Vec3{Float64}, uv_axis::Int,
-                         projection_axis::Int, radius::Float64, side_length::Float64)
+                         projection_axis::Int, radius::Float64, side_length::Float64,
+                         coordinate::Float64)
     total_arc_length = 2π * radius / 4
     center_length = max(side_length - 2 * radius, 0.0)
     half_arc = π / 4
@@ -4431,7 +4458,14 @@ function _rounded_box_uv(face_dir::Vec3{Float64}, normal::Vec3{Float64}, uv_axis
     projected = Vec3(_normalize_components(projected.x, projected.y, projected.z)...)
     arc_uv_ratio = 0.5 * total_arc_length / (total_arc_length + center_length)
     arc_angle_ratio = 1.0 - (_angle_between(projected, face_dir) / half_arc)
-    if sign(_axis_component(projected, uv_axis)) == 1
+    # On the two grid lines bounding the flat middle strip the normal component
+    # along `uv_axis` is zero up to rounding, so its sign is noise (three.js
+    # reads the sign of its Float32 rounding there). The side of the strip the
+    # vertex is on decides the branch instead. Every other vertex lies on an
+    # arc, where the component is of order 1 / segments.
+    component = _axis_component(projected, uv_axis)
+    positive = abs(component) <= 1.0e-9 ? coordinate > 0 : component > 0
+    if positive
         return arc_angle_ratio * arc_uv_ratio
     end
     length_uv = center_length / (total_arc_length + center_length)
@@ -4489,28 +4523,28 @@ function RoundedBoxGeometry(; width=1.0, height=1.0, depth=1.0, segments=2, radi
         side = i ÷ face_tris
         if side == 0
             dir = Vec3(1.0, 0.0, 0.0)
-            u = _rounded_box_uv(dir, n, 3, 2, radius, depth)
-            v = 1.0 - _rounded_box_uv(dir, n, 2, 3, radius, height)
+            u = _rounded_box_uv(dir, n, 3, 2, radius, depth, z)
+            v = 1.0 - _rounded_box_uv(dir, n, 2, 3, radius, height, y)
         elseif side == 1
             dir = Vec3(-1.0, 0.0, 0.0)
-            u = 1.0 - _rounded_box_uv(dir, n, 3, 2, radius, depth)
-            v = 1.0 - _rounded_box_uv(dir, n, 2, 3, radius, height)
+            u = 1.0 - _rounded_box_uv(dir, n, 3, 2, radius, depth, z)
+            v = 1.0 - _rounded_box_uv(dir, n, 2, 3, radius, height, y)
         elseif side == 2
             dir = Vec3(0.0, 1.0, 0.0)
-            u = 1.0 - _rounded_box_uv(dir, n, 1, 3, radius, width)
-            v = _rounded_box_uv(dir, n, 3, 1, radius, depth)
+            u = 1.0 - _rounded_box_uv(dir, n, 1, 3, radius, width, x)
+            v = _rounded_box_uv(dir, n, 3, 1, radius, depth, z)
         elseif side == 3
             dir = Vec3(0.0, -1.0, 0.0)
-            u = 1.0 - _rounded_box_uv(dir, n, 1, 3, radius, width)
-            v = 1.0 - _rounded_box_uv(dir, n, 3, 1, radius, depth)
+            u = 1.0 - _rounded_box_uv(dir, n, 1, 3, radius, width, x)
+            v = 1.0 - _rounded_box_uv(dir, n, 3, 1, radius, depth, z)
         elseif side == 4
             dir = Vec3(0.0, 0.0, 1.0)
-            u = 1.0 - _rounded_box_uv(dir, n, 1, 2, radius, width)
-            v = 1.0 - _rounded_box_uv(dir, n, 2, 1, radius, height)
+            u = 1.0 - _rounded_box_uv(dir, n, 1, 2, radius, width, x)
+            v = 1.0 - _rounded_box_uv(dir, n, 2, 1, radius, height, y)
         else
             dir = Vec3(0.0, 0.0, -1.0)
-            u = _rounded_box_uv(dir, n, 1, 2, radius, width)
-            v = 1.0 - _rounded_box_uv(dir, n, 2, 1, radius, height)
+            u = _rounded_box_uv(dir, n, 1, 2, radius, width, x)
+            v = 1.0 - _rounded_box_uv(dir, n, 2, 1, radius, height, y)
         end
         uvs[j + 1] = u
         uvs[j + 2] = v
