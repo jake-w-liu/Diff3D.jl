@@ -4106,6 +4106,10 @@ function _font_parse_outline(outline::AbstractString, char::String)
                      _font_outline_parse_float(tokens[i + 3], char, cmd, "control y"))
             i += 4
             push!(commands, FontCommand(:quadratic, [c, p]))
+        elseif cmd == "z"
+            # Contour close from three.js TTFLoader output; FontLoader.js
+            # createPath has no case for it and ignores it.
+            continue
         elseif cmd == "b"
             need(6, cmd)
             p = Vec2(_font_outline_parse_float(tokens[i], char, cmd, "x"),
@@ -4309,9 +4313,9 @@ end
 # and createPath): `\n` returns to x = 0 one line height lower, a character
 # without a glyph is drawn with the `?` glyph, and each glyph advances by its
 # `ha`. Characters with neither glyph are skipped. Kerning pairs from the JSON
-# are applied between consecutive drawn glyphs. Calls `emit(loops)` per glyph.
-function _font_layout(emit, font::FontData, text::AbstractString, segments::Int,
-                      scale::Float64)
+# are applied between consecutive drawn glyphs. Calls `emit(glyph, x, y)` per
+# glyph with its pen position.
+function _font_layout(emit, font::FontData, text::AbstractString, scale::Float64)
     cursor_x = 0.0
     cursor_y = 0.0
     previous_key = nothing
@@ -4337,7 +4341,7 @@ function _font_layout(emit, font::FontData, text::AbstractString, segments::Int,
         end
         previous_key !== nothing &&
             (cursor_x += font_kerning(font, previous_key, key) * scale)
-        emit(_font_glyph_loops(glyph, segments, scale, cursor_x, cursor_y))
+        emit(glyph, cursor_x, cursor_y)
         cursor_x += glyph.advance_width * scale
         previous_key = key
     end
@@ -4358,7 +4362,9 @@ function font_text_shapes(font::FontData, text::AbstractString;
     shapes = Vector{Vec2{Float64}}[]
     segments = _font_curve_segments(curve_segments)
     scale = _font_scale(font, size)
-    _font_layout(loops -> append!(shapes, loops), font, text, segments, scale)
+    _font_layout(font, text, scale) do glyph, x, y
+        append!(shapes, _font_glyph_loops(glyph, segments, scale, x, y))
+    end
     return shapes
 end
 
@@ -4714,8 +4720,10 @@ function _font_text_shape_groups(font::FontData, text::AbstractString;
     segments = _font_curve_segments(curve_segments)
     scale = _font_scale(font, size)
     # Each glyph is its own ShapePath in three.js, so loops never group across glyphs.
-    _font_layout(loops -> append!(groups, _font_fill_groups(loops, :nonzero)),
-                 font, text, segments, scale)
+    _font_layout(font, text, scale) do glyph, x, y
+        loops = _font_glyph_loops(glyph, segments, scale, x, y)
+        append!(groups, _font_fill_groups(loops, :nonzero))
+    end
     return groups
 end
 
@@ -4912,10 +4920,50 @@ function _font_beveled_extrude_geometry(outer::Vector{Vec2{Float64}},
                           length(positions) ÷ 3, length(indices) ÷ 3)
 end
 
+# three.js Font.generateShapes (FontLoader.js createPath): one ShapePath per
+# glyph from its outline commands, scaled and offset, sorted by `to_shapes`.
+function _font_glyph_shape_path(glyph::FontGlyph, scale::Float64, xoff::Float64,
+                                yoff::Float64)
+    sp = ShapePath()
+    sx(p) = p.x * scale + xoff
+    sy(p) = p.y * scale + yoff
+    for cmd in glyph.commands
+        pts = cmd.points
+        if cmd.kind === :move
+            move_to!(sp, sx(pts[1]), sy(pts[1]))
+        elseif cmd.kind === :line
+            line_to!(sp, sx(pts[1]), sy(pts[1]))
+        elseif cmd.kind === :quadratic
+            quadratic_curve_to!(sp, sx(pts[1]), sy(pts[1]), sx(pts[2]), sy(pts[2]))
+        elseif cmd.kind === :bezier
+            bezier_curve_to!(sp, sx(pts[1]), sy(pts[1]), sx(pts[2]), sy(pts[2]),
+                             sx(pts[3]), sy(pts[3]))
+        else
+            error("unsupported font command $(cmd.kind)")
+        end
+    end
+    return sp
+end
+
+# three.js `new TextGeometry(text, {font, size, depth, curveSegments, bevel...})`:
+# ExtrudeGeometry of `font.generateShapes(text, size)` with Earcut.
+function _font_text_geometry_earcut(font::FontData, text::AbstractString, scale::Float64,
+                                    segments::Int, opt)
+    shapes = Tuple{Vector{Vec2{Float64}},Vector{Vector{Vec2{Float64}}}}[]
+    _font_layout(font, text, scale) do glyph, x, y
+        for shape in to_shapes(_font_glyph_shape_path(glyph, scale, x, y))
+            points = extract_points(shape, segments)
+            push!(shapes, (points.shape, points.holes))
+        end
+    end
+    return _extrude_threejs_geometry(shapes, opt, nothing)
+end
+
 """
     TextGeometry(font, text; size=1.0, curve_segments=8, depth=0.0,
                  bevel_enabled=false, bevel_size=0.0,
-                 bevel_thickness=bevel_size, bevel_segments=1)
+                 bevel_thickness=bevel_size, bevel_segments=1,
+                 triangulation=:ear_clip)
 
 Build a flat or extruded `BufferGeometry` from loaded typeface JSON outlines.
 Glyph contours are grouped into outer loops and holes by the nonzero rule
@@ -4923,13 +4971,23 @@ before triangulation. With beveling enabled the bevel follows three.js
 `ExtrudeGeometry`: the lids keep the glyph outline at `z = -bevel_thickness`
 and `z = depth + bevel_thickness`, and `bevel_segments` rings per side grow the
 outline by up to `bevel_size` towards the body, which spans `z = 0` to `depth`.
+
+`triangulation=:earcut` builds what three.js r186 `TextGeometry` builds with
+these parameters: `ExtrudeGeometry(font.generateShapes(text, size), {depth,
+curveSegments, bevelEnabled, bevelThickness, bevelSize, bevelSegments})` with
+its Earcut triangulation (see [`ExtrudeGeometry`](@ref)), an unindexed
+triangle list with flat normals, without draw groups. Glyph outlines become
+[`ShapePath`](@ref)s sorted by [`to_shapes`](@ref), and the glyphs are laid
+out as in the default mode. A zero `depth` then yields both lids and zero-area
+side walls, as in three.js.
 """
 function TextGeometry(font::FontData, text::AbstractString;
                       size::Real=1.0, curve_segments::Integer=8,
                       depth::Real=0.0, bevel_enabled::Bool=false,
                       bevel_size::Real=0.0,
                       bevel_thickness::Real=bevel_size,
-                      bevel_segments::Integer=1)
+                      bevel_segments::Integer=1,
+                      triangulation::Symbol=:ear_clip)
     zdepth = Float64(depth)
     isfinite(zdepth) && zdepth >= 0.0 ||
         throw(ArgumentError("depth must be finite and non-negative"))
@@ -4939,6 +4997,12 @@ function TextGeometry(font::FontData, text::AbstractString;
     bthick = Float64(bevel_thickness)
     isfinite(bthick) && bthick >= 0.0 ||
         throw(ArgumentError("bevel_thickness must be finite and non-negative"))
+    if _shape_triangulation(triangulation, "TextGeometry") === :earcut
+        segments = _font_curve_segments(curve_segments)
+        opt = _ExtrudeThreeOptions(zdepth, 1, bevel_enabled, bthick, bsize, 0.0,
+                                   bevel_enabled ? _font_curve_segments(bevel_segments) : 0)
+        return _font_text_geometry_earcut(font, text, _font_scale(font, size), segments, opt)
+    end
     bsegs = bevel_enabled ? _font_curve_segments(bevel_segments) : 1
     geos = BufferGeometry[]
     for group in _font_text_shape_groups(font, text; size=size,
@@ -4964,6 +5028,1171 @@ end
 """Alias accepting text first, matching three.js constructor order."""
 TextGeometry(text::AbstractString, font::FontData; kwargs...) =
     TextGeometry(font, text; kwargs...)
+
+# ---- TTFLoader: TrueType / OpenType fonts to typeface FontData ----
+# Mirrors three.js r186 examples/jsm/loaders/TTFLoader.js on top of the parts
+# of opentype.js 1.3.4 it uses (tables/{cmap,glyf,hmtx,head,hhea,maxp,post,
+# name,cff}.js, glyphset.js, encoding.js). Every read is bounds-checked against
+# its table, so truncated or corrupt files raise an ArgumentError.
+
+@noinline _ttf_error(msg::AbstractString) =
+    throw(ArgumentError("TTFLoader: " * msg))
+
+struct _TTFTable
+    lo::Int   # 0-based absolute offset of the table
+    hi::Int   # 0-based absolute end (exclusive)
+end
+
+@noinline _ttf_bounds_error(what) = _ttf_error("$what reads past the end of its table")
+@inline function _ttf_check(data::Vector{UInt8}, t::_TTFTable, off::Int, n::Int, what)
+    (off >= t.lo && off <= t.hi - n) || _ttf_bounds_error(what)
+    return nothing
+end
+@inline function _ttf_u8(data::Vector{UInt8}, t::_TTFTable, off::Int, what="font data")
+    _ttf_check(data, t, off, 1, what)
+    @inbounds return Int(data[off + 1])
+end
+@inline function _ttf_i8(data::Vector{UInt8}, t::_TTFTable, off::Int, what="font data")
+    _ttf_check(data, t, off, 1, what)
+    @inbounds return Int(reinterpret(Int8, data[off + 1]))
+end
+@inline function _ttf_u16(data::Vector{UInt8}, t::_TTFTable, off::Int, what="font data")
+    _ttf_check(data, t, off, 2, what)
+    @inbounds return (Int(data[off + 1]) << 8) | Int(data[off + 2])
+end
+@inline function _ttf_i16(data::Vector{UInt8}, t::_TTFTable, off::Int, what="font data")
+    v = _ttf_u16(data, t, off, what)
+    return v >= 0x8000 ? v - 0x10000 : v
+end
+@inline function _ttf_u32(data::Vector{UInt8}, t::_TTFTable, off::Int, what="font data")
+    _ttf_check(data, t, off, 4, what)
+    @inbounds return (Int(data[off + 1]) << 24) | (Int(data[off + 2]) << 16) |
+                     (Int(data[off + 3]) << 8) | Int(data[off + 4])
+end
+
+# JavaScript Math.round: the nearest integer, halves rounded up.
+@inline function _js_round(x::Float64)
+    r = floor(x)
+    return x - r >= 0.5 ? r + 1.0 : r + 0.0   # + 0.0: JSON has no negative zero
+end
+
+# One opentype.js path command; `kind` is lowercase m/l/q/c/z. Unused
+# coordinates are NaN (opentype.js leaves them undefined).
+struct _TTFCommand
+    kind::Char
+    x::Float64
+    y::Float64
+    x1::Float64
+    y1::Float64
+    x2::Float64
+    y2::Float64
+end
+_ttf_cmd(kind::Char, x=NaN, y=NaN, x1=NaN, y1=NaN, x2=NaN, y2=NaN) =
+    _TTFCommand(kind, Float64(x), Float64(y), Float64(x1), Float64(y1), Float64(x2), Float64(y2))
+
+struct _TTFPoint
+    x::Float64
+    y::Float64
+    on_curve::Bool
+    last_of_contour::Bool
+end
+
+mutable struct _TTFGlyph
+    simple_points::Vector{_TTFPoint}   # glyf points (accumulated for composites)
+    has_points::Bool                   # opentype.js `glyph.points` is defined
+    x_min::Float64                     # NaN when the glyph has no glyf entry
+    x_max::Float64
+    advance::Float64
+    commands::Union{Nothing,Vector{_TTFCommand}}
+    state::Int                         # 0 unparsed, 1 building, 2 built
+end
+
+mutable struct _TTFFont
+    data::Vector{UInt8}
+    tables::Dict{String,_TTFTable}
+    units_per_em::Int
+    num_glyphs::Int
+    glyf::_TTFTable
+    loca::Vector{Int}
+    glyphs::Dict{Int,_TTFGlyph}
+    cff::Any
+    elements::Int     # glyph points and path commands built so far
+    operations::Int   # charstring operations run so far
+end
+
+# Malformed fonts must not recurse, allocate or run without limit (three.js
+# overflows its stack or hangs instead). A glyph may hold at most 65536 points
+# (maxp stores maxCompositePoints as uint16); a font at most 2^23 points and
+# path commands, and its charstrings may run at most 2^26 operations in all.
+const _TTF_MAX_COMPONENT_DEPTH = 64
+const _TTF_MAX_GLYPH_POINTS = 1 << 16
+const _TTF_MAX_FONT_ELEMENTS = 1 << 23
+const _TTF_MAX_FONT_OPERATIONS = 1 << 26
+
+function _ttf_charge!(font::_TTFFont, g::_TTFGlyph)
+    font.elements += length(g.simple_points) + length(g.commands)
+    font.elements <= _TTF_MAX_FONT_ELEMENTS ||
+        _ttf_error("font outlines exceed $(_TTF_MAX_FONT_ELEMENTS) points and commands")
+    return nothing
+end
+
+function _ttf_table_directory(data::Vector{UInt8})
+    whole = _TTFTable(0, length(data))
+    length(data) >= 12 || _ttf_error("file is too short for a font header")
+    sig = data[1:4]
+    flavor = if sig == UInt8[0, 1, 0, 0] || sig == codeunits("true") || sig == codeunits("typ1")
+        :truetype
+    elseif sig == codeunits("OTTO")
+        :cff
+    elseif sig == codeunits("wOFF")
+        return _ttf_woff_directory(data)
+    elseif sig == codeunits("ttcf")
+        _ttf_error("font collections (.ttc) are not supported, as in opentype.js 1.3.4")
+    else
+        _ttf_error("unsupported OpenType signature $(repr(String(copy(sig))))")
+    end
+    num_tables = _ttf_u16(data, whole, 4, "table directory")
+    tables = Dict{String,_TTFTable}()
+    for i in 0:(num_tables - 1)
+        rec = 12 + 16i
+        _ttf_check(data, whole, rec, 16, "table directory")
+        tag = String(data[rec + 1:rec + 4])
+        offset = _ttf_u32(data, whole, rec + 8)
+        len = _ttf_u32(data, whole, rec + 12)
+        (offset <= length(data) && len <= length(data) - offset) ||
+            _ttf_error("table $(repr(tag)) lies outside the file")
+        tables[tag] = _TTFTable(offset, offset + len)
+    end
+    return flavor, tables, data
+end
+
+# The tables load_ttf reads; a WOFF file's other tables are not decompressed
+# (opentype.js decompresses only the tables it parses).
+const _TTF_READ_TABLES = ("head", "hhea", "maxp", "hmtx", "cmap", "name", "post", "glyf", "loca", "CFF ")
+# Decompressed WOFF tables may hold at most 256 MiB in all. A DEFLATE stream
+# can expand about 1000-fold and origLength is attacker-controlled up to
+# 4 GiB per table; the largest real fonts hold a few tens of MiB of tables.
+const _TTF_MAX_WOFF_BYTES = 1 << 28
+
+# WOFF 1.0 (opentype.js parseWOFFTableEntries / uncompressTable): tables whose
+# compressed length is below their original length are zlib streams. The
+# tables are copied into a new buffer that the readers address as usual.
+function _ttf_woff_directory(data::Vector{UInt8})
+    whole = _TTFTable(0, length(data))
+    _ttf_check(data, whole, 0, 44, "WOFF header")
+    flavor_tag = data[5:8]
+    flavor = if flavor_tag == UInt8[0, 1, 0, 0]
+        :truetype
+    elseif flavor_tag == codeunits("OTTO")
+        :cff
+    else
+        _ttf_error("unsupported WOFF flavor $(repr(String(copy(flavor_tag))))")
+    end
+    num_tables = _ttf_u16(data, whole, 12, "WOFF header")
+    out = UInt8[]
+    tables = Dict{String,_TTFTable}()
+    for i in 0:(num_tables - 1)
+        rec = 44 + 20i
+        _ttf_check(data, whole, rec, 20, "WOFF table directory")
+        tag = String(data[rec + 1:rec + 4])
+        offset = _ttf_u32(data, whole, rec + 4)
+        comp_length = _ttf_u32(data, whole, rec + 8)
+        orig_length = _ttf_u32(data, whole, rec + 12)
+        tag in _TTF_READ_TABLES || continue
+        length(out) + orig_length <= _TTF_MAX_WOFF_BYTES ||
+            _ttf_error("WOFF tables decompress to more than $(_TTF_MAX_WOFF_BYTES) bytes")
+        if comp_length < orig_length
+            comp_length >= 2 || _ttf_error("WOFF table $(repr(tag)) is too short")
+            _ttf_check(data, whole, offset, comp_length, "WOFF table $(repr(tag))")
+            # The zlib header is skipped and the DEFLATE stream inflated, as
+            # opentype.js does; the output may not exceed the recorded length.
+            table = try
+                inflate(data[(offset + 3):(offset + comp_length)]; max_output=orig_length)
+            catch err
+                err isa ErrorException || rethrow()
+                _ttf_error("WOFF table $(repr(tag)) does not decompress: $(err.msg)")
+            end
+            length(table) == orig_length ||
+                _ttf_error("decompression error: $(repr(tag)) decompressed length doesn't match recorded length")
+        else
+            _ttf_check(data, whole, offset, orig_length, "WOFF table $(repr(tag))")
+            table = data[(offset + 1):(offset + orig_length)]
+        end
+        lo = length(out)
+        append!(out, table)
+        tables[tag] = _TTFTable(lo, lo + orig_length)
+    end
+    return flavor, tables, out
+end
+
+function _ttf_required(tables::Dict{String,_TTFTable}, tag::String)
+    haskey(tables, tag) || _ttf_error("font has no $(repr(tag)) table")
+    return tables[tag]
+end
+
+# cmap (tables/cmap.js): the last Unicode subtable (platform 3 encoding
+# 0/1/10 or platform 0 encoding 0-4) in record order; formats 4 and 12.
+function _ttf_cmap(data::Vector{UInt8}, t::_TTFTable)
+    _ttf_u16(data, t, t.lo, "cmap") == 0 || _ttf_error("cmap table version should be 0")
+    n = _ttf_u16(data, t, t.lo + 2, "cmap")
+    offset = -1
+    for i in (n - 1):-1:0
+        platform = _ttf_u16(data, t, t.lo + 4 + 8i, "cmap")
+        encoding = _ttf_u16(data, t, t.lo + 6 + 8i, "cmap")
+        if (platform == 3 && encoding in (0, 1, 10)) || (platform == 0 && encoding in 0:4)
+            offset = _ttf_u32(data, t, t.lo + 8 + 8i, "cmap")
+            break
+        end
+    end
+    offset == -1 && _ttf_error("no valid cmap sub-tables found")
+    p = t.lo + offset
+    format = _ttf_u16(data, t, p, "cmap subtable")
+    map = Dict{Int,Int}()
+    if format == 12
+        groups = _ttf_u32(data, t, p + 12, "cmap format 12")
+        total = 0
+        for g in 0:(groups - 1)
+            q = p + 16 + 12g
+            start_code = _ttf_u32(data, t, q, "cmap format 12 group")
+            end_code = _ttf_u32(data, t, q + 4, "cmap format 12 group")
+            glyph = _ttf_u32(data, t, q + 8, "cmap format 12 group")
+            end_code >= start_code || continue
+            end_code <= 0x10FFFF || _ttf_error("cmap maps a code point beyond U+10FFFF")
+            total += end_code - start_code + 1
+            total <= 0x110000 || _ttf_error("cmap format 12 groups overlap")
+            for c in start_code:end_code
+                map[c] = glyph
+                glyph += 1
+            end
+        end
+    elseif format == 4
+        seg_count = _ttf_u16(data, t, p + 6, "cmap format 4") >> 1
+        ends = p + 14
+        starts = p + 16 + 2seg_count
+        deltas = p + 16 + 4seg_count
+        ranges = p + 16 + 6seg_count
+        total = 0
+        for i in 0:(seg_count - 2)
+            end_code = _ttf_u16(data, t, ends + 2i, "cmap format 4")
+            start_code = _ttf_u16(data, t, starts + 2i, "cmap format 4")
+            delta = _ttf_i16(data, t, deltas + 2i, "cmap format 4")
+            range_offset = _ttf_u16(data, t, ranges + 2i, "cmap format 4")
+            end_code >= start_code || continue
+            total += end_code - start_code + 1
+            total <= 4 * 0x10000 || _ttf_error("cmap format 4 segments overlap")
+            for c in start_code:end_code
+                glyph = if range_offset != 0
+                    g = _ttf_u16(data, t, ranges + 2i + range_offset + 2 * (c - start_code),
+                                 "cmap format 4 glyph index array")
+                    g != 0 ? (g + delta) & 0xFFFF : 0
+                else
+                    (c + delta) & 0xFFFF
+                end
+                map[c] = glyph
+            end
+        end
+    else
+        _ttf_error("only format 4 and 12 cmap tables are supported (found format $format)")
+    end
+    return map
+end
+
+# name (tables/name.js) record 4 (`fullName`) in English: Macintosh language 0
+# (Mac Roman) or Windows language 0x0409 (UTF-16BE); a later record wins.
+const _TTF_MAC_ROMAN_HIGH = collect("ÄÅÇÉÑÖÜáàâäãåçéèêëíìîïñóòôöõúùûü†°¢£§•¶ß®©™´¨≠ÆØ∞±≤≥¥µ∂∑∏π∫ªºΩæø¿¡¬√ƒ≈∆«»… ÀÃÕŒœ–—“”‘’÷◊ÿŸ⁄€‹›ﬁﬂ‡·‚„‰ÂÊÁËÈÍÎÏÌÓÔÒÚÛÙıˆ˜¯˘˙˚¸˝˛ˇ")
+
+function _ttf_full_name(data::Vector{UInt8}, t::_TTFTable)
+    count = _ttf_u16(data, t, t.lo + 2, "name")
+    strings = t.lo + _ttf_u16(data, t, t.lo + 4, "name")
+    name = ""
+    for i in 0:(count - 1)
+        rec = t.lo + 6 + 12i
+        platform = _ttf_u16(data, t, rec, "name record")
+        encoding = _ttf_u16(data, t, rec + 2, "name record")
+        language = _ttf_u16(data, t, rec + 4, "name record")
+        name_id = _ttf_u16(data, t, rec + 6, "name record")
+        len = _ttf_u16(data, t, rec + 8, "name record")
+        off = strings + _ttf_u16(data, t, rec + 10, "name record")
+        name_id == 4 || continue
+        text = if platform == 1 && language == 0 && encoding == 0
+            _ttf_check(data, t, off, len, "name string")
+            String(map(b -> b <= 0x7f ? Char(b) : _TTF_MAC_ROMAN_HIGH[b - 0x7f], data[off + 1:off + len]))
+        elseif platform == 3 && encoding in (1, 10) && language == 0x0409
+            units = UInt16[_ttf_u16(data, t, off + 2k, "name string") for k in 0:(cld(len, 2) - 1)]
+            transcode(String, units)
+        else
+            ""
+        end
+        isempty(text) || (name = text)
+    end
+    return name
+end
+
+# loca (tables/loca.js): numGlyphs + 1 glyph offsets into glyf.
+function _ttf_loca(data::Vector{UInt8}, t::_TTFTable, num_glyphs::Int, short::Bool)
+    return [short ? 2 * _ttf_u16(data, t, t.lo + 2i, "loca") : _ttf_u32(data, t, t.lo + 4i, "loca")
+            for i in 0:num_glyphs]
+end
+
+function _ttf_glyph!(font::_TTFFont, index::Int)
+    haskey(font.glyphs, index) && return font.glyphs[index]
+    0 <= index < font.num_glyphs || _ttf_error("glyph index $index is beyond numGlyphs")
+    g = _TTFGlyph(_TTFPoint[], false, NaN, NaN, NaN, nothing, 0)
+    font.glyphs[index] = g
+    return g
+end
+
+# glyf parseGlyphCoordinate
+@inline function _ttf_coordinate(data, t, p::Int, flag::Int, previous::Int, short_bit::Int,
+                                 same_bit::Int)
+    if flag & short_bit != 0
+        v = _ttf_u8(data, t, p, "glyf coordinates")
+        flag & same_bit == 0 && (v = -v)
+        return previous + v, p + 1
+    elseif flag & same_bit != 0
+        return previous, p
+    end
+    return previous + _ttf_i16(data, t, p, "glyf coordinates"), p + 2
+end
+
+# glyf parseGlyph + buildPath (tables/glyf.js) for one glyph, recursively
+# building its components; fills `points`, x bounds and path commands.
+function _ttf_build_glyph!(font::_TTFFont, index::Int, depth::Int=0)
+    g = _ttf_glyph!(font, index)
+    g.state == 2 && return g
+    g.state == 1 && _ttf_error("composite glyph $index is part of a component cycle")
+    depth <= _TTF_MAX_COMPONENT_DEPTH || _ttf_error("composite glyphs are nested too deeply")
+    font.cff !== nothing && return _ttf_cff_build_glyph!(font, index, g)
+    g.state = 1
+    offset = font.loca[index + 1]
+    if offset == font.loca[index + 2]
+        # glyphLoader: no outline, no bounds, no points
+        g.commands = _TTFCommand[]
+        g.state = 2
+        return g
+    end
+    data = font.data
+    t = font.glyf
+    p = t.lo + offset
+    contours = _ttf_i16(data, t, p, "glyf header")
+    g.x_min = _ttf_i16(data, t, p + 2, "glyf header")
+    g.x_max = _ttf_i16(data, t, p + 6, "glyf header")
+    p += 10
+    g.has_points = true
+    if contours > 0
+        end_points = [_ttf_u16(data, t, p + 2k, "glyf end points") for k in 0:(contours - 1)]
+        p += 2contours
+        instruction_length = _ttf_u16(data, t, p, "glyf instructions")
+        p += 2 + instruction_length
+        ncoords = end_points[end] + 1
+        flags = Int[]
+        sizehint!(flags, ncoords)
+        i = 0
+        while i < ncoords
+            flag = _ttf_u8(data, t, p, "glyf flags")
+            p += 1
+            push!(flags, flag)
+            if flag & 8 != 0
+                repeat = _ttf_u8(data, t, p, "glyf flags")
+                p += 1
+                for _ in 1:repeat
+                    push!(flags, flag)
+                    i += 1
+                end
+            end
+            i += 1
+        end
+        length(flags) == ncoords || _ttf_error("bad glyf flags in glyph $index")
+        ends = Set(end_points)
+        xs = Vector{Int}(undef, ncoords)
+        ys = Vector{Int}(undef, ncoords)
+        px = 0
+        for k in 1:ncoords
+            px, p = _ttf_coordinate(data, t, p, flags[k], px, 2, 16)
+            xs[k] = px
+        end
+        py = 0
+        for k in 1:ncoords
+            py, p = _ttf_coordinate(data, t, p, flags[k], py, 4, 32)
+            ys[k] = py
+        end
+        g.simple_points = [_TTFPoint(xs[k], ys[k], flags[k] & 1 != 0, (k - 1) in ends)
+                           for k in 1:ncoords]
+    elseif contours < 0
+        more = true
+        while more
+            flags = _ttf_u16(data, t, p, "glyf component")
+            component = _ttf_u16(data, t, p + 2, "glyf component")
+            p += 4
+            dx = 0.0; dy = 0.0
+            matched = nothing
+            if flags & 1 != 0
+                if flags & 2 != 0
+                    dx = _ttf_i16(data, t, p, "glyf component"); dy = _ttf_i16(data, t, p + 2, "glyf component")
+                else
+                    matched = (_ttf_u16(data, t, p, "glyf component"), _ttf_u16(data, t, p + 2, "glyf component"))
+                end
+                p += 4
+            else
+                if flags & 2 != 0
+                    dx = _ttf_i8(data, t, p, "glyf component"); dy = _ttf_i8(data, t, p + 1, "glyf component")
+                else
+                    matched = (_ttf_u8(data, t, p, "glyf component"), _ttf_u8(data, t, p + 1, "glyf component"))
+                end
+                p += 2
+            end
+            xscale = 1.0; scale01 = 0.0; scale10 = 0.0; yscale = 1.0
+            f2dot14(q) = _ttf_i16(data, t, q, "glyf component") / 16384
+            if flags & 8 != 0
+                xscale = yscale = f2dot14(p); p += 2
+            elseif flags & 64 != 0
+                xscale = f2dot14(p); yscale = f2dot14(p + 2); p += 4
+            elseif flags & 128 != 0
+                xscale = f2dot14(p); scale01 = f2dot14(p + 2)
+                scale10 = f2dot14(p + 4); yscale = f2dot14(p + 6); p += 8
+            end
+            more = flags & 32 != 0
+            # buildPath: build the component, then append its transformed points.
+            cg = _ttf_build_glyph!(font, component, depth + 1)
+            cg.has_points || continue
+            if matched !== nothing
+                (matched[1] > length(g.simple_points) - 1 || matched[2] > length(cg.simple_points) - 1) &&
+                    _ttf_error("matched points out of range in composite glyph $index")
+                first_pt = g.simple_points[matched[1] + 1]
+                second = cg.simple_points[matched[2] + 1]
+                sx = xscale * second.x + scale01 * second.y
+                sy = scale10 * second.x + yscale * second.y
+                dx = first_pt.x - sx
+                dy = first_pt.y - sy
+            end
+            length(g.simple_points) + length(cg.simple_points) <= _TTF_MAX_GLYPH_POINTS ||
+                _ttf_error("composite glyph $index has too many points")
+            for pt in cg.simple_points
+                push!(g.simple_points,
+                      _TTFPoint(xscale * pt.x + scale01 * pt.y + dx,
+                                scale10 * pt.x + yscale * pt.y + dy,
+                                pt.on_curve, pt.last_of_contour))
+            end
+        end
+    end
+    g.commands = _ttf_contour_path(g.simple_points, index)
+    _ttf_charge!(font, g)
+    g.state = 2
+    return g
+end
+
+# glyf getPath: quadratic contours with implied on-curve midpoints.
+function _ttf_contour_path(points::Vector{_TTFPoint}, index::Int)
+    commands = _TTFCommand[]
+    contour_start = 1
+    for k in eachindex(points)
+        points[k].last_of_contour || continue
+        contour = view(points, contour_start:k)
+        contour_start = k + 1
+        n = length(contour)
+        curr = contour[n]
+        next = contour[1]
+        if curr.on_curve
+            push!(commands, _ttf_cmd('m', curr.x, curr.y))
+        elseif next.on_curve
+            push!(commands, _ttf_cmd('m', next.x, next.y))
+        else
+            push!(commands, _ttf_cmd('m', (curr.x + next.x) * 0.5, (curr.y + next.y) * 0.5))
+        end
+        for i in 0:(n - 1)
+            curr = next
+            next = contour[mod(i + 1, n) + 1]
+            if curr.on_curve
+                push!(commands, _ttf_cmd('l', curr.x, curr.y))
+            else
+                nx, ny = next.on_curve ? (next.x, next.y) :
+                         ((curr.x + next.x) * 0.5, (curr.y + next.y) * 0.5)
+                push!(commands, _ttf_cmd('q', nx, ny, curr.x, curr.y))
+            end
+        end
+        push!(commands, _ttf_cmd('z'))
+    end
+    contour_start == length(points) + 1 ||
+        _ttf_error("glyph $index has points left after its last contour")
+    return commands
+end
+
+# TTFLoader.js reverseCommands
+function _ttf_reverse_commands(commands::Vector{_TTFCommand})
+    paths = Vector{Vector{_TTFCommand}}()
+    for c in commands
+        if c.kind == 'm'
+            push!(paths, [c])
+        elseif c.kind != 'z'
+            isempty(paths) && _ttf_error("glyph outline does not start with a move")
+            push!(paths[end], c)
+        end
+    end
+    reversed = _TTFCommand[]
+    for p in paths
+        push!(reversed, _ttf_cmd('m', p[end].x, p[end].y))
+        for i in length(p):-1:2
+            c = p[i]
+            x1, y1, x2, y2 = if !isnan(c.x2)
+                c.x2, c.y2, c.x1, c.y1
+            elseif !isnan(c.x1)
+                c.x1, c.y1, NaN, NaN
+            else
+                NaN, NaN, NaN, NaN
+            end
+            push!(reversed, _TTFCommand(c.kind, p[i - 1].x, p[i - 1].y, x1, y1, x2, y2))
+        end
+    end
+    return reversed
+end
+
+# TTFLoader.js token.o, with the FontCommands that _font_parse_outline reads
+# back from it (built from the same rounded values instead of re-parsing).
+function _ttf_outline(commands::Vector{_TTFCommand}, scale::Float64)
+    io = IOBuffer()
+    parsed = FontCommand[]
+    function emit(x, y)
+        point = Vec2(_js_round(x * scale), _js_round(y * scale))
+        # Exact integers print as JavaScript prints them; larger values
+        # (possible only through nested scaled components) are rejected.
+        (abs(point.x) < 2.0^53 && abs(point.y) < 2.0^53) ||
+            _ttf_error("glyph coordinate ($x, $y) is out of range")
+        print(io, Int(point.x), ' ', Int(point.y), ' ')
+        return point
+    end
+    for c in commands
+        print(io, c.kind == 'c' ? 'b' : c.kind, ' ')
+        p = isnan(c.x) ? nothing : emit(c.x, c.y)
+        c1 = isnan(c.x1) ? nothing : emit(c.x1, c.y1)
+        c2 = isnan(c.x2) ? nothing : emit(c.x2, c.y2)
+        if c.kind == 'm' || c.kind == 'l'
+            push!(parsed, FontCommand(c.kind == 'm' ? :move : :line, [p]))
+        elseif c.kind == 'q'
+            push!(parsed, FontCommand(:quadratic, [c1, p]))
+        elseif c.kind == 'c'
+            push!(parsed, FontCommand(:bezier, [c1, c2, p]))
+        end
+    end
+    return String(take!(io)), parsed
+end
+
+function _ttf_font(data::Vector{UInt8})
+    flavor, tables, data = _ttf_table_directory(data)
+    head = _ttf_required(tables, "head")
+    _ttf_u32(data, head, head.lo + 12, "head") == 0x5F0F3CF5 ||
+        _ttf_error("font header has wrong magic number")
+    units_per_em = _ttf_u16(data, head, head.lo + 18, "head")
+    index_to_loc = _ttf_i16(data, head, head.lo + 50, "head")
+    bbox = (_ttf_i16(data, head, head.lo + 36, "head"), _ttf_i16(data, head, head.lo + 38, "head"),
+            _ttf_i16(data, head, head.lo + 40, "head"), _ttf_i16(data, head, head.lo + 42, "head"))
+    maxp = _ttf_required(tables, "maxp")
+    num_glyphs = _ttf_u16(data, maxp, maxp.lo + 4, "maxp")
+    font = _TTFFont(data, tables, units_per_em, num_glyphs, _TTFTable(0, 0), Int[],
+                    Dict{Int,_TTFGlyph}(), nothing, 0, 0)
+    if haskey(tables, "glyf") && haskey(tables, "loca")
+        font.glyf = tables["glyf"]
+        font.loca = _ttf_loca(data, tables["loca"], num_glyphs, index_to_loc == 0)
+    elseif haskey(tables, "CFF ")
+        font.cff = _ttf_cff_parse(data, tables["CFF "], num_glyphs)
+    else
+        _ttf_error("font doesn't contain TrueType or CFF outlines")
+    end
+    return font, flavor, bbox
+end
+
+"""
+    load_ttf(path::AbstractString; reversed=false) -> FontData
+    load_ttf(data::AbstractVector{UInt8}; reversed=false) -> FontData
+
+Read a TrueType (`glyf`) or CFF-flavoured OpenType font and convert it to the
+typeface [`FontData`](@ref) that [`load_font`](@ref) reads from typeface JSON,
+exactly as three.js r186 `TTFLoader` converts a font through opentype.js 1.3.4:
+every character of the Unicode `cmap` subtable (format 4 or 12) gets its glyph
+outline (quadratic TrueType contours with implied on-curve points, composite
+glyphs, or Type 2 charstrings) as `m`/`l`/`q`/`b`/`z` commands in units of
+`100000 / (unitsPerEm * 72)` rounded to integers, its `hmtx` advance as the
+advance width and its `glyf` x bounds (CFF glyphs have none: 0), at
+`resolution = 1000`. `ascender` and `descender` come from `hhea`, the family
+name from the English full name, and the line height from the unscaled `head`
+bounding box and `post` underline thickness, as three.js uses them. Kerning is
+not read, as in three.js. `reversed=true` reverses every contour
+(`TTFLoader.reversed`).
+
+three.js quirks are kept: a glyph reached from several code points is
+reversed once per code point (so an even count restores the original order
+without `z`), and a CFF glyph reached from several code points takes its
+charstring width instead of the `hmtx` advance.
+
+WOFF 1.0 files are decompressed as opentype.js does; the tables read may
+hold at most 256 MiB decompressed. Font collections
+(`.ttc`), WOFF2 and fonts with other `cmap` formats are rejected, as are fonts
+without the `head`, `hhea`, `maxp`, `hmtx`, `cmap`, `name` and `post` tables
+three.js reads. Truncated or corrupt data raises an `ArgumentError`, and so do
+fonts past the work limits: composite glyphs nested over 64 levels or holding
+over 65536 points, over 2^23 outline points and commands in all, and
+charstrings running over 10^6 operations per glyph or 2^26 in all.
+"""
+load_ttf(path::AbstractString; reversed::Bool=false) = load_ttf(read(path); reversed=reversed)
+
+function load_ttf(bytes::AbstractVector{UInt8}; reversed::Bool=false)
+    font, _, bbox = _ttf_font(Vector{UInt8}(bytes))
+    data = font.data
+    tables = font.tables
+    hhea = _ttf_required(tables, "hhea")
+    ascender = _ttf_i16(data, hhea, hhea.lo + 4, "hhea")
+    descender = _ttf_i16(data, hhea, hhea.lo + 6, "hhea")
+    num_metrics = _ttf_u16(data, hhea, hhea.lo + 34, "hhea")
+    num_metrics >= 1 || _ttf_error("hhea numberOfHMetrics must be at least 1")
+    hmtx = _ttf_required(tables, "hmtx")
+    advance = 0
+    advances = Vector{Float64}(undef, font.num_glyphs)
+    for i in 0:(font.num_glyphs - 1)
+        i < num_metrics && (advance = _ttf_u16(data, hmtx, hmtx.lo + 4i, "hmtx"))
+        advances[i + 1] = advance
+    end
+    cmap = _ttf_cmap(data, _ttf_required(tables, "cmap"))
+    family = _ttf_full_name(data, _ttf_required(tables, "name"))
+    post = _ttf_required(tables, "post")
+    underline_thickness = _ttf_i16(data, post, post.lo + 10, "post")
+
+    scale = 100000 / ((font.units_per_em == 0 ? 2048 : font.units_per_em) * 72)
+    # addGlyphNamesAll: each glyph's code points in ascending order.
+    codes = sort!(collect(keys(cmap)))
+    unicodes = Dict{Int,Vector{Int}}()
+    for c in codes
+        gid = cmap[c]
+        0 <= gid < font.num_glyphs || _ttf_error("cmap maps U+$(string(c; base=16)) to missing glyph $gid")
+        push!(get!(Vector{Int}, unicodes, gid), c)
+    end
+    glyphs = Dict{String,FontGlyph}()
+    for (gid, list) in unicodes
+        g = _ttf_glyph!(font, gid)
+        # TTFLoader visits the glyph once per code point; the last visit's
+        # token is stored for all of them. Building the path (on the first
+        # visit) replaces a CFF glyph's hmtx advance by its charstring width,
+        # which a second visit reads.
+        ha = advances[gid + 1]
+        _ttf_build_glyph!(font, gid)
+        length(list) > 1 && font.cff !== nothing && (ha = g.advance)
+        if reversed
+            # Each visit reverses the path again. Reversal drops `z` and is
+            # its own inverse after that, so only the parity matters.
+            g.commands = _ttf_reverse_commands(g.commands)
+            iseven(length(list)) && (g.commands = _ttf_reverse_commands(g.commands))
+        end
+        outline, commands = _ttf_outline(g.commands, scale)
+        x_min = isnan(g.x_min) ? 0.0 : _js_round(g.x_min * scale)
+        x_max = isnan(g.x_max) ? 0.0 : _js_round(g.x_max * scale)
+        for c in list
+            ch = string(Char(c))
+            glyphs[ch] = FontGlyph(ch, _js_round(ha * scale), x_min, x_max, outline, commands)
+        end
+    end
+    line_height = Float64(bbox[4]) - Float64(bbox[2]) + Float64(underline_thickness)
+    return FontData(family, 1000.0, _js_round(ascender * scale), _js_round(descender * scale),
+                    glyphs, Dict{Tuple{String,String},Float64}(), line_height)
+end
+
+"""Alias for [`load_ttf`](@ref), matching three.js `TTFLoader` naming."""
+TTFLoader(path::AbstractString; reversed::Bool=false) = load_ttf(path; reversed=reversed)
+
+# CFF (tables/cff.js): INDEX/DICT structures, the private DICTs (per font
+# dict for CID-keyed fonts) and the Type 2 charstring interpreter
+# parseCFFCharstring. Index objects are 1-based byte ranges into the file.
+struct _TTFCffPrivate
+    subrs::Vector{UnitRange{Int}}
+    subrs_bias::Int
+    default_width::Float64
+    nominal_width::Float64
+end
+
+struct _TTFCff
+    table::_TTFTable
+    charstrings::Vector{UnitRange{Int}}
+    gsubrs::Vector{UnitRange{Int}}
+    gsubrs_bias::Int
+    privates::Vector{_TTFCffPrivate}
+    fd_select::Vector{Int}   # 1-based private per glyph; empty when not CID-keyed
+end
+
+# A glyph's charstring may not run more operators or nest subroutines deeper
+# than this (Type 2 allows 10 levels); malformed fonts loop forever in JS.
+const _TTF_CFF_MAX_OPERATIONS = 1_000_000
+const _TTF_CFF_MAX_SUBR_DEPTH = 64
+
+_ttf_cff_bias(n::Int) = n < 1240 ? 107 : n < 33900 ? 1131 : 32768
+
+function _ttf_cff_index(data::Vector{UInt8}, t::_TTFTable, start::Int)
+    count = _ttf_u16(data, t, start, "CFF INDEX")
+    count == 0 && return UnitRange{Int}[], start + 2
+    size = _ttf_u8(data, t, start + 2, "CFF INDEX")
+    1 <= size <= 4 || _ttf_error("CFF INDEX offset size $size is not 1-4")
+    _ttf_check(data, t, start + 3, (count + 1) * size, "CFF INDEX")
+    offsets = Vector{Int}(undef, count + 1)
+    for i in 0:count
+        v = 0
+        for k in 0:(size - 1)
+            v = (v << 8) | Int(data[start + 3 + i * size + k + 1])
+        end
+        offsets[i + 1] = v
+    end
+    base = start + (count + 1) * size + 2
+    objects = Vector{UnitRange{Int}}(undef, count)
+    for i in 1:count
+        lo = base + offsets[i]
+        hi = base + offsets[i + 1]
+        if hi > lo
+            _ttf_check(data, t, lo, hi - lo, "CFF INDEX data")
+            objects[i] = (lo + 1):hi
+        else
+            objects[i] = 1:0
+        end
+    end
+    return objects, base + offsets[end]
+end
+
+# parseFloatOperand: nibbles to a string, then JavaScript parseFloat (the
+# longest numeric prefix; NaN when there is none).
+function _ttf_cff_real(data::Vector{UInt8}, t::_TTFTable, p::Int)
+    io = IOBuffer()
+    lookup = ("0", "1", "2", "3", "4", "5", "6", "7", "8", "9", ".", "E", "E-", "null", "-")
+    while true
+        b = _ttf_u8(data, t, p, "CFF DICT real")
+        p += 1
+        n1 = b >> 4
+        n1 == 15 && break
+        print(io, lookup[n1 + 1])
+        n2 = b & 15
+        n2 == 15 && break
+        print(io, lookup[n2 + 1])
+    end
+    m = match(r"^[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?", String(take!(io)))
+    return (m === nothing ? NaN : parse(Float64, m.match)), p
+end
+
+# parseCFFDict over [t.lo, t.hi): operator => operands. As in opentype.js a
+# repeated operator is an error unless its earlier entry had several operands.
+function _ttf_cff_dict(data::Vector{UInt8}, t::_TTFTable)
+    dict = Dict{Int,Vector{Float64}}()
+    operands = Float64[]
+    p = t.lo
+    while p < t.hi
+        b0 = _ttf_u8(data, t, p, "CFF DICT")
+        p += 1
+        if b0 <= 21
+            op = b0
+            if b0 == 12
+                op = 1200 + _ttf_u8(data, t, p, "CFF DICT")
+                p += 1
+            end
+            if haskey(dict, op) && length(dict[op]) <= 1 && !(length(dict[op]) == 1 && isnan(dict[op][1]))
+                _ttf_error("CFF DICT repeats operator $op")
+            end
+            dict[op] = operands
+            operands = Float64[]
+        elseif b0 == 28
+            push!(operands, _ttf_u16(data, t, p, "CFF DICT"))   # unsigned, as opentype.js reads it
+            p += 2
+        elseif b0 == 29
+            v = _ttf_u32(data, t, p, "CFF DICT")
+            push!(operands, v >= 0x80000000 ? v - 0x100000000 : v)
+            p += 4
+        elseif b0 == 30
+            v, p = _ttf_cff_real(data, t, p)
+            push!(operands, v)
+        elseif 32 <= b0 <= 246
+            push!(operands, b0 - 139)
+        elseif 247 <= b0 <= 250
+            push!(operands, (b0 - 247) * 256 + _ttf_u8(data, t, p, "CFF DICT") + 108)
+            p += 1
+        elseif 251 <= b0 <= 254
+            push!(operands, -(b0 - 251) * 256 - _ttf_u8(data, t, p, "CFF DICT") - 108)
+            p += 1
+        else
+            _ttf_error("invalid CFF DICT operand byte $b0")
+        end
+    end
+    return dict
+end
+
+function _ttf_cff_number(dict, op::Int, default::Float64, what)
+    haskey(dict, op) || return default
+    (length(dict[op]) == 1 && isfinite(dict[op][1])) ||
+        _ttf_error("CFF DICT entry $what needs one finite operand")
+    return dict[op][1]
+end
+
+# Offsets and sizes are non-negative integers that fit the 32-bit operands.
+_ttf_cff_is_offset(v::Float64) = isinteger(v) && 0 <= v <= typemax(Int32)
+
+function _ttf_cff_offset(dict, op::Int, what)
+    v = _ttf_cff_number(dict, op, 0.0, what)
+    _ttf_cff_is_offset(v) || _ttf_error("CFF DICT entry $what is not an offset")
+    return Int(v)
+end
+
+# gatherCFFTopDicts: the Private DICT (and its local subroutines) of a Top
+# DICT or of a CID font dict.
+function _ttf_cff_private(data::Vector{UInt8}, t::_TTFTable, top)
+    haskey(top, 18) || return _TTFCffPrivate(UnitRange{Int}[], 0, 0.0, 0.0)
+    length(top[18]) == 2 && all(_ttf_cff_is_offset, top[18]) ||
+        _ttf_error("CFF Private DICT size/offset is malformed")
+    size, offset = Int(top[18][1]), Int(top[18][2])
+    (size == 0 || offset == 0) && return _TTFCffPrivate(UnitRange{Int}[], 0, 0.0, 0.0)
+    lo = t.lo + offset
+    (lo <= t.hi && size <= t.hi - lo) || _ttf_error("CFF Private DICT lies outside the CFF table")
+    priv = _ttf_cff_dict(data, _TTFTable(lo, lo + size))
+    subrs = UnitRange{Int}[]
+    bias = 0
+    subrs_offset = _ttf_cff_offset(priv, 19, "Subrs")
+    if subrs_offset != 0
+        subrs, _ = _ttf_cff_index(data, t, lo + subrs_offset)
+        bias = _ttf_cff_bias(length(subrs))
+    end
+    return _TTFCffPrivate(subrs, bias, _ttf_cff_number(priv, 20, 0.0, "defaultWidthX"),
+                          _ttf_cff_number(priv, 21, 0.0, "nominalWidthX"))
+end
+
+function _ttf_cff_fd_select(data::Vector{UInt8}, t::_TTFTable, p::Int, num_glyphs::Int, nfd::Int)
+    format = _ttf_u8(data, t, p, "CFF FDSelect")
+    fds = Int[]
+    check(fd) = fd < nfd || _ttf_error("CFF FDSelect has bad FD index $fd (FD count $nfd)")
+    if format == 0
+        for g in 0:(num_glyphs - 1)
+            fd = _ttf_u8(data, t, p + 1 + g, "CFF FDSelect")
+            check(fd)
+            push!(fds, fd + 1)
+        end
+    elseif format == 3
+        nranges = _ttf_u16(data, t, p + 1, "CFF FDSelect")
+        first = _ttf_u16(data, t, p + 3, "CFF FDSelect")
+        first == 0 || _ttf_error("CFF FDSelect format 3 has bad initial GID $first")
+        next = first
+        for r in 0:(nranges - 1)
+            fd = _ttf_u8(data, t, p + 5 + 3r, "CFF FDSelect")
+            next = _ttf_u16(data, t, p + 6 + 3r, "CFF FDSelect")
+            check(fd)
+            first <= next <= num_glyphs || _ttf_error("CFF FDSelect format 3 has bad GID $next")
+            for _ in first:(next - 1)
+                push!(fds, fd + 1)
+            end
+            first = next
+        end
+        next == num_glyphs || _ttf_error("CFF FDSelect format 3 has bad final GID $next")
+    else
+        _ttf_error("CFF FDSelect format $format is not supported")
+    end
+    return fds
+end
+
+function _ttf_cff_parse(data::Vector{UInt8}, t::_TTFTable, num_glyphs::Int)
+    # opentype.js starts the Name INDEX 4 bytes in, whatever hdrSize says.
+    _ttf_u8(data, t, t.lo + 3, "CFF header")
+    _, p = _ttf_cff_index(data, t, t.lo + 4)                 # Name INDEX
+    top_dicts, p = _ttf_cff_index(data, t, p)
+    _, p = _ttf_cff_index(data, t, p)                        # String INDEX
+    gsubrs, _ = _ttf_cff_index(data, t, p)
+    length(top_dicts) == 1 ||
+        _ttf_error("CFF table must hold exactly one font (found $(length(top_dicts)))")
+    r = top_dicts[1]
+    top = _ttf_cff_dict(data, _TTFTable(first(r) - 1, last(r)))
+    charstrings_offset = _ttf_cff_offset(top, 17, "CharStrings")
+    charstrings_offset == 0 && _ttf_error("CFF Top DICT has no CharStrings")
+    charstrings, _ = _ttf_cff_index(data, t, t.lo + charstrings_offset)
+    num_glyphs <= length(charstrings) ||
+        _ttf_error("maxp numGlyphs $num_glyphs exceeds the $(length(charstrings)) CFF charstrings")
+    privates = _TTFCffPrivate[]
+    fd_select = Int[]
+    if haskey(top, 1230) && length(top[1230]) >= 2
+        fd_array_offset = _ttf_cff_offset(top, 1236, "FDArray")
+        fd_select_offset = _ttf_cff_offset(top, 1237, "FDSelect")
+        (fd_array_offset == 0 || fd_select_offset == 0) &&
+            _ttf_error("font is marked as a CID font, but FDArray and/or FDSelect information is missing")
+        fd_dicts, _ = _ttf_cff_index(data, t, t.lo + fd_array_offset)
+        for fr in fd_dicts
+            push!(privates, _ttf_cff_private(data, t, _ttf_cff_dict(data, _TTFTable(first(fr) - 1, last(fr)))))
+        end
+        fd_select = _ttf_cff_fd_select(data, t, t.lo + fd_select_offset, num_glyphs, length(privates))
+    else
+        push!(privates, _ttf_cff_private(data, t, top))
+    end
+    return _TTFCff(t, charstrings, gsubrs, _ttf_cff_bias(length(gsubrs)), privates, fd_select)
+end
+
+mutable struct _TTFCffRun
+    stack::Vector{Float64}
+    commands::Vector{_TTFCommand}
+    nstems::Int
+    have_width::Bool
+    open::Bool
+    x::Float64
+    y::Float64
+    width::Float64
+    operations::Int
+    glyph::Int
+end
+
+@noinline _cs_error(r::_TTFCffRun, msg::AbstractString) = _ttf_error("$msg in glyph $(r.glyph)")
+function _cs_shift!(r::_TTFCffRun)
+    isempty(r.stack) && _cs_error(r, "charstring stack underflow")
+    return popfirst!(r.stack)
+end
+function _cs_pop!(r::_TTFCffRun)
+    isempty(r.stack) && _cs_error(r, "charstring stack underflow")
+    return pop!(r.stack)
+end
+@inline function _cs_byte(r::_TTFCffRun, data::Vector{UInt8}, lo::Int, n::Int, k::Int)
+    k < n || _cs_error(r, "truncated charstring")
+    @inbounds return Int(data[lo + k])
+end
+
+function _cs_new_contour!(r::_TTFCffRun)
+    r.open && push!(r.commands, _ttf_cmd('z'))
+    push!(r.commands, _ttf_cmd('m', r.x, r.y))
+    r.open = true
+    return nothing
+end
+@inline _cs_line!(r::_TTFCffRun) = push!(r.commands, _ttf_cmd('l', r.x, r.y))
+@inline _cs_curve!(r::_TTFCffRun, c1x, c1y, c2x, c2y, x, y) =
+    push!(r.commands, _ttf_cmd('c', x, y, c1x, c1y, c2x, c2y))
+
+function _cs_stems!(r::_TTFCffRun, nominal::Float64)
+    if isodd(length(r.stack)) && !r.have_width
+        r.width = _cs_shift!(r) + nominal
+    end
+    r.nstems += length(r.stack) >> 1
+    empty!(r.stack)
+    r.have_width = true
+    return nothing
+end
+
+function _cs_take_width!(r::_TTFCffRun, more_than::Int, nominal::Float64)
+    if length(r.stack) > more_than && !r.have_width
+        r.width = _cs_shift!(r) + nominal
+        r.have_width = true
+    end
+    return nothing
+end
+
+# parseCFFCharstring's inner `parse`, one (sub)routine at a time.
+function _cs_run!(r::_TTFCffRun, cff::_TTFCff, data::Vector{UInt8}, code::UnitRange{Int},
+                  priv::_TTFCffPrivate, depth::Int)
+    depth <= _TTF_CFF_MAX_SUBR_DEPTH || _cs_error(r, "charstring subroutines nest too deeply")
+    nominal = priv.nominal_width
+    lo = first(code)
+    n = length(code)
+    i = 0
+    while i < n
+        r.operations += 1
+        r.operations <= _TTF_CFF_MAX_OPERATIONS || _cs_error(r, "charstring runs too many operations")
+        v = _cs_byte(r, data, lo, n, i)
+        i += 1
+        if v == 1 || v == 3 || v == 18 || v == 23            # hstem vstem hstemhm vstemhm
+            _cs_stems!(r, nominal)
+        elseif v == 4                                        # vmoveto
+            _cs_take_width!(r, 1, nominal)
+            r.y += _cs_pop!(r)
+            _cs_new_contour!(r)
+        elseif v == 5                                        # rlineto
+            while !isempty(r.stack)
+                r.x += _cs_shift!(r)
+                r.y += _cs_shift!(r)
+                _cs_line!(r)
+            end
+        elseif v == 6 || v == 7                              # hlineto vlineto
+            horizontal = v == 6
+            while !isempty(r.stack)
+                horizontal ? (r.x += _cs_shift!(r)) : (r.y += _cs_shift!(r))
+                _cs_line!(r)
+                isempty(r.stack) && break
+                horizontal ? (r.y += _cs_shift!(r)) : (r.x += _cs_shift!(r))
+                _cs_line!(r)
+            end
+        elseif v == 8                                        # rrcurveto
+            while !isempty(r.stack)
+                c1x = r.x + _cs_shift!(r); c1y = r.y + _cs_shift!(r)
+                c2x = c1x + _cs_shift!(r); c2y = c1y + _cs_shift!(r)
+                r.x = c2x + _cs_shift!(r); r.y = c2y + _cs_shift!(r)
+                _cs_curve!(r, c1x, c1y, c2x, c2y, r.x, r.y)
+            end
+        elseif v == 10 || v == 29                            # callsubr callgsubr
+            subrs, bias = v == 10 ? (priv.subrs, priv.subrs_bias) : (cff.gsubrs, cff.gsubrs_bias)
+            index = _cs_pop!(r) + bias
+            # A missing subroutine is skipped, as opentype.js does.
+            if isinteger(index) && 0 <= index < length(subrs)
+                _cs_run!(r, cff, data, subrs[Int(index) + 1], priv, depth + 1)
+            end
+        elseif v == 11                                       # return
+            return nothing
+        elseif v == 12
+            esc = i < n ? Int(data[lo + i]) : -1
+            i += 1
+            if esc == 35                                     # flex
+                c1x = r.x + _cs_shift!(r); c1y = r.y + _cs_shift!(r)
+                c2x = c1x + _cs_shift!(r); c2y = c1y + _cs_shift!(r)
+                jpx = c2x + _cs_shift!(r); jpy = c2y + _cs_shift!(r)
+                c3x = jpx + _cs_shift!(r); c3y = jpy + _cs_shift!(r)
+                c4x = c3x + _cs_shift!(r); c4y = c3y + _cs_shift!(r)
+                r.x = c4x + _cs_shift!(r); r.y = c4y + _cs_shift!(r)
+                _cs_shift!(r)
+                _cs_curve!(r, c1x, c1y, c2x, c2y, jpx, jpy)
+                _cs_curve!(r, c3x, c3y, c4x, c4y, r.x, r.y)
+            elseif esc == 34                                 # hflex
+                c1x = r.x + _cs_shift!(r); c1y = r.y
+                c2x = c1x + _cs_shift!(r); c2y = c1y + _cs_shift!(r)
+                jpx = c2x + _cs_shift!(r); jpy = c2y
+                c3x = jpx + _cs_shift!(r); c3y = c2y
+                c4x = c3x + _cs_shift!(r); c4y = r.y
+                r.x = c4x + _cs_shift!(r)
+                _cs_curve!(r, c1x, c1y, c2x, c2y, jpx, jpy)
+                _cs_curve!(r, c3x, c3y, c4x, c4y, r.x, r.y)
+            elseif esc == 36                                 # hflex1
+                c1x = r.x + _cs_shift!(r); c1y = r.y + _cs_shift!(r)
+                c2x = c1x + _cs_shift!(r); c2y = c1y + _cs_shift!(r)
+                jpx = c2x + _cs_shift!(r); jpy = c2y
+                c3x = jpx + _cs_shift!(r); c3y = c2y
+                c4x = c3x + _cs_shift!(r); c4y = c3y + _cs_shift!(r)
+                r.x = c4x + _cs_shift!(r)
+                _cs_curve!(r, c1x, c1y, c2x, c2y, jpx, jpy)
+                _cs_curve!(r, c3x, c3y, c4x, c4y, r.x, r.y)
+            elseif esc == 37                                 # flex1
+                c1x = r.x + _cs_shift!(r); c1y = r.y + _cs_shift!(r)
+                c2x = c1x + _cs_shift!(r); c2y = c1y + _cs_shift!(r)
+                jpx = c2x + _cs_shift!(r); jpy = c2y + _cs_shift!(r)
+                c3x = jpx + _cs_shift!(r); c3y = jpy + _cs_shift!(r)
+                c4x = c3x + _cs_shift!(r); c4y = c3y + _cs_shift!(r)
+                if abs(c4x - r.x) > abs(c4y - r.y)
+                    r.x = c4x + _cs_shift!(r)
+                else
+                    r.y = c4y + _cs_shift!(r)
+                end
+                _cs_curve!(r, c1x, c1y, c2x, c2y, jpx, jpy)
+                _cs_curve!(r, c3x, c3y, c4x, c4y, r.x, r.y)
+            else
+                # Other escaped operators are dropped with their operands.
+                empty!(r.stack)
+            end
+        elseif v == 14                                       # endchar
+            _cs_take_width!(r, 0, nominal)
+            if r.open
+                push!(r.commands, _ttf_cmd('z'))
+                r.open = false
+            end
+        elseif v == 19 || v == 20                            # hintmask cntrmask
+            _cs_stems!(r, nominal)
+            i += (r.nstems + 7) >> 3
+        elseif v == 21                                       # rmoveto
+            _cs_take_width!(r, 2, nominal)
+            r.y += _cs_pop!(r)
+            r.x += _cs_pop!(r)
+            _cs_new_contour!(r)
+        elseif v == 22                                       # hmoveto
+            _cs_take_width!(r, 1, nominal)
+            r.x += _cs_pop!(r)
+            _cs_new_contour!(r)
+        elseif v == 24                                       # rcurveline
+            while length(r.stack) > 2
+                c1x = r.x + _cs_shift!(r); c1y = r.y + _cs_shift!(r)
+                c2x = c1x + _cs_shift!(r); c2y = c1y + _cs_shift!(r)
+                r.x = c2x + _cs_shift!(r); r.y = c2y + _cs_shift!(r)
+                _cs_curve!(r, c1x, c1y, c2x, c2y, r.x, r.y)
+            end
+            r.x += _cs_shift!(r)
+            r.y += _cs_shift!(r)
+            _cs_line!(r)
+        elseif v == 25                                       # rlinecurve
+            while length(r.stack) > 6
+                r.x += _cs_shift!(r)
+                r.y += _cs_shift!(r)
+                _cs_line!(r)
+            end
+            c1x = r.x + _cs_shift!(r); c1y = r.y + _cs_shift!(r)
+            c2x = c1x + _cs_shift!(r); c2y = c1y + _cs_shift!(r)
+            r.x = c2x + _cs_shift!(r); r.y = c2y + _cs_shift!(r)
+            _cs_curve!(r, c1x, c1y, c2x, c2y, r.x, r.y)
+        elseif v == 26                                       # vvcurveto
+            isodd(length(r.stack)) && (r.x += _cs_shift!(r))
+            while !isempty(r.stack)
+                c1x = r.x; c1y = r.y + _cs_shift!(r)
+                c2x = c1x + _cs_shift!(r); c2y = c1y + _cs_shift!(r)
+                r.x = c2x; r.y = c2y + _cs_shift!(r)
+                _cs_curve!(r, c1x, c1y, c2x, c2y, r.x, r.y)
+            end
+        elseif v == 27                                       # hhcurveto
+            isodd(length(r.stack)) && (r.y += _cs_shift!(r))
+            while !isempty(r.stack)
+                c1x = r.x + _cs_shift!(r); c1y = r.y
+                c2x = c1x + _cs_shift!(r); c2y = c1y + _cs_shift!(r)
+                r.x = c2x + _cs_shift!(r); r.y = c2y
+                _cs_curve!(r, c1x, c1y, c2x, c2y, r.x, r.y)
+            end
+        elseif v == 28                                       # shortint
+            u = (_cs_byte(r, data, lo, n, i) << 8) | _cs_byte(r, data, lo, n, i + 1)
+            push!(r.stack, u >= 0x8000 ? u - 0x10000 : u)
+            i += 2
+        elseif v == 30 || v == 31                            # vhcurveto hvcurveto
+            vertical = v == 30
+            while !isempty(r.stack)
+                if vertical
+                    c1x = r.x; c1y = r.y + _cs_shift!(r)
+                    c2x = c1x + _cs_shift!(r); c2y = c1y + _cs_shift!(r)
+                    r.x = c2x + _cs_shift!(r)
+                    r.y = c2y + (length(r.stack) == 1 ? _cs_shift!(r) : 0.0)
+                else
+                    c1x = r.x + _cs_shift!(r); c1y = r.y
+                    c2x = c1x + _cs_shift!(r); c2y = c1y + _cs_shift!(r)
+                    r.y = c2y + _cs_shift!(r)
+                    r.x = c2x + (length(r.stack) == 1 ? _cs_shift!(r) : 0.0)
+                end
+                _cs_curve!(r, c1x, c1y, c2x, c2y, r.x, r.y)
+                isempty(r.stack) && break
+                if vertical
+                    c1x = r.x + _cs_shift!(r); c1y = r.y
+                    c2x = c1x + _cs_shift!(r); c2y = c1y + _cs_shift!(r)
+                    r.y = c2y + _cs_shift!(r)
+                    r.x = c2x + (length(r.stack) == 1 ? _cs_shift!(r) : 0.0)
+                else
+                    c1x = r.x; c1y = r.y + _cs_shift!(r)
+                    c2x = c1x + _cs_shift!(r); c2y = c1y + _cs_shift!(r)
+                    r.x = c2x + _cs_shift!(r)
+                    r.y = c2y + (length(r.stack) == 1 ? _cs_shift!(r) : 0.0)
+                end
+                _cs_curve!(r, c1x, c1y, c2x, c2y, r.x, r.y)
+            end
+        elseif v < 32
+            # Reserved operators are ignored and leave the stack alone.
+        elseif v < 247
+            push!(r.stack, v - 139)
+        elseif v < 251
+            push!(r.stack, (v - 247) * 256 + _cs_byte(r, data, lo, n, i) + 108)
+            i += 1
+        elseif v < 255
+            push!(r.stack, -(v - 251) * 256 - _cs_byte(r, data, lo, n, i) - 108)
+            i += 1
+        else
+            u = (_cs_byte(r, data, lo, n, i) << 24) | (_cs_byte(r, data, lo, n, i + 1) << 16) | (_cs_byte(r, data, lo, n, i + 2) << 8) | _cs_byte(r, data, lo, n, i + 3)
+            push!(r.stack, (u >= 0x80000000 ? u - 0x100000000 : u) / 65536)
+            i += 4
+        end
+    end
+    return nothing
+end
+
+function _ttf_cff_build_glyph!(font, index::Int, g)
+    cff = font.cff::_TTFCff
+    g.state = 1
+    priv = isempty(cff.fd_select) ? cff.privates[1] : cff.privates[cff.fd_select[index + 1]]
+    r = _TTFCffRun(Float64[], _TTFCommand[], 0, false, false, 0.0, 0.0, priv.default_width, 0, index)
+    _cs_run!(r, cff, font.data, cff.charstrings[index + 1], priv, 0)
+    font.operations += r.operations
+    font.operations <= _TTF_MAX_FONT_OPERATIONS ||
+        _ttf_error("font charstrings run more than $(_TTF_MAX_FONT_OPERATIONS) operations")
+    g.commands = r.commands
+    _ttf_charge!(font, g)
+    g.advance = r.width
+    g.state = 2
+    return g
+end
 
 # ========================== SVGLoader / basic SVG shapes ==========================
 

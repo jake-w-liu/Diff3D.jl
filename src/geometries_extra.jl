@@ -163,6 +163,67 @@ end
 # Triangulate the boundary of the convex hull of a 3D point set. Faces are
 # emitted non-indexed so each hull triangle keeps a flat outward normal.
 
+# Below this many points the duplicate merge and the wrapping queries scan
+# instead of building an index, which would cost more than it saves.
+const _CONVEX_TREE_MIN_POINTS = 64
+
+# Keep each point unless it lies within `eps` of an earlier kept point,
+# compacting `raw` and `normalized` together; returns the number kept.
+function _convex_merge_scan!(raw::Vector{Vec3{Float64}}, normalized::Vector{Vec3{Float64}},
+                             eps::Float64)
+    out = 0
+    for read_index in eachindex(raw)
+        p_scaled = normalized[read_index]
+        duplicate = false
+        for existing_index in 1:out
+            if norm(p_scaled - normalized[existing_index]) <= eps
+                duplicate = true
+                break
+            end
+        end
+        if !duplicate
+            out += 1
+            raw[out] = raw[read_index]
+            normalized[out] = p_scaled
+        end
+    end
+    return out
+end
+
+function _convex_merge_cells!(raw::Vector{Vec3{Float64}}, normalized::Vector{Vec3{Float64}},
+                              eps::Float64)
+    cell_size = 2 * eps
+    # Non-finite coordinates never pass the distance test; they share a cell.
+    cell_coordinate(x) = (c = x / cell_size; isfinite(c) ? floor(Int, clamp(c, -0x1p60, 0x1p60)) : 1 << 62)
+    cells = Dict{NTuple{3,Int},Vector{Int}}()
+    out = 0
+    for read_index in eachindex(raw)
+        p_scaled = normalized[read_index]
+        cx = cell_coordinate(p_scaled.x)
+        cy = cell_coordinate(p_scaled.y)
+        cz = cell_coordinate(p_scaled.z)
+        duplicate = false
+        for dx in -1:1, dy in -1:1, dz in -1:1
+            kept = get(cells, (cx + dx, cy + dy, cz + dz), nothing)
+            kept === nothing && continue
+            for existing_index in kept
+                if norm(p_scaled - normalized[existing_index]) <= eps
+                    duplicate = true
+                    break
+                end
+            end
+            duplicate && break
+        end
+        if !duplicate
+            out += 1
+            raw[out] = raw[read_index]
+            normalized[out] = p_scaled
+            push!(get!(Vector{Int}, cells, (cx, cy, cz)), out)
+        end
+    end
+    return out
+end
+
 function _convex_clean_points(points::AbstractVector{<:Vec3})
     raw = Vector{Vec3{Float64}}(undef, length(points))
     for (i, p) in pairs(points)
@@ -198,24 +259,16 @@ function _convex_clean_points(points::AbstractVector{<:Vec3})
                              (point.z - center.z) / scale)
     end
 
-    # Compact the original and normalized points together.
-    out = 0
-    for read_index in eachindex(raw)
-        p = raw[read_index]
-        p_scaled = normalized[read_index]
-        duplicate = false
-        for existing_index in 1:out
-            if norm(p_scaled - normalized[existing_index]) <= eps
-                duplicate = true
-                break
-            end
-        end
-        if !duplicate
-            out += 1
-            raw[out] = p
-            normalized[out] = p_scaled
-        end
-    end
+    # Compact the original and normalized points together, dropping each point
+    # within `eps` of an earlier kept point. Kept points are bucketed in cubic
+    # cells of side 2eps: a kept point within `eps` of p differs from it by at
+    # most about eps per coordinate, so its cell index differs by at most one
+    # (rounding moves a coordinate divided by 2eps by under 1e-7 for |x| <= 1)
+    # and it is among the kept points of the 27 cells around p's cell. The
+    # test itself is unchanged, so the same points survive in the same order.
+    # Small sets compare against every kept point directly.
+    out = length(raw) < _CONVEX_TREE_MIN_POINTS ?
+        _convex_merge_scan!(raw, normalized, eps) : _convex_merge_cells!(raw, normalized, eps)
     resize!(raw, out)
     resize!(normalized, out)
     length(raw) >= 4 ||
@@ -275,8 +328,9 @@ end
 
 # Reference enumeration: every triple whose plane supports the point set, in
 # lexicographic triple order, deduplicated by coplanar point set. O(n^4); the
-# gift-wrapping search below reproduces its faces and order and falls back to
-# this when it cannot certify a closed hull.
+# gift-wrapping search below reproduces its faces and order (the tests compare
+# the two). ConvexGeometry does not run it: where wrapping cannot certify a
+# closed hull, `_convex_quickhull` builds one.
 function _convex_support_faces(points::Vector{Vec3{Float64}}, eps::Float64)
     n = length(points)
     faces = Tuple{Vector{Int},Vec3{Float64}}[]
@@ -296,17 +350,261 @@ function _convex_support_faces(points::Vector{Vec3{Float64}}, eps::Float64)
     return faces
 end
 
+# ---- Point tree for the gift-wrapping search ----
+# A static kd-tree over the points that answers the three plane queries of
+# gift wrapping with the results of a full scan in index order: the first
+# point after a given index beyond a plane, whether any point lies beyond a
+# plane, and the points within the plane tolerance. A node is skipped only
+# when a bound on the plane distance over its points, widened by `margin`,
+# shows that no point in it can pass the test; `margin` is 1e-12 per unit of
+# coordinate magnitude, three orders above the rounding error of either the
+# bound or a point's distance (a few 1e-16 per unit). Every other point is
+# tested with the scan's own expression, so the answers are the scan's, at a
+# cost that grows with the points near the plane, not with n.
+# Each node has two bounds and uses the tighter: its axis-aligned box, and a
+# slab around its centroid c along the direction m of c (the outward normal
+# of a patch of a round hull centred at the origin, as normalized points
+# are): every point is c + h m + q with h in [hmin, hmax] and q orthogonal
+# to m, |q| <= radius. A patch of hull surface near a plane tangent to it is
+# thin along m, so the slab bound skips it where its box would not.
+struct _ConvexPointTree
+    perm::Vector{Int}           # point indices; ascending within each leaf
+    lo::Vector{Vec3{Float64}}   # node bounding boxes
+    hi::Vector{Vec3{Float64}}
+    center::Vector{Vec3{Float64}}
+    axis::Vector{Vec3{Float64}}
+    hmin::Vector{Float64}
+    hmax::Vector{Float64}
+    radius::Vector{Float64}
+    first::Vector{Int}          # node's range of `perm`
+    last::Vector{Int}
+    left::Vector{Int}           # children; 0 for a leaf
+    right::Vector{Int}
+    minidx::Vector{Int}         # smallest and largest point index in the node
+    maxidx::Vector{Int}
+    sorted::Vector{Vector{Int}} # the node's point indices, ascending
+    margin::Float64
+    stack::Vector{Int}
+end
+
+const _CONVEX_TREE_LEAF = 16
+
+@inline _convex_axis_coord(p::Vec3{Float64}, axis::Int) =
+    axis == 1 ? p.x : axis == 2 ? p.y : p.z
+
+function _convex_point_tree(points::Vector{Vec3{Float64}})
+    magnitude = 1.0
+    for p in points
+        magnitude = max(magnitude, abs(p.x), abs(p.y), abs(p.z))
+    end
+    tree = _ConvexPointTree(collect(eachindex(points)), Vec3{Float64}[], Vec3{Float64}[],
+                            Vec3{Float64}[], Vec3{Float64}[], Float64[], Float64[], Float64[],
+                            Int[], Int[], Int[], Int[], Int[], Int[], Vector{Int}[],
+                            1e-12 * magnitude, Int[])
+    isempty(points) || _convex_tree_build!(tree, points, 1, length(points))
+    return tree
+end
+
+# Node over perm[first:last], split at the median of its widest axis. The
+# recursion depth is about log2(n / leaf size).
+function _convex_tree_build!(tree::_ConvexPointTree, points::Vector{Vec3{Float64}},
+                             first::Int, last::Int)
+    perm = tree.perm
+    lo = hi = points[perm[first]]
+    minidx = maxidx = perm[first]
+    for m in (first + 1):last
+        p = points[perm[m]]
+        lo = Vec3(min(lo.x, p.x), min(lo.y, p.y), min(lo.z, p.z))
+        hi = Vec3(max(hi.x, p.x), max(hi.y, p.y), max(hi.z, p.z))
+        minidx = min(minidx, perm[m]); maxidx = max(maxidx, perm[m])
+    end
+    push!(tree.lo, lo); push!(tree.hi, hi)
+    c = Vec3(0.0, 0.0, 0.0)
+    for m in first:last
+        c += points[perm[m]]
+    end
+    c *= 1 / (last - first + 1)
+    len = norm(c)
+    axis = len > 0.0 ? c * (1 / len) : Vec3(0.0, 0.0, 1.0)
+    hmin = Inf; hmax = -Inf; radius = 0.0
+    for m in first:last
+        d = points[perm[m]] - c
+        h = dot(axis, d)
+        hmin = min(hmin, h); hmax = max(hmax, h)
+        radius = max(radius, norm(d - axis * h))
+    end
+    push!(tree.center, c); push!(tree.axis, axis)
+    push!(tree.hmin, hmin); push!(tree.hmax, hmax); push!(tree.radius, radius)
+    push!(tree.first, first); push!(tree.last, last)
+    push!(tree.left, 0); push!(tree.right, 0)
+    push!(tree.minidx, minidx); push!(tree.maxidx, maxidx)
+    push!(tree.sorted, sort!(perm[first:last]))
+    node = length(tree.lo)
+    extent = hi - lo
+    axis = extent.x >= extent.y && extent.x >= extent.z ? 1 : extent.y >= extent.z ? 2 : 3
+    if last - first + 1 > _CONVEX_TREE_LEAF && _convex_axis_coord(extent, axis) > 0.0
+        mid = (first + last) >>> 1
+        # A full sort: partialsort! places the median but does not partition.
+        sort!(view(perm, first:last); by=i -> _convex_axis_coord(points[i], axis))
+        left = _convex_tree_build!(tree, points, first, mid)
+        right = _convex_tree_build!(tree, points, mid + 1, last)
+        tree.left[node] = left
+        tree.right[node] = right
+    else
+        sort!(view(perm, first:last))
+    end
+    return node
+end
+
+# Bounds on dot(normal, p - origin) over node `k`'s points: the tighter of
+# the box and slab bounds on each side.
+@inline function _convex_tree_range(tree::_ConvexPointTree, k::Int, normal::Vec3{Float64},
+                                    origin::Vec3{Float64})
+    lo = tree.lo[k] - origin
+    hi = tree.hi[k] - origin
+    x1 = normal.x * lo.x; x2 = normal.x * hi.x
+    y1 = normal.y * lo.y; y2 = normal.y * hi.y
+    z1 = normal.z * lo.z; z2 = normal.z * hi.z
+    box_lower = min(x1, x2) + min(y1, y2) + min(z1, z2)
+    box_upper = max(x1, x2) + max(y1, y2) + max(z1, z2)
+    axis = tree.axis[k]
+    along = dot(normal, axis)
+    across = norm(normal - axis * along) * tree.radius[k]
+    base = dot(normal, tree.center[k] - origin)
+    a = along * tree.hmin[k]; b = along * tree.hmax[k]
+    return max(box_lower, base + min(a, b) - across), min(box_upper, base + max(a, b) + across)
+end
+
+# Whether some point lies beyond the plane through `origin` by more than
+# `plane_eps` on the side of `normal` (`positive`) or the other side.
+function _convex_tree_side(tree::_ConvexPointTree, points::Vector{Vec3{Float64}},
+                           normal::Vec3{Float64}, origin::Vec3{Float64}, plane_eps::Float64,
+                           positive::Bool)
+    stack = tree.stack
+    empty!(stack)
+    push!(stack, 1)
+    @inbounds while !isempty(stack)
+        k = pop!(stack)
+        lower, upper = _convex_tree_range(tree, k, normal, origin)
+        positive ? (upper + tree.margin <= plane_eps && continue) :
+                   (lower - tree.margin >= -plane_eps && continue)
+        if tree.left[k] == 0
+            for m in tree.first[k]:tree.last[k]
+                side = dot(normal, points[tree.perm[m]] - origin)
+                (positive ? side > plane_eps : side < -plane_eps) && return true
+            end
+        else
+            push!(stack, tree.right[k], tree.left[k])
+        end
+    end
+    return false
+end
+
+# Support-plane test for the triangle (i, j, k), as `_convex_triple_normal`.
+function _convex_tree_triple_normal(tree::_ConvexPointTree, points::Vector{Vec3{Float64}},
+                                    i::Int, j::Int, k::Int, plane_eps::Float64)
+    normal = cross(points[j] - points[i], points[k] - points[i])
+    len = norm(normal)
+    len > plane_eps || return nothing
+    normal = normal * (1 / len)
+    pos = _convex_tree_side(tree, points, normal, points[i], plane_eps, true)
+    pos && _convex_tree_side(tree, points, normal, points[i], plane_eps, false) &&
+        return nothing
+    pos && (normal = -normal)
+    return normal
+end
+
+# The points within `plane_eps` of the plane, ascending, as `_convex_coplanar`.
+function _convex_tree_coplanar(tree::_ConvexPointTree, points::Vector{Vec3{Float64}},
+                               origin::Int, normal::Vec3{Float64}, plane_eps::Float64)
+    coplanar = Int[]
+    stack = tree.stack
+    empty!(stack)
+    push!(stack, 1)
+    po = points[origin]
+    @inbounds while !isempty(stack)
+        k = pop!(stack)
+        lower, upper = _convex_tree_range(tree, k, normal, po)
+        (lower - tree.margin > plane_eps || upper + tree.margin < -plane_eps) && continue
+        if tree.left[k] == 0
+            for m in tree.first[k]:tree.last[k]
+                idx = tree.perm[m]
+                abs(dot(normal, points[idx] - po)) <= plane_eps && push!(coplanar, idx)
+            end
+        else
+            push!(stack, tree.right[k], tree.left[k])
+        end
+    end
+    return sort!(coplanar)
+end
+
+# The first index after `after`, other than u and v, that the scan in
+# `_convex_wrap_edge` would take as its new best point for the current
+# `normal`: off the edge line (by its cross-product test) and beyond the
+# plane by more than `plane_eps`. 0 when there is none. While many points lie
+# beyond the plane (the first planes of a scan), the next few indices in
+# order hold one, so those are tried directly before the tree search, which
+# then starts after them. A node wholly beyond the plane is searched through
+# its ascending index list from `after` on instead of point by point.
+@inline _convex_takes_over(points::Vector{Vec3{Float64}}, idx::Int, u::Int, v::Int,
+                           edge::Vec3{Float64}, pv::Vec3{Float64}, normal::Vec3{Float64},
+                           plane_eps::Float64) =
+    idx != u && idx != v && dot(normal, points[idx] - pv) > plane_eps &&
+        norm(cross(edge, points[idx] - pv)) > plane_eps
+
+function _convex_tree_next_beyond(tree::_ConvexPointTree, points::Vector{Vec3{Float64}},
+                                  u::Int, v::Int, edge::Vec3{Float64}, pv::Vec3{Float64},
+                                  normal::Vec3{Float64}, plane_eps::Float64, after::Int)
+    @inbounds for idx in (after + 1):min(after + 64, length(points))
+        _convex_takes_over(points, idx, u, v, edge, pv, normal, plane_eps) && return idx
+    end
+    after = min(after + 64, length(points))
+    best = typemax(Int)
+    stack = tree.stack
+    empty!(stack)
+    push!(stack, 1)
+    @inbounds while !isempty(stack)
+        k = pop!(stack)
+        (tree.maxidx[k] <= after || tree.minidx[k] >= best) && continue
+        lower, upper = _convex_tree_range(tree, k, normal, pv)
+        upper + tree.margin <= plane_eps && continue
+        if lower - tree.margin > plane_eps || tree.left[k] == 0
+            list = tree.sorted[k]
+            for m in searchsortedfirst(list, after + 1):length(list)
+                idx = list[m]
+                idx >= best && break
+                if _convex_takes_over(points, idx, u, v, edge, pv, normal, plane_eps)
+                    best = idx
+                    break
+                end
+            end
+        else
+            push!(stack, tree.right[k], tree.left[k])
+        end
+    end
+    return best == typemax(Int) ? 0 : best
+end
+
 # The face that the reference enumeration reports for the support plane
 # containing `candidates` (sorted): its first valid triple in lexicographic
 # order, that triple's outward normal and its coplanar set.
-function _convex_canonical_face(points::Vector{Vec3{Float64}}, candidates::Vector{Int},
-                                plane_eps::Float64)
+# Without a tree (small point sets, where building one costs more than it
+# saves) the queries are the scans themselves.
+_convex_tree_triple_normal(::Nothing, points::Vector{Vec3{Float64}}, i::Int, j::Int, k::Int,
+                           plane_eps::Float64) = _convex_triple_normal(points, i, j, k, plane_eps)
+_convex_tree_coplanar(::Nothing, points::Vector{Vec3{Float64}}, origin::Int,
+                      normal::Vec3{Float64}, plane_eps::Float64) =
+    _convex_coplanar(points, origin, normal, plane_eps)
+
+function _convex_canonical_face(tree::Union{Nothing,_ConvexPointTree},
+                                points::Vector{Vec3{Float64}},
+                                candidates::Vector{Int}, plane_eps::Float64)
     m = length(candidates)
     @inbounds for a in 1:(m - 2), b in (a + 1):(m - 1), c in (b + 1):m
         i = candidates[a]; j = candidates[b]; k = candidates[c]
-        normal = _convex_triple_normal(points, i, j, k, plane_eps)
+        normal = _convex_tree_triple_normal(tree, points, i, j, k, plane_eps)
         normal === nothing && continue
-        return (i, j, k), _convex_coplanar(points, i, normal, plane_eps), normal
+        return (i, j, k), _convex_tree_coplanar(tree, points, i, normal, plane_eps), normal
     end
     return nothing
 end
@@ -315,7 +613,38 @@ end
 # face's outward normal): the neighbouring face lists the edge as v -> u, so
 # its outward normal is cross(u - v, w - v) for the point w that leaves every
 # point behind the plane. Returns the support plane's points (sorted).
-function _convex_wrap_edge(points::Vector{Vec3{Float64}}, u::Int, v::Int,
+# This is a scan over the points in index order: the first point off the edge
+# line becomes the best point, and every later point beyond the best point's
+# plane by more than `plane_eps` replaces it. The tree finds each replacement
+# directly.
+function _convex_wrap_edge(tree::_ConvexPointTree, points::Vector{Vec3{Float64}},
+                           u::Int, v::Int, plane_eps::Float64)
+    pu = points[u]
+    pv = points[v]
+    edge = pu - pv
+    best = 0
+    normal = Vec3(0.0, 0.0, 0.0)
+    @inbounds for idx in eachindex(points)
+        (idx == u || idx == v) && continue
+        candidate = cross(edge, points[idx] - pv)
+        len = norm(candidate)
+        len > plane_eps || continue
+        best = idx
+        normal = candidate * (1 / len)
+        break
+    end
+    best == 0 && return nothing
+    while true
+        next = _convex_tree_next_beyond(tree, points, u, v, edge, pv, normal, plane_eps, best)
+        next == 0 && break
+        best = next
+        candidate = cross(edge, points[best] - pv)
+        normal = candidate * (1 / norm(candidate))
+    end
+    return _convex_tree_coplanar(tree, points, v, normal, plane_eps)
+end
+
+function _convex_wrap_edge(::Nothing, points::Vector{Vec3{Float64}}, u::Int, v::Int,
                            plane_eps::Float64)
     pu = points[u]
     pv = points[v]
@@ -338,9 +667,10 @@ end
 
 function _convex_add_wrapped_face!(faces, seen::Set{Vector{Int}},
                                    edges::Set{Tuple{Int,Int}}, open_edges::Vector{Tuple{Int,Int}},
-                                   points::Vector{Vec3{Float64}}, candidates::Vector{Int},
-                                   eps::Float64, plane_eps::Float64)
-    canonical = _convex_canonical_face(points, candidates, plane_eps)
+                                   tree::Union{Nothing,_ConvexPointTree},
+                                   points::Vector{Vec3{Float64}},
+                                   candidates::Vector{Int}, eps::Float64, plane_eps::Float64)
+    canonical = _convex_canonical_face(tree, points, candidates, plane_eps)
     canonical === nothing && return false
     triple, coplanar, normal = canonical
     coplanar in seen && return true
@@ -391,15 +721,16 @@ function _convex_wrapped_support_faces(points::Vector{Vec3{Float64}}, eps::Float
         end
     end
     b == 0 && return nothing
-    faces = Tuple{NTuple{3,Int},Vector{Int},Vec3{Float64},Vector{Int}}[]
+    tree = n < _CONVEX_TREE_MIN_POINTS ? nothing : _convex_point_tree(points)
+    faces =Tuple{NTuple{3,Int},Vector{Int},Vec3{Float64},Vector{Int}}[]
     seen = Set{Vector{Int}}()
     edges = Set{Tuple{Int,Int}}()
     open_edges = Tuple{Int,Int}[]
     started = false
     for (u, v) in ((a, b), (b, a))
-        candidates = _convex_wrap_edge(points, u, v, plane_eps)
+        candidates = _convex_wrap_edge(tree, points, u, v, plane_eps)
         candidates === nothing && continue
-        _convex_add_wrapped_face!(faces, seen, edges, open_edges, points,
+        _convex_add_wrapped_face!(faces, seen, edges, open_edges, tree, points,
                                   candidates, eps, plane_eps) || return nothing
         started = !isempty(faces)
         started && break
@@ -408,10 +739,10 @@ function _convex_wrapped_support_faces(points::Vector{Vec3{Float64}}, eps::Float
     while !isempty(open_edges)
         u, v = pop!(open_edges)
         (v, u) in edges && continue
-        candidates = _convex_wrap_edge(points, u, v, plane_eps)
+        candidates = _convex_wrap_edge(tree, points, u, v, plane_eps)
         candidates === nothing && return nothing
         before = length(faces)
-        _convex_add_wrapped_face!(faces, seen, edges, open_edges, points,
+        _convex_add_wrapped_face!(faces, seen, edges, open_edges, tree, points,
                                   candidates, eps, plane_eps) || return nothing
         # The neighbour must be new and must close the edge it was found from.
         length(faces) > before && (v, u) in edges || return nothing
@@ -505,6 +836,341 @@ function _convex_face_hull(points::Vector{Vec3{Float64}}, face_indices::Vector{I
     return hull
 end
 
+# ---- Quickhull (three.js examples/jsm/math/ConvexHull.js) ----
+# The last resort when gift wrapping cannot certify a closed polygon-faced
+# hull. It follows three.js ConvexHull (initial tetrahedron from the axis
+# extremes, one outside set per face, farthest point first, horizon search
+# across face edges, a cone of new faces), but decides every "is this point
+# beyond this face" question with an exact orientation predicate instead of
+# a floating-point distance tolerance. Inputs reach it exactly when they are
+# degenerate within rounding (thin slabs, near-coplanar clusters), where a
+# tolerance test misjudges slivers and builds folded surfaces. With exact
+# signs, each point's visible region is a disc bounded by one simple horizon
+# cycle, no new face is degenerate (an eye point on a horizon edge's line
+# would lie in the plane of the visible face on that edge), and the result
+# is the exact convex hull of the points: closed, convex and wound outward.
+# Faces are flat arrays: face f has corners fv[3f-2:3f], edge k runs from
+# corner k to corner k+1 (mod 3), and fn[3f-3+k] is the face across edge k.
+mutable struct _ConvexQuickhull
+    points::Vector{Vec3{Float64}}
+    fv::Vector{Int}
+    fn::Vector{Int}
+    normal::Vector{Vec3{Float64}}
+    alive::Vector{Bool}
+    outside::Vector{Vector{Int}}
+    stamp::Vector{Int}
+end
+
+# Float64 `x` as the integer x * 2^-e (e at most the exponent of its last bit).
+@inline function _qh_scaled_integer(x::Float64, e::Int)
+    num, pow, den = Base.decompose(x)
+    value = BigInt(num) << (pow - e)
+    return den < 0 ? -value : value
+end
+
+# Exact sign of det[b - a, c - a, p - a] (positive when p lies on the side
+# that the right-handed normal of (a, b, c) points to). Every Float64 is an
+# integer multiple of 2^e for the smallest exponent e among the inputs, so the
+# determinant is evaluated exactly in BigInt arithmetic.
+function _qh_orient_exact(a::Vec3{Float64}, b::Vec3{Float64}, c::Vec3{Float64},
+                          p::Vec3{Float64})
+    coords = (a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z, p.x, p.y, p.z)
+    e = typemax(Int)
+    for x in coords
+        x == 0.0 || (e = min(e, Base.decompose(x)[2]))
+    end
+    e == typemax(Int) && return 0
+    ax, ay, az, bx, by, bz, cx, cy, cz, px, py, pz = map(x -> _qh_scaled_integer(x, e), coords)
+    ux = bx - ax; uy = by - ay; uz = bz - az
+    vx = cx - ax; vy = cy - ay; vz = cz - az
+    wx = px - ax; wy = py - ay; wz = pz - az
+    return Int(sign(ux * (vy * wz - vz * wy) + uy * (vz * wx - vx * wz) + uz * (vx * wy - vy * wx)))
+end
+
+# Sign of det[b - a, c - a, p - a]. The floating-point value decides when it
+# clears Shewchuk's orient3d error bound (7 + 56u) u * permanent, u = 2^-53
+# ("Adaptive Precision Floating-Point Arithmetic and Fast Robust Geometric
+# Predicates", 1997), plus floatmin to cover underflow in the products;
+# otherwise the exact evaluation decides.
+function _qh_orient(a::Vec3{Float64}, b::Vec3{Float64}, c::Vec3{Float64}, p::Vec3{Float64})
+    ux = b.x - a.x; uy = b.y - a.y; uz = b.z - a.z
+    vx = c.x - a.x; vy = c.y - a.y; vz = c.z - a.z
+    wx = p.x - a.x; wy = p.y - a.y; wz = p.z - a.z
+    t1 = vy * wz; t2 = vz * wy; t3 = vz * wx; t4 = vx * wz; t5 = vx * wy; t6 = vy * wx
+    det = ux * (t1 - t2) + uy * (t3 - t4) + uz * (t5 - t6)
+    permanent = abs(ux) * (abs(t1) + abs(t2)) + abs(uy) * (abs(t3) + abs(t4)) +
+                abs(uz) * (abs(t5) + abs(t6))
+    bound = (7.0 + 56.0 * eps(Float64) / 2) * (eps(Float64) / 2) * permanent + floatmin(Float64)
+    det > bound && return 1
+    det < -bound && return -1
+    return _qh_orient_exact(a, b, c, p)
+end
+
+@inline _qh_orient(h::_ConvexQuickhull, f::Int, p::Int) =
+    _qh_orient(h.points[h.fv[3f - 2]], h.points[h.fv[3f - 1]], h.points[h.fv[3f]], h.points[p])
+
+# Floating-point distance of point `p` beyond face `f`; it only ranks points
+# that the exact predicate already placed outside (three.js's farthest-first).
+@inline _qh_distance(h::_ConvexQuickhull, f::Int, p::Int) =
+    dot(h.normal[f], h.points[p] - h.points[h.fv[3f - 2]])
+
+function _qh_add_face!(h::_ConvexQuickhull, a::Int, b::Int, c::Int)
+    pa = h.points[a]
+    n = cross(h.points[b] - pa, h.points[c] - pa)
+    len = norm(n)
+    push!(h.fv, a, b, c)
+    push!(h.fn, 0, 0, 0)
+    push!(h.normal, len > 0.0 ? n * (1 / len) : Vec3(0.0, 0.0, 0.0))
+    push!(h.alive, true)
+    push!(h.outside, Int[])
+    push!(h.stamp, 0)
+    return length(h.alive)
+end
+
+# The edge of face `f` that runs from `u` to `v`.
+function _qh_edge(h::_ConvexQuickhull, f::Int, u::Int, v::Int)
+    @inbounds for k in 1:3
+        h.fv[3f - 3 + k] == u && h.fv[3f - 3 + mod1(k + 1, 3)] == v && return k
+    end
+    error("ConvexGeometry quickhull lost the edge ($u, $v)")
+end
+
+# Assign point `p` to the face of `faces` that it lies beyond (exactly) and
+# farthest from; a point beyond none of them is inside the hull and dropped.
+function _qh_assign!(h::_ConvexQuickhull, faces, p::Int, pending::Vector{Int})
+    best = 0
+    best_distance = -Inf
+    for f in faces
+        _qh_orient(h, f, p) > 0 || continue
+        d = _qh_distance(h, f, p)
+        if best == 0 || d > best_distance
+            best_distance = d
+            best = f
+        end
+    end
+    if best != 0
+        isempty(h.outside[best]) && push!(pending, best)
+        push!(h.outside[best], p)
+    end
+    return nothing
+end
+
+@inline _qh_coord(p::Vec3{Float64}, j::Int) = j == 1 ? p.x : j == 2 ? p.y : p.z
+
+# computeInitialHull: the extreme pair along the widest axis, the point
+# farthest from their segment and the point farthest from that plane, each
+# confirmed by the exact predicate.
+function _qh_initial!(h::_ConvexQuickhull, pending::Vector{Int})
+    pts = h.points
+    n = length(pts)
+    flat() = throw(ArgumentError("ConvexGeometry needs at least four non-coplanar points"))
+    lo = [1, 1, 1]; hi = [1, 1, 1]
+    for i in 2:n, j in 1:3
+        _qh_coord(pts[i], j) < _qh_coord(pts[lo[j]], j) && (lo[j] = i)
+        _qh_coord(pts[i], j) > _qh_coord(pts[hi[j]], j) && (hi[j] = i)
+    end
+    axis = 1
+    for j in 2:3
+        _qh_coord(pts[hi[j]], j) - _qh_coord(pts[lo[j]], j) >
+            _qh_coord(pts[hi[axis]], axis) - _qh_coord(pts[lo[axis]], axis) && (axis = j)
+    end
+    v0 = lo[axis]; v1 = hi[axis]
+    pts[v0] == pts[v1] && flat()
+    a = pts[v0]; d = pts[v1] - a
+    dd = dot(d, d)
+    order = Int[]
+    distances = Float64[]
+    for i in 1:n
+        (i == v0 || i == v1) && continue
+        t = clamp(dot(pts[i] - a, d) / dd, 0.0, 1.0)
+        q = pts[i] - (a + d * t)
+        push!(order, i); push!(distances, dot(q, q))
+    end
+    order = order[sortperm(distances; rev=true)]
+    # The farthest point from the segment that, with some fourth point, spans
+    # a tetrahedron; v0, v1 and v2 are collinear exactly when every fourth
+    # point is coplanar with them.
+    for v2 in order
+        plane = cross(pts[v1] - pts[v0], pts[v2] - pts[v0])
+        v3 = 0; best = -1.0
+        for i in 1:n
+            (i == v0 || i == v1 || i == v2) && continue
+            dist = abs(dot(plane, pts[i] - pts[v0]))
+            dist > best && _qh_orient(pts[v0], pts[v1], pts[v2], pts[i]) != 0 &&
+                (best = dist; v3 = i)
+        end
+        v3 == 0 && continue
+        corners = (v0, v1, v2, v3)
+        for r in 1:4
+            x, y, z = (corners[mod1(r + 1, 4)], corners[mod1(r + 2, 4)], corners[mod1(r + 3, 4)])
+            # The remaining corner must lie behind the face.
+            _qh_orient(pts[x], pts[y], pts[z], pts[corners[r]]) > 0 && ((y, z) = (z, y))
+            _qh_add_face!(h, x, y, z)
+        end
+        for f in 1:4, k in 1:3
+            u = h.fv[3f - 3 + k]; v = h.fv[3f - 3 + mod1(k + 1, 3)]
+            for g in 1:4, m in 1:3
+                g != f && h.fv[3g - 3 + m] == v && h.fv[3g - 3 + mod1(m + 1, 3)] == u &&
+                    (h.fn[3f - 3 + k] = g)
+            end
+        end
+        for i in 1:n
+            i in corners || _qh_assign!(h, 1:4, i, pending)
+        end
+        return nothing
+    end
+    flat()
+end
+
+# computeHorizon without mutation: the faces that `eye` lies beyond, reached
+# across edges from `start` depth first as in three.js, and the horizon edges
+# (face, edge) whose opposite face it does not lie beyond.
+function _qh_horizon!(h::_ConvexQuickhull, eye::Int, start::Int, iteration::Int,
+                      visible::Vector{Int}, horizon::Vector{Tuple{Int,Int}},
+                      stack::Vector{Tuple{Int,Int,Int}})
+    empty!(visible); empty!(horizon); empty!(stack)
+    h.stamp[start] = iteration
+    push!(visible, start)
+    push!(stack, (start, 0, 0))
+    while !isempty(stack)
+        f, entry, done = stack[end]
+        # The start face scans all three edges; a face entered across edge
+        # `entry` scans the two others, beginning after it.
+        if done == (entry == 0 ? 3 : 2)
+            pop!(stack)
+            continue
+        end
+        stack[end] = (f, entry, done + 1)
+        k = mod1(entry + 1 + done, 3)
+        g = h.fn[3f - 3 + k]
+        h.stamp[g] == iteration && continue
+        if _qh_orient(h, g, eye) > 0
+            h.stamp[g] = iteration
+            push!(visible, g)
+            u = h.fv[3f - 3 + k]; v = h.fv[3f - 3 + mod1(k + 1, 3)]
+            push!(stack, (g, _qh_edge(h, g, v, u), 0))
+        else
+            push!(horizon, (f, k))
+        end
+    end
+    return nothing
+end
+
+# Order the horizon edges into one cycle (each edge's head is the next edge's
+# tail). Exact visibility makes it one simple cycle; anything else is a bug.
+function _qh_order_horizon!(h::_ConvexQuickhull, horizon::Vector{Tuple{Int,Int}},
+                            ordered::Vector{Tuple{Int,Int}}, by_tail::Dict{Int,Int})
+    empty!(ordered); empty!(by_tail)
+    broken() = error("ConvexGeometry quickhull horizon is not one simple cycle")
+    length(horizon) >= 3 || broken()
+    for (i, (f, k)) in enumerate(horizon)
+        tail = h.fv[3f - 3 + k]
+        haskey(by_tail, tail) && broken()
+        by_tail[tail] = i
+    end
+    i = 1
+    for _ in 1:length(horizon)
+        f, k = horizon[i]
+        push!(ordered, (f, k))
+        i = get(by_tail, h.fv[3f - 3 + mod1(k + 1, 3)], 0)
+        i == 0 && broken()
+    end
+    i == 1 || broken()
+    return nothing
+end
+
+# Outward unit normal for face `f`: its own when the triangle is far from
+# degenerate (sine of its corner angle above 1e-8, so rounding moves the
+# direction by well under 1e-7), else that of the nearest such face across
+# edges, so slivers shade with their surroundings.
+function _qh_face_normal(h::_ConvexQuickhull, f::Int, queue::Vector{Int}, seen::Dict{Int,Bool})
+    reliable(g) = begin
+        pa = h.points[h.fv[3g - 2]]
+        u = h.points[h.fv[3g - 1]] - pa; v = h.points[h.fv[3g]] - pa
+        norm(cross(u, v)) > 1e-8 * norm(u) * norm(v)
+    end
+    reliable(f) && return h.normal[f]
+    empty!(queue); empty!(seen)
+    push!(queue, f); seen[f] = true
+    head = 1
+    while head <= length(queue)
+        g = queue[head]; head += 1
+        for k in 1:3
+            m = h.fn[3g - 3 + k]
+            haskey(seen, m) && continue
+            reliable(m) && return h.normal[m]
+            seen[m] = true
+            push!(queue, m)
+        end
+    end
+    return h.normal[f]
+end
+
+# Hull triangles of `points` (normalized, pairwise distinct, not coplanar) as
+# (corner indices, outward unit normal), outward-wound.
+function _convex_quickhull(points::Vector{Vec3{Float64}})
+    h = _ConvexQuickhull(points, Int[], Int[], Vec3{Float64}[], Bool[], Vector{Int}[], Int[])
+    pending = Int[]
+    _qh_initial!(h, pending)
+    visible = Int[]; horizon = Tuple{Int,Int}[]; ordered = Tuple{Int,Int}[]
+    stack = Tuple{Int,Int,Int}[]; by_tail = Dict{Int,Int}()
+    unassigned = Int[]; new_faces = Int[]
+    iteration = 0
+    # Each pass adds one outside point to the hull for good, so the loop runs
+    # at most once per point.
+    while !isempty(pending)
+        face = pending[end]
+        if !h.alive[face] || isempty(h.outside[face])
+            pop!(pending)
+            continue
+        end
+        # nextVertexToAdd: the farthest point beyond the face.
+        list = h.outside[face]
+        best = 1
+        best_distance = _qh_distance(h, face, list[1])
+        for j in 2:length(list)
+            d = _qh_distance(h, face, list[j])
+            d > best_distance && (best = j; best_distance = d)
+        end
+        eye = list[best]
+        deleteat!(list, best)
+        iteration += 1
+        _qh_horizon!(h, eye, face, iteration, visible, horizon, stack)
+        _qh_order_horizon!(h, horizon, ordered, by_tail)
+        empty!(unassigned)
+        for f in visible
+            h.alive[f] = false
+            append!(unassigned, h.outside[f])
+            empty!(h.outside[f])
+        end
+        empty!(new_faces)
+        for (f, k) in ordered
+            tail = h.fv[3f - 3 + k]; head = h.fv[3f - 3 + mod1(k + 1, 3)]
+            g = _qh_add_face!(h, eye, tail, head)
+            opposite = h.fn[3f - 3 + k]
+            h.fn[3g - 1] = opposite
+            h.fn[3opposite - 3 + _qh_edge(h, opposite, head, tail)] = g
+            push!(new_faces, g)
+        end
+        m = length(new_faces)
+        for i in 1:m
+            g = new_faces[i]
+            h.fn[3g - 2] = new_faces[mod1(i - 1, m)]
+            h.fn[3g] = new_faces[mod1(i + 1, m)]
+        end
+        for p in unassigned
+            _qh_assign!(h, new_faces, p, pending)
+        end
+    end
+    faces = Tuple{Vector{Int},Vec3{Float64}}[]
+    queue = Int[]; seen = Dict{Int,Bool}()
+    for f in eachindex(h.alive)
+        h.alive[f] || continue
+        push!(faces, ([h.fv[3f - 2], h.fv[3f - 1], h.fv[3f]], _qh_face_normal(h, f, queue, seen)))
+    end
+    return faces
+end
+
 # Rounding-level tolerance in the normalized coordinates (|x| <= 1): 64x this
 # stays well above the rounding error of a plane-distance evaluation (a few
 # 1e-16), comparable to three.js ConvexHull's 3 * EPSILON * (|x| + |y| + |z|).
@@ -514,7 +1180,17 @@ const _CONVEX_TIGHT_EPS = 1e-15
     ConvexGeometry(points)
 
 Build a flat-shaded triangle `BufferGeometry` for the convex hull of a
-non-coplanar 3D point set.
+non-coplanar 3D point set. Points closer together than `1e-9` times the
+point set's half extent are merged first, keeping the earlier point.
+
+Coplanar hull points merge into polygon faces, fan-triangulated, when a
+gift-wrapping search certifies that those faces close up. Otherwise (point
+sets degenerate within about `1e-9` of their extent, such as very thin slabs)
+the faces are the triangles of the quickhull algorithm of three.js
+`ConvexHull`, run with exact orientation predicates: the exact convex hull of
+the merged points, always closed, convex and wound outward. Unlike three.js,
+it keeps hull points that lie within rounding of a face, so near-coplanar
+inputs can have more (thin) triangles than three.js `ConvexGeometry`.
 """
 function ConvexGeometry(points::AbstractVector{<:Vec3})
     clean, normalized, eps = _convex_clean_points(points)
@@ -523,21 +1199,14 @@ function ConvexGeometry(points::AbstractVector{<:Vec3})
     # Gift wrapping certifies a closed hull surface. Points within the `eps`
     # plane tolerance of one another's faces can make those tolerant face sets
     # inconsistent; resolving them at rounding-level tolerance instead (as
-    # three.js ConvexHull does) splits them into separate facets. The
-    # exhaustive enumeration is the last resort.
+    # three.js ConvexHull does) splits them into separate facets. Where both
+    # fail, quickhull with exact predicates builds the exact hull.
     wrapped = _convex_wrapped_support_faces(normalized, eps)
     wrapped === nothing &&
         (wrapped = _convex_wrapped_support_faces(normalized, _CONVEX_TIGHT_EPS))
     hulls = Tuple{Vector{Int},Vec3{Float64}}[]
     if wrapped === nothing
-        support_faces = _convex_support_faces(normalized, eps)
-        isempty(support_faces) &&
-            throw(ArgumentError("ConvexGeometry could not find hull support faces"))
-        sizehint!(hulls, length(support_faces))
-        for (face_indices, normal) in support_faces
-            hull = _convex_face_hull(normalized, face_indices, normal, eps)
-            length(hull) >= 3 && push!(hulls, (hull, normal))
-        end
+        hulls = _convex_quickhull(normalized)
     else
         sizehint!(hulls, length(wrapped))
         for (_, normal, hull) in wrapped
@@ -830,7 +1499,7 @@ Implementations: [`LineCurve`](@ref), [`LineCurve3`](@ref),
 [`QuadraticBezierCurve`](@ref), [`QuadraticBezierCurve3`](@ref),
 [`CubicBezierCurve`](@ref), [`CubicBezierCurve3`](@ref),
 [`EllipseCurve`](@ref) (and [`ArcCurve`](@ref)), [`SplineCurve`](@ref),
-[`CatmullRomCurve`](@ref), and the composite [`CurvePath`](@ref),
+[`CatmullRomCurve`](@ref), [`NURBSCurve`](@ref), and the composite [`CurvePath`](@ref),
 [`Path`](@ref) and [`Shape`](@ref).
 """
 abstract type Curve{P} end
@@ -1718,16 +2387,17 @@ function TubeGeometry(path::Curve{Vec3{Float64}}; tubular_segments::Integer=64,
 end
 
 """
-    ShapeGeometry(shape::Shape; curve_segments=12)
+    ShapeGeometry(shape::Shape; curve_segments=12, triangulation=:ear_clip)
 
 Flat triangulated [`Shape`](@ref) with its holes, sampled by
 [`extract_points`](@ref) with `curve_segments` divisions per curve (three.js
 `ShapeGeometry(shapes, curveSegments)`), then built as
 `ShapeGeometry(points; holes)`.
 """
-function ShapeGeometry(shape::Shape; curve_segments::Integer=12)
+function ShapeGeometry(shape::Shape; curve_segments::Integer=12,
+                       triangulation::Symbol=:ear_clip)
     points = extract_points(shape, _geometry_positive_int(curve_segments, "ShapeGeometry curve_segments"))
-    return ShapeGeometry(points.shape; holes=points.holes)
+    return ShapeGeometry(points.shape; holes=points.holes, triangulation=triangulation)
 end
 
 """
@@ -2249,7 +2919,7 @@ end
 
 # ========================== NURBS / Parametric Geometry ==========================
 
-struct NURBSCurve
+struct NURBSCurve <: Curve{Vec3{Float64}}
     degree::Int
     knots::Vector{Float64}
     control_points::Vector{Vec4{Float64}}
@@ -2691,6 +3361,58 @@ function nurbs_point(curve::NURBSCurve, t::Real)
     return _nurbs_point(curve, t, _nurbs_basis_scratch(curve.degree))
 end
 
+# NURBSCurve is a Curve (three.js NURBSCurve extends Curve): get_point is
+# nurbs_point, so get_point_at, get_spaced_points, compute_frenet_frames,
+# TubeGeometry and ExtrudeGeometry paths accept it.
+get_point(c::NURBSCurve, t::Real) = nurbs_point(c, _curve_t(t))
+
+# three.js NURBSCurve.getTangent: the normalized first derivative of the
+# rational curve (NURBSUtils.calcNURBSDerivatives with nd = 1), at the
+# parameter get_point uses; for clamped knot vectors that is three.js's u.
+# A vanishing or non-finite derivative falls back to Curve.getTangent's
+# finite difference.
+function get_tangent(c::NURBSCurve, t::Real)
+    t = _curve_t(t)
+    p = c.degree
+    n = length(c.control_points)
+    if p > 0
+        knots = c.knots
+        u = _nurbs_parameter(t, knots, p, n, "NURBS curve parameter t")
+        span = _nurbs_span(p, knots, n, u)
+        scratch = _nurbs_basis_scratch(p)
+        _nurbs_basis_with_status!(scratch, span, u, p, knots)
+        basis = scratch[1:(p + 1)]
+        _nurbs_basis_with_status!(scratch, span, u, p - 1, knots)
+        lower = scratch[1:p]
+        a = Vec3(0.0, 0.0, 0.0); da = Vec3(0.0, 0.0, 0.0)
+        w = 0.0; dw = 0.0
+        for j in 0:p
+            i = span - p + j
+            # N'_{i,p} = p N_{i,p-1} / (u_{i+p} - u_i) - p N_{i+1,p-1} / (u_{i+p+1} - u_{i+1})
+            d = 0.0
+            if j >= 1
+                den = knots[i + p + 1] - knots[i + 1]
+                iszero(den) || (d += lower[j] / den)
+            end
+            if j <= p - 1
+                den = knots[i + p + 2] - knots[i + 2]
+                iszero(den) || (d -= lower[j + 1] / den)
+            end
+            d *= p
+            cp = c.control_points[i + 1]
+            xyz = Vec3(cp.x, cp.y, cp.z)
+            a += xyz * (basis[j + 1] * cp.w)
+            da += xyz * (d * cp.w)
+            w += basis[j + 1] * cp.w
+            dw += d * cp.w
+        end
+        derivative = (da - a * (dw / w)) / w
+        len = sqrt(_curve_dot(derivative, derivative))
+        isfinite(len) && len > 0.0 && return derivative / len
+    end
+    return invoke(get_tangent, Tuple{Curve,Real}, c, t)
+end
+
 function _nurbs_point(surface::NURBSSurface, u::Real, v::Real,
                       basis_u::Vector{Float64}, basis_v::Vector{Float64})
     nu = length(surface.control_points)
@@ -3063,6 +3785,653 @@ function mobius3d(u::Real, t::Real)
 end
 
 end # module ParametricFunctions
+
+# ========================== Earcut ==========================
+# Port of mapbox/earcut 3.0.2 as vendored by three.js r186
+# (src/extras/lib/earcut.js). Nodes live in parallel arrays; node id 0 plays
+# the role of JavaScript `null`. Every predicate keeps earcut's operation order
+# and tie-breaking so the triangles are identical to three.js's for the same
+# Float64 input. `i` is the 0-based vertex index, as in earcut.
+
+mutable struct _Earcut
+    i::Vector{Int}
+    x::Vector{Float64}
+    y::Vector{Float64}
+    prev::Vector{Int}
+    next::Vector{Int}
+    z::Vector{Int32}
+    prevz::Vector{Int}
+    nextz::Vector{Int}
+    steiner::Vector{Bool}
+    triangles::Vector{Int}
+end
+
+function _Earcut(capacity::Int)
+    e = _Earcut(Int[], Float64[], Float64[], Int[], Int[], Int32[], Int[], Int[],
+                Bool[], Int[])
+    for field in (e.i, e.x, e.y, e.prev, e.next, e.z, e.prevz, e.nextz, e.steiner)
+        sizehint!(field, capacity)
+    end
+    return e
+end
+
+# createNode (earcut.js:653-664)
+function _ec_create!(e::_Earcut, i::Int, x::Float64, y::Float64)
+    push!(e.i, i); push!(e.x, x); push!(e.y, y)
+    push!(e.prev, 0); push!(e.next, 0); push!(e.z, Int32(0))
+    push!(e.prevz, 0); push!(e.nextz, 0); push!(e.steiner, false)
+    return length(e.i)
+end
+
+# insertNode (earcut.js:628-642)
+function _ec_insert!(e::_Earcut, i::Int, x::Float64, y::Float64, last::Int)
+    p = _ec_create!(e, i, x, y)
+    @inbounds if last == 0
+        e.prev[p] = p
+        e.next[p] = p
+    else
+        e.next[p] = e.next[last]
+        e.prev[p] = last
+        e.prev[e.next[last]] = p
+        e.next[last] = p
+    end
+    return p
+end
+
+# removeNode (earcut.js:644-651). Like earcut, the removed node keeps its links.
+@inline function _ec_remove!(e::_Earcut, p::Int)
+    @inbounds begin
+        e.prev[e.next[p]] = e.prev[p]
+        e.next[e.prev[p]] = e.next[p]
+        e.prevz[p] != 0 && (e.nextz[e.prevz[p]] = e.nextz[p])
+        e.nextz[p] != 0 && (e.prevz[e.nextz[p]] = e.prevz[p])
+    end
+    return nothing
+end
+
+@inline _ec_equals(e::_Earcut, a::Int, b::Int) =
+    @inbounds e.x[a] == e.x[b] && e.y[a] == e.y[b]
+
+# area (earcut.js:521-524): signed area of a triangle, negative counterclockwise.
+@inline function _ec_area(e::_Earcut, p::Int, q::Int, r::Int)
+    @inbounds return (e.y[q] - e.y[p]) * (e.x[r] - e.x[q]) -
+                     (e.x[q] - e.x[p]) * (e.y[r] - e.y[q])
+end
+
+# JavaScript truthiness of a number.
+@inline _ec_truthy(v::Float64) = !(iszero(v) || isnan(v))
+
+@inline _ec_sign(v::Float64) = v > 0 ? 1 : v < 0 ? -1 : 0
+
+# pointInTriangle (earcut.js:500-505)
+@inline function _ec_point_in_triangle(ax::Float64, ay::Float64, bx::Float64, by::Float64,
+                                       cx::Float64, cy::Float64, px::Float64, py::Float64)
+    return (cx - px) * (ay - py) >= (ax - px) * (cy - py) &&
+           (ax - px) * (by - py) >= (bx - px) * (ay - py) &&
+           (bx - px) * (cy - py) >= (cx - px) * (by - py)
+end
+
+# pointInTriangleExceptFirst (earcut.js:507-510)
+@inline _ec_point_in_triangle_except_first(ax, ay, bx, by, cx, cy, px, py) =
+    !(ax == px && ay == py) && _ec_point_in_triangle(ax, ay, bx, by, cx, cy, px, py)
+
+# signedArea (earcut.js:701-708) over the flat coordinates `data[start+1:end]`
+# (0-based `start`/`stop` offsets as in earcut).
+function _ec_signed_area(data::Vector{Float64}, start::Int, stop::Int, dim::Int)
+    sum = 0.0
+    j = stop - dim
+    i = start
+    @inbounds while i < stop
+        sum += (data[j + 1] - data[i + 1]) * (data[i + 2] + data[j + 2])
+        j = i
+        i += dim
+    end
+    return sum
+end
+
+# linkedList (earcut.js:46-62)
+function _ec_linked_list!(e::_Earcut, data::Vector{Float64}, start::Int, stop::Int,
+                          dim::Int, clockwise::Bool)
+    last = 0
+    if clockwise == (_ec_signed_area(data, start, stop, dim) > 0)
+        i = start
+        @inbounds while i < stop
+            last = _ec_insert!(e, i ÷ dim, data[i + 1], data[i + 2], last)
+            i += dim
+        end
+    else
+        i = stop - dim
+        @inbounds while i >= start
+            last = _ec_insert!(e, i ÷ dim, data[i + 1], data[i + 2], last)
+            i -= dim
+        end
+    end
+    if last != 0 && _ec_equals(e, last, e.next[last])
+        _ec_remove!(e, last)
+        last = e.next[last]
+    end
+    return last
+end
+
+# filterPoints (earcut.js:65-87)
+function _ec_filter_points!(e::_Earcut, start::Int, stop::Int=0)
+    start == 0 && return start
+    stop == 0 && (stop = start)
+    p = start
+    while true
+        again = false
+        if !e.steiner[p] && (_ec_equals(e, p, e.next[p]) ||
+                             _ec_area(e, e.prev[p], p, e.next[p]) == 0)
+            _ec_remove!(e, p)
+            p = stop = e.prev[p]
+            p == e.next[p] && break
+            again = true
+        else
+            p = e.next[p]
+        end
+        (again || p != stop) || break
+    end
+    return stop
+end
+
+struct _EcHash
+    min_x::Float64
+    min_y::Float64
+    inv_size::Float64
+end
+
+# earcutLinked (earcut.js:90-136)
+function _ec_earcut_linked!(e::_Earcut, ear::Int, h::_EcHash, pass::Int)
+    ear == 0 && return nothing
+    hashed = _ec_truthy(h.inv_size)
+    pass == 0 && hashed && _ec_index_curve!(e, ear, h)
+    stop = ear
+    while e.prev[ear] != e.next[ear]
+        prev = e.prev[ear]
+        next = e.next[ear]
+        if hashed ? _ec_is_ear_hashed(e, ear, h) : _ec_is_ear(e, ear)
+            push!(e.triangles, e.i[prev], e.i[ear], e.i[next])
+            _ec_remove!(e, ear)
+            # Skipping the next vertex leads to fewer sliver triangles.
+            ear = e.next[next]
+            stop = e.next[next]
+            continue
+        end
+        ear = next
+        if ear == stop
+            if pass == 0
+                _ec_earcut_linked!(e, _ec_filter_points!(e, ear), h, 1)
+            elseif pass == 1
+                ear = _ec_cure_local_intersections!(e, _ec_filter_points!(e, ear))
+                _ec_earcut_linked!(e, ear, h, 2)
+            elseif pass == 2
+                _ec_split_earcut!(e, ear, h)
+            end
+            break
+        end
+    end
+    return nothing
+end
+
+# isEar (earcut.js:139-164)
+function _ec_is_ear(e::_Earcut, ear::Int)
+    a = e.prev[ear]; b = ear; c = e.next[ear]
+    _ec_area(e, a, b, c) >= 0 && return false
+    @inbounds begin
+        ax = e.x[a]; bx = e.x[b]; cx = e.x[c]
+        ay = e.y[a]; by = e.y[b]; cy = e.y[c]
+    end
+    x0 = min(ax, bx, cx); y0 = min(ay, by, cy)
+    x1 = max(ax, bx, cx); y1 = max(ay, by, cy)
+    p = e.next[c]
+    @inbounds while p != a
+        px = e.x[p]; py = e.y[p]
+        if px >= x0 && px <= x1 && py >= y0 && py <= y1 &&
+           _ec_point_in_triangle_except_first(ax, ay, bx, by, cx, cy, px, py) &&
+           _ec_area(e, e.prev[p], p, e.next[p]) >= 0
+            return false
+        end
+        p = e.next[p]
+    end
+    return true
+end
+
+@inline function _ec_blocks(e::_Earcut, p::Int, a::Int, c::Int, ax, ay, bx, by, cx, cy,
+                            x0, y0, x1, y1)
+    @inbounds begin
+        px = e.x[p]; py = e.y[p]
+        return px >= x0 && px <= x1 && py >= y0 && py <= y1 && p != a && p != c &&
+               _ec_point_in_triangle_except_first(ax, ay, bx, by, cx, cy, px, py) &&
+               _ec_area(e, e.prev[p], p, e.next[p]) >= 0
+    end
+end
+
+# isEarHashed (earcut.js:166-213)
+function _ec_is_ear_hashed(e::_Earcut, ear::Int, h::_EcHash)
+    a = e.prev[ear]; b = ear; c = e.next[ear]
+    _ec_area(e, a, b, c) >= 0 && return false
+    @inbounds begin
+        ax = e.x[a]; bx = e.x[b]; cx = e.x[c]
+        ay = e.y[a]; by = e.y[b]; cy = e.y[c]
+    end
+    x0 = min(ax, bx, cx); y0 = min(ay, by, cy)
+    x1 = max(ax, bx, cx); y1 = max(ay, by, cy)
+    min_z = _ec_z_order(x0, y0, h)
+    max_z = _ec_z_order(x1, y1, h)
+    p = e.prevz[ear]
+    n = e.nextz[ear]
+    @inbounds while p != 0 && e.z[p] >= min_z && n != 0 && e.z[n] <= max_z
+        _ec_blocks(e, p, a, c, ax, ay, bx, by, cx, cy, x0, y0, x1, y1) && return false
+        p = e.prevz[p]
+        _ec_blocks(e, n, a, c, ax, ay, bx, by, cx, cy, x0, y0, x1, y1) && return false
+        n = e.nextz[n]
+    end
+    @inbounds while p != 0 && e.z[p] >= min_z
+        _ec_blocks(e, p, a, c, ax, ay, bx, by, cx, cy, x0, y0, x1, y1) && return false
+        p = e.prevz[p]
+    end
+    @inbounds while n != 0 && e.z[n] <= max_z
+        _ec_blocks(e, n, a, c, ax, ay, bx, by, cx, cy, x0, y0, x1, y1) && return false
+        n = e.nextz[n]
+    end
+    return true
+end
+
+# cureLocalIntersections (earcut.js:216-236)
+function _ec_cure_local_intersections!(e::_Earcut, start::Int)
+    p = start
+    while true
+        a = e.prev[p]
+        b = e.next[e.next[p]]
+        if !_ec_equals(e, a, b) && _ec_intersects(e, a, p, e.next[p], b) &&
+           _ec_locally_inside(e, a, b) && _ec_locally_inside(e, b, a)
+            push!(e.triangles, e.i[a], e.i[p], e.i[b])
+            _ec_remove!(e, p)
+            _ec_remove!(e, e.next[p])
+            p = start = b
+        end
+        p = e.next[p]
+        p != start || break
+    end
+    return _ec_filter_points!(e, p)
+end
+
+# splitEarcut (earcut.js:239-264)
+function _ec_split_earcut!(e::_Earcut, start::Int, h::_EcHash)
+    a = start
+    while true
+        b = e.next[e.next[a]]
+        while b != e.prev[a]
+            if e.i[a] != e.i[b] && _ec_is_valid_diagonal(e, a, b)
+                c = _ec_split_polygon!(e, a, b)
+                a = _ec_filter_points!(e, a, e.next[a])
+                c = _ec_filter_points!(e, c, e.next[c])
+                _ec_earcut_linked!(e, a, h, 0)
+                _ec_earcut_linked!(e, c, h, 0)
+                return nothing
+            end
+            b = e.next[b]
+        end
+        a = e.next[a]
+        a != start || break
+    end
+    return nothing
+end
+
+# compareXYSlope (earcut.js:286-299). A NaN result counts as equal, as in
+# Array.prototype.sort.
+function _ec_compare_xy_slope(e::_Earcut, a::Int, b::Int)
+    result = e.x[a] - e.x[b]
+    if result == 0
+        result = e.y[a] - e.y[b]
+        if result == 0
+            a_slope = (e.y[e.next[a]] - e.y[a]) / (e.x[e.next[a]] - e.x[a])
+            b_slope = (e.y[e.next[b]] - e.y[b]) / (e.x[e.next[b]] - e.x[b])
+            result = a_slope - b_slope
+        end
+    end
+    return isnan(result) ? 0.0 : result
+end
+
+# eliminateHoles (earcut.js:267-284). `hole_starts` are 0-based vertex indices.
+function _ec_eliminate_holes!(e::_Earcut, data::Vector{Float64}, hole_starts::Vector{Int},
+                              outer::Int, dim::Int)
+    queue = Vector{Int}(undef, length(hole_starts))
+    len = length(hole_starts)
+    for k in 1:len
+        start = hole_starts[k] * dim
+        stop = k < len ? hole_starts[k + 1] * dim : length(data)
+        list = _ec_linked_list!(e, data, start, stop, dim, false)
+        list == 0 && throw(ArgumentError("earcut hole $k has no vertices"))
+        list == e.next[list] && (e.steiner[list] = true)
+        queue[k] = _ec_get_leftmost(e, list)
+    end
+    # Array.prototype.sort is stable.
+    sort!(queue; alg=MergeSort, lt=(a, b) -> _ec_compare_xy_slope(e, a, b) < 0)
+    for hole in queue
+        outer = _ec_eliminate_hole!(e, hole, outer)
+    end
+    return outer
+end
+
+# eliminateHole (earcut.js:302-313)
+function _ec_eliminate_hole!(e::_Earcut, hole::Int, outer::Int)
+    bridge = _ec_find_hole_bridge(e, hole, outer)
+    bridge == 0 && return outer
+    bridge_reverse = _ec_split_polygon!(e, bridge, hole)
+    _ec_filter_points!(e, bridge_reverse, e.next[bridge_reverse])
+    return _ec_filter_points!(e, bridge, e.next[bridge])
+end
+
+# findHoleBridge: David Eberly's bridge search (earcut.js:316-372).
+function _ec_find_hole_bridge(e::_Earcut, hole::Int, outer::Int)
+    p = outer
+    hx = e.x[hole]
+    hy = e.y[hole]
+    qx = -Inf
+    m = 0
+    _ec_equals(e, hole, p) && return p
+    while true
+        pn = e.next[p]
+        _ec_equals(e, hole, pn) && return pn
+        if hy <= e.y[p] && hy >= e.y[pn] && e.y[pn] != e.y[p]
+            x = e.x[p] + (hy - e.y[p]) * (e.x[pn] - e.x[p]) / (e.y[pn] - e.y[p])
+            if x <= hx && x > qx
+                qx = x
+                m = e.x[p] < e.x[pn] ? p : pn
+                x == hx && return m
+            end
+        end
+        p = pn
+        p != outer || break
+    end
+    m == 0 && return 0
+    stop = m
+    mx = e.x[m]
+    my = e.y[m]
+    tan_min = Inf
+    p = m
+    while true
+        px = e.x[p]; py = e.y[p]
+        if hx >= px && px >= mx && hx != px &&
+           _ec_point_in_triangle(hy < my ? hx : qx, hy, mx, my, hy < my ? qx : hx, hy, px, py)
+            tan = abs(hy - py) / (hx - px)
+            if _ec_locally_inside(e, p, hole) &&
+               (tan < tan_min || (tan == tan_min &&
+                                  (px > e.x[m] || (px == e.x[m] && _ec_sector_contains_sector(e, m, p)))))
+                m = p
+                tan_min = tan
+            end
+        end
+        p = e.next[p]
+        p != stop || break
+    end
+    return m
+end
+
+# sectorContainsSector (earcut.js:375-377)
+_ec_sector_contains_sector(e::_Earcut, m::Int, p::Int) =
+    _ec_area(e, e.prev[m], m, e.prev[p]) < 0 && _ec_area(e, e.next[p], m, e.next[m]) < 0
+
+# indexCurve (earcut.js:380-394)
+function _ec_index_curve!(e::_Earcut, start::Int, h::_EcHash)
+    p = start
+    @inbounds while true
+        e.z[p] == 0 && (e.z[p] = _ec_z_order(e.x[p], e.y[p], h))
+        e.prevz[p] = e.prev[p]
+        e.nextz[p] = e.next[p]
+        p = e.next[p]
+        p != start || break
+    end
+    e.nextz[e.prevz[p]] = 0
+    e.prevz[p] = 0
+    _ec_sort_linked!(e, p)
+    return nothing
+end
+
+# sortLinked: Simon Tatham's linked-list merge sort (earcut.js:397-448).
+function _ec_sort_linked!(e::_Earcut, list::Int)
+    in_size = 1
+    @inbounds while true
+        p = list
+        list = 0
+        tail = 0
+        num_merges = 0
+        while p != 0
+            num_merges += 1
+            q = p
+            p_size = 0
+            for _ in 1:in_size
+                p_size += 1
+                q = e.nextz[q]
+                q == 0 && break
+            end
+            q_size = in_size
+            while p_size > 0 || (q_size > 0 && q != 0)
+                if p_size != 0 && (q_size == 0 || q == 0 || e.z[p] <= e.z[q])
+                    node = p
+                    p = e.nextz[p]
+                    p_size -= 1
+                else
+                    node = q
+                    q = e.nextz[q]
+                    q_size -= 1
+                end
+                if tail != 0
+                    e.nextz[tail] = node
+                else
+                    list = node
+                end
+                e.prevz[node] = tail
+                tail = node
+            end
+            p = q
+        end
+        e.nextz[tail] = 0
+        in_size *= 2
+        num_merges > 1 || break
+    end
+    return list
+end
+
+# ECMAScript ToInt32, the `| 0` in zOrder.
+@inline function _ec_to_int32(v::Float64)
+    isfinite(v) || return Int32(0)
+    m = rem(trunc(v), 4294967296.0)
+    m < 0 && (m += 4294967296.0)
+    return reinterpret(Int32, UInt32(m))
+end
+
+# zOrder (earcut.js:451-467): 32-bit integer arithmetic as in JavaScript.
+@inline function _ec_z_order(x::Float64, y::Float64, h::_EcHash)
+    xi = _ec_to_int32((x - h.min_x) * h.inv_size)
+    yi = _ec_to_int32((y - h.min_y) * h.inv_size)
+    xi = (xi | (xi << 8)) & Int32(0x00FF00FF)
+    xi = (xi | (xi << 4)) & Int32(0x0F0F0F0F)
+    xi = (xi | (xi << 2)) & Int32(0x33333333)
+    xi = (xi | (xi << 1)) & Int32(0x55555555)
+    yi = (yi | (yi << 8)) & Int32(0x00FF00FF)
+    yi = (yi | (yi << 4)) & Int32(0x0F0F0F0F)
+    yi = (yi | (yi << 2)) & Int32(0x33333333)
+    yi = (yi | (yi << 1)) & Int32(0x55555555)
+    return xi | (yi << 1)
+end
+
+# getLeftmost (earcut.js:470-479)
+function _ec_get_leftmost(e::_Earcut, start::Int)
+    p = start
+    leftmost = start
+    while true
+        (e.x[p] < e.x[leftmost] || (e.x[p] == e.x[leftmost] && e.y[p] < e.y[leftmost])) &&
+            (leftmost = p)
+        p = e.next[p]
+        p != start || break
+    end
+    return leftmost
+end
+
+# isValidDiagonal (earcut.js:513-518)
+function _ec_is_valid_diagonal(e::_Earcut, a::Int, b::Int)
+    return e.i[e.next[a]] != e.i[b] && e.i[e.prev[a]] != e.i[b] &&
+           !_ec_intersects_polygon(e, a, b) &&
+           ((_ec_locally_inside(e, a, b) && _ec_locally_inside(e, b, a) &&
+             _ec_middle_inside(e, a, b) &&
+             (_ec_truthy(_ec_area(e, e.prev[a], a, e.prev[b])) ||
+              _ec_truthy(_ec_area(e, a, e.prev[b], b)))) ||
+            (_ec_equals(e, a, b) && _ec_area(e, e.prev[a], a, e.next[a]) > 0 &&
+             _ec_area(e, e.prev[b], b, e.next[b]) > 0))
+end
+
+# onSegment (earcut.js:546-549)
+@inline _ec_on_segment(e::_Earcut, p::Int, q::Int, r::Int) =
+    e.x[q] <= max(e.x[p], e.x[r]) && e.x[q] >= min(e.x[p], e.x[r]) &&
+    e.y[q] <= max(e.y[p], e.y[r]) && e.y[q] >= min(e.y[p], e.y[r])
+
+# intersects (earcut.js:532-544)
+function _ec_intersects(e::_Earcut, p1::Int, q1::Int, p2::Int, q2::Int)
+    o1 = _ec_sign(_ec_area(e, p1, q1, p2))
+    o2 = _ec_sign(_ec_area(e, p1, q1, q2))
+    o3 = _ec_sign(_ec_area(e, p2, q2, p1))
+    o4 = _ec_sign(_ec_area(e, p2, q2, q1))
+    o1 != o2 && o3 != o4 && return true
+    o1 == 0 && _ec_on_segment(e, p1, p2, q1) && return true
+    o2 == 0 && _ec_on_segment(e, p1, q2, q1) && return true
+    o3 == 0 && _ec_on_segment(e, p2, p1, q2) && return true
+    o4 == 0 && _ec_on_segment(e, p2, q1, q2) && return true
+    return false
+end
+
+# intersectsPolygon (earcut.js:556-565)
+function _ec_intersects_polygon(e::_Earcut, a::Int, b::Int)
+    p = a
+    ia = e.i[a]; ib = e.i[b]
+    while true
+        pn = e.next[p]
+        if e.i[p] != ia && e.i[pn] != ia && e.i[p] != ib && e.i[pn] != ib &&
+           _ec_intersects(e, p, pn, a, b)
+            return true
+        end
+        p = pn
+        p != a || break
+    end
+    return false
+end
+
+# locallyInside (earcut.js:568-572)
+function _ec_locally_inside(e::_Earcut, a::Int, b::Int)
+    return _ec_area(e, e.prev[a], a, e.next[a]) < 0 ?
+           _ec_area(e, a, b, e.next[a]) >= 0 && _ec_area(e, a, e.prev[a], b) >= 0 :
+           _ec_area(e, a, b, e.prev[a]) < 0 || _ec_area(e, a, e.next[a], b) < 0
+end
+
+# middleInside (earcut.js:575-588)
+function _ec_middle_inside(e::_Earcut, a::Int, b::Int)
+    p = a
+    inside = false
+    px = (e.x[a] + e.x[b]) / 2
+    py = (e.y[a] + e.y[b]) / 2
+    while true
+        pn = e.next[p]
+        if ((e.y[p] > py) != (e.y[pn] > py)) && e.y[pn] != e.y[p] &&
+           (px < (e.x[pn] - e.x[p]) * (py - e.y[p]) / (e.y[pn] - e.y[p]) + e.x[p])
+            inside = !inside
+        end
+        p = pn
+        p != a || break
+    end
+    return inside
+end
+
+# splitPolygon (earcut.js:592-613)
+function _ec_split_polygon!(e::_Earcut, a::Int, b::Int)
+    a2 = _ec_create!(e, e.i[a], e.x[a], e.y[a])
+    b2 = _ec_create!(e, e.i[b], e.x[b], e.y[b])
+    an = e.next[a]
+    bp = e.prev[b]
+    e.next[a] = b
+    e.prev[b] = a
+    e.next[a2] = an
+    e.prev[an] = a2
+    e.next[b2] = a2
+    e.prev[a2] = b2
+    e.next[bp] = b2
+    e.prev[b2] = bp
+    return b2
+end
+
+# earcut (earcut.js:5-43) on flat coordinates with 0-based hole start vertices.
+# Returns 0-based vertex indices, three per triangle.
+function _earcut(data::Vector{Float64}, hole_starts::Vector{Int}, dim::Int)
+    has_holes = !isempty(hole_starts)
+    outer_len = has_holes ? hole_starts[1] * dim : length(data)
+    e = _Earcut(length(data) ÷ dim + 4 * length(hole_starts) + 8)
+    outer = _ec_linked_list!(e, data, 0, outer_len, dim, true)
+    (outer == 0 || e.next[outer] == e.prev[outer]) && return e.triangles
+    sizehint!(e.triangles, 3 * (length(data) ÷ dim + 2 * length(hole_starts)))
+    has_holes && (outer = _ec_eliminate_holes!(e, data, hole_starts, outer, dim))
+    min_x = 0.0
+    min_y = 0.0
+    inv_size = 0.0
+    # Larger inputs use the z-order curve hash; its box covers the outer ring only.
+    if length(data) > 80 * dim
+        min_x = data[1]
+        min_y = data[2]
+        max_x = min_x
+        max_y = min_y
+        i = dim
+        @inbounds while i < outer_len
+            x = data[i + 1]; y = data[i + 2]
+            x < min_x && (min_x = x)
+            y < min_y && (min_y = y)
+            x > max_x && (max_x = x)
+            y > max_y && (max_y = y)
+            i += dim
+        end
+        inv_size = max(max_x - min_x, max_y - min_y)
+        inv_size = inv_size != 0 ? 32767 / inv_size : 0.0
+    end
+    _ec_earcut_linked!(e, outer, _EcHash(min_x, min_y, inv_size), 0)
+    return e.triangles
+end
+
+"""
+    earcut_triangulate(data, hole_indices=Int[]; dim=2) -> Vector{Int}
+
+Triangulate a polygon with holes by the Earcut algorithm, as three.js
+`Earcut.triangulate(data, holeIndices, dim)` (mapbox/earcut 3.0.2,
+src/extras/lib/earcut.js) does. `data` holds the flat vertex coordinates
+`[x1, y1, x2, y2, ...]` (`dim` numbers per vertex; only the first two are
+used): the outer ring first, then each hole. `hole_indices` are the one-based
+vertex indices at which the holes start. Returns one-based vertex indices,
+three per triangle, identical to three.js's triangles (shifted by one) for the
+same input. Rings may have either winding; degenerate, collinear and
+self-touching input is triangulated as Earcut does, and input whose outer ring
+has fewer than three distinct points returns no triangles.
+"""
+function earcut_triangulate(data::AbstractVector{<:Real}, hole_indices::AbstractVector{<:Integer}=Int[];
+                            dim::Integer=2)
+    d = _geometry_int(dim, "earcut_triangulate dim")
+    d >= 2 || throw(ArgumentError("earcut_triangulate dim must be at least 2"))
+    rem(length(data), d) == 0 ||
+        throw(ArgumentError("earcut_triangulate data length must be a multiple of dim"))
+    coords = Vector{Float64}(undef, length(data))
+    for (k, value) in enumerate(data)
+        coords[k] = _geometry_finite_float(value, "earcut_triangulate data")
+    end
+    nverts = length(coords) ÷ d
+    starts = Vector{Int}(undef, length(hole_indices))
+    previous = 0
+    for (k, index) in enumerate(hole_indices)
+        start = _geometry_int(index, "earcut_triangulate hole index") - 1
+        previous < start <= nverts - 1 ||
+            throw(ArgumentError("earcut_triangulate hole indices must increase within 2:$nverts"))
+        starts[k] = start
+        previous = start
+    end
+    triangles = _earcut(coords, starts, d)
+    triangles .+= 1
+    return triangles
+end
 
 # ========================== Shape / Extrude ==========================
 # A Shape is a simple polygon in the xy-plane (Vector{Vec2}). ShapeGeometry
@@ -3613,9 +4982,74 @@ function _extrude_path_geometry(shape_in::AbstractVector{<:Vec2},
                                 path_in::AbstractVector{<:Vec3}, holes_in)
     outer = _extrude_clean_shape(shape_in)
     holes = _shape_clean_holes(holes_in)
-    shape, ranges = _extrude_loops(outer, holes)
     path, closed, eps = _extrude_clean_path(path_in)
     tangents = _extrude_path_tangents(path, closed, eps)
+    nr = length(path)
+    frame_n = Vector{Vec3{Float64}}(undef, nr)
+    frame_b = Vector{Vec3{Float64}}(undef, nr)
+    T = tangents[1]
+    refv = abs(T.y) < 0.99 ? Vec3(0.0, 1.0, 0.0) : Vec3(1.0, 0.0, 0.0)
+    N = normalize(cross(refv, T))
+    B = cross(T, N)
+    twist = 0.0
+    if closed
+        # Like three.js computeFrenetFrames(…, closed=true), spread the
+        # transport holonomy over the loop so the wrap-around ring matches.
+        Nt, Bt = N, B
+        for i in 2:nr
+            Nt, Bt = _tube_transport(Nt, Bt, tangents[i])
+        end
+        N_end, _ = _tube_transport(Nt, Bt, tangents[1])
+        twist = acos(clamp(dot(N, N_end), -1.0, 1.0)) / nr
+        dot(tangents[1], cross(N, N_end)) > 0 && (twist = -twist)
+    end
+    @inbounds for i in 1:nr
+        T = tangents[i]
+        if i > 1
+            projected = N - T * dot(N, T)
+            N = norm(projected) > eps ? normalize(projected) : normalize(cross(B, T))
+            B = cross(T, N)
+        end
+        Nr, Br = N, B
+        if twist != 0.0
+            Nr = _tube_rotate(N, T, twist * (i - 1))
+            Br = cross(T, Nr)
+        end
+        frame_n[i] = Nr
+        frame_b[i] = Br
+    end
+    return _extrude_sweep_geometry(outer, holes, path, closed, tangents, frame_n, frame_b)
+end
+
+# A 3D Curve extrude_path, sampled as three.js ExtrudeGeometry samples it:
+# get_spaced_points(path, steps) with compute_frenet_frames(path, steps,
+# closed). A closed CatmullRomCurve repeats its first sample last, so its rings
+# wrap around instead of being capped.
+function _extrude_path_geometry(shape_in::AbstractVector{<:Vec2}, curve::Curve{Vec3{Float64}},
+                                holes_in, steps)
+    outer = _extrude_clean_shape(shape_in)
+    holes = _shape_clean_holes(holes_in)
+    n = _geometry_positive_int(steps, "ExtrudeGeometry steps")
+    closed = curve isa CatmullRomCurve && curve.closed
+    closed && n < 3 &&
+        throw(ArgumentError("ExtrudeGeometry needs steps >= 3 to sweep a closed curve"))
+    points, frames = _extrude_curve_samples(curve, n)
+    nr = closed ? n : n + 1
+    finite3(v) = isfinite(v.x) && isfinite(v.y) && isfinite(v.z)
+    all(k -> finite3(frames.tangents[k]) && finite3(frames.normals[k]) &&
+             finite3(frames.binormals[k]), 1:nr) ||
+        throw(ArgumentError("ExtrudeGeometry extrude_path curve has a degenerate tangent"))
+    return _extrude_sweep_geometry(outer, holes, points[1:nr], closed, frames.tangents[1:nr],
+                                   frames.normals[1:nr], frames.binormals[1:nr])
+end
+
+# Profile rings swept along `path` with frames (frame_n, frame_b): ring `i`
+# places shape point (x, y) at path[i] + x * frame_n[i] + y * frame_b[i],
+# shares vertices between wall quads (smooth normals) and caps an open path.
+function _extrude_sweep_geometry(outer, holes, path::Vector{Vec3{Float64}}, closed::Bool,
+                                 tangents::Vector{Vec3{Float64}},
+                                 frame_n::Vector{Vec3{Float64}}, frame_b::Vector{Vec3{Float64}})
+    shape, ranges = _extrude_loops(outer, holes)
     shape_normals = isempty(holes) ? _extrude_shape_vertex_normals(shape) :
         reduce(vcat, (_extrude_shape_vertex_normals(shape[r]) for r in ranges))
     cap_triangles = closed ? NTuple{3,Int}[] : _shape_triangulate(outer, holes)
@@ -3643,40 +5077,9 @@ function _extrude_path_geometry(shape_in::AbstractVector{<:Vec2},
     uvs = Vector{Float64}(undef, uv_len)
     indices = Vector{Int}(undef, index_len)
 
-    T = tangents[1]
-    refv = abs(T.y) < 0.99 ? Vec3(0.0, 1.0, 0.0) : Vec3(1.0, 0.0, 0.0)
-    N = normalize(cross(refv, T))
-    B = cross(T, N)
-    first_N = N
-    first_B = B
-    last_N = N
-    last_B = B
-    twist = 0.0
-    if closed
-        # Like three.js computeFrenetFrames(…, closed=true), spread the
-        # transport holonomy over the loop so the wrap-around ring matches.
-        Nt, Bt = N, B
-        for i in 2:nr
-            Nt, Bt = _tube_transport(Nt, Bt, tangents[i])
-        end
-        N_end, _ = _tube_transport(Nt, Bt, tangents[1])
-        twist = acos(clamp(dot(N, N_end), -1.0, 1.0)) / nr
-        dot(tangents[1], cross(N, N_end)) > 0 && (twist = -twist)
-    end
     @inbounds for i in 1:nr
-        T = tangents[i]
-        if i > 1
-            projected = N - T * dot(N, T)
-            N = norm(projected) > eps ? normalize(projected) : normalize(cross(B, T))
-            B = cross(T, N)
-        end
-        i == 1 && (first_N = N; first_B = B)
-        i == nr && (last_N = N; last_B = B)
-        Nr, Br = N, B
-        if twist != 0.0
-            Nr = _tube_rotate(N, T, twist * (i - 1))
-            Br = cross(T, Nr)
-        end
+        Nr = frame_n[i]
+        Br = frame_b[i]
         for j in 1:np
             pt = shape[j]
             normal2 = shape_normals[j]
@@ -3721,7 +5124,7 @@ function _extrude_path_geometry(shape_in::AbstractVector{<:Vec2},
         cap_normal = -tangents[1]
         @inbounds for j in 1:np
             pt = shape[j]
-            p = path[1] + first_N * pt.x + first_B * pt.y
+            p = path[1] + frame_n[1] * pt.x + frame_b[1] * pt.y
             _geometry_check_position(p.x, p.y, p.z, "ExtrudeGeometry")
             vi = start + j
             pbase = 3vi - 2
@@ -3746,7 +5149,7 @@ function _extrude_path_geometry(shape_in::AbstractVector{<:Vec2},
         cap_normal = tangents[end]
         @inbounds for j in 1:np
             pt = shape[j]
-            p = path[nr] + last_N * pt.x + last_B * pt.y
+            p = path[nr] + frame_n[nr] * pt.x + frame_b[nr] * pt.y
             _geometry_check_position(p.x, p.y, p.z, "ExtrudeGeometry")
             vi = start + j
             pbase = 3vi - 2
@@ -3772,14 +5175,27 @@ function _extrude_path_geometry(shape_in::AbstractVector{<:Vec2},
 end
 
 """
-    ShapeGeometry(shape; holes=Vector{Vec2{Float64}}[])
+    ShapeGeometry(shape; holes=Vector{Vec2{Float64}}[], triangulation=:ear_clip)
 
 Filled planar polygon at z = 0 with +z normals and world-space `(x, y)` UVs
 (three.js `ShapeGeometry`). `holes` are polygons cut out of `shape`; they must
 lie inside it without touching it or each other. Either winding is accepted for
 the outline and the holes.
+
+`triangulation=:ear_clip` (the default) triangulates with Diff3D's ear clipper:
+the outline is stored counterclockwise, near-duplicate points are merged and
+self-intersecting input is an error. `triangulation=:earcut` builds the
+geometry exactly as three.js r186 `ShapeGeometry` does, with its Earcut port
+(see [`earcut_triangulate`](@ref)): the outline is stored clockwise and holes
+counterclockwise, exactly repeated consecutive points and a closing point equal
+to the first are dropped, and the vertices, UVs and triangles equal three.js's.
+Degenerate, touching or self-intersecting input is then triangulated as Earcut
+does, which may give no triangles at all.
 """
-function ShapeGeometry(shape::Vector{<:Vec2}; holes=Vector{Vec2{Float64}}[])
+function ShapeGeometry(shape::Vector{<:Vec2}; holes=Vector{Vec2{Float64}}[],
+                       triangulation::Symbol=:ear_clip)
+    _shape_triangulation(triangulation, "ShapeGeometry") === :earcut &&
+        return _shape_geometry_earcut(shape, holes)
     outer = _extrude_clean_shape(shape)   # normalize to CCW (+z normal)
     hole_loops = _shape_clean_holes(holes)
     points, _ = _extrude_loops(outer, hole_loops)
@@ -3861,7 +5277,8 @@ end
     ExtrudeGeometry(shape; depth=1.0, holes=Vector{Vec2{Float64}}[], steps=1,
                     bevel_enabled=false, bevel_thickness=0.2,
                     bevel_size=bevel_thickness - 0.1, bevel_offset=0.0,
-                    bevel_segments=3, extrude_path=nothing)
+                    bevel_segments=3, extrude_path=nothing,
+                    triangulation=:ear_clip)
 
 Extrude the planar polygon `shape`, minus optional `holes`, along +z from
 `z = 0` to `depth` in `steps` slices (three.js `ExtrudeGeometry`). With
@@ -3869,15 +5286,49 @@ Extrude the planar polygon `shape`, minus optional `holes`, along +z from
 `bevel_thickness` beyond each cap grow the outline by up to `bevel_size`,
 starting `bevel_offset` from it (three.js `getBevelVec` offsets). Caps use
 world `(x, y)` UVs and side walls three.js `WorldUVGenerator` UVs. With
-`extrude_path` the profile is swept along that polyline instead; as in three.js
-path extrusion, bevels are not applied there and every path point is a step.
+`extrude_path` the profile is swept along that polyline (a vector of `Vec3`
+points, every point a step) or 3D [`Curve`](@ref) instead, placing shape point
+`(x, y)` at `x` along the frame normal and `y` along the binormal; as in
+three.js path extrusion, bevels are not applied. A curve is sampled as three.js
+does, at `get_spaced_points(extrude_path, steps)` with
+[`compute_frenet_frames`](@ref) (closed for a closed
+[`CatmullRomCurve`](@ref), whose rings then wrap around without caps where
+three.js caps both ends). Rings share vertices, with smooth normals.
 
 Unlike three.js, `bevel_enabled` defaults to `false`.
+
+`triangulation=:earcut` builds the geometry exactly as three.js r186
+`ExtrudeGeometry` does, triangulating the caps with its Earcut port
+([`earcut_triangulate`](@ref)): an unindexed triangle list (`indices` is
+`1:n`) in three.js's vertex order, `WorldUVGenerator` UVs and the flat normals
+of `computeVertexNormals`, with three.js's handling of degenerate input (see
+[`ShapeGeometry`](@ref)). three.js's two draw groups are not added. In that
+mode `extrude_path` must be a 3D [`Curve`](@ref), sampled as three.js does by
+`get_spaced_points(extrude_path, steps)` with [`compute_frenet_frames`](@ref)
+(closed only for a closed [`CatmullRomCurve`](@ref)); both caps are kept and
+bevels are disabled.
 """
 function ExtrudeGeometry(shape::Vector{<:Vec2}; depth=1.0, extrude_path=nothing,
                          holes=Vector{Vec2{Float64}}[], steps=1,
                          bevel_enabled::Bool=false, bevel_thickness=0.2,
-                         bevel_size=nothing, bevel_offset=0.0, bevel_segments=3)
+                         bevel_size=nothing, bevel_offset=0.0, bevel_segments=3,
+                         triangulation::Symbol=:ear_clip)
+    if _shape_triangulation(triangulation, "ExtrudeGeometry") === :earcut
+        extrude_path === nothing || extrude_path isa Curve{Vec3{Float64}} ||
+            throw(ArgumentError("ExtrudeGeometry with triangulation=:earcut needs " *
+                                "extrude_path to be a 3D Curve, as in three.js"))
+        opt = _extrude_threejs_options(depth, steps, bevel_enabled, bevel_thickness,
+                                       bevel_size, bevel_offset, bevel_segments)
+        outer = _earcut_path_points(shape, "ExtrudeGeometry shape points")
+        hole_loops = Vector{Vec2{Float64}}[_earcut_path_points(h, "ExtrudeGeometry hole points")
+                                           for h in holes]
+        return _extrude_threejs_geometry(((outer, hole_loops),), opt, extrude_path)
+    end
+    if extrude_path isa Curve
+        extrude_path isa Curve{Vec3{Float64}} ||
+            throw(ArgumentError("ExtrudeGeometry extrude_path curve must be a 3D Curve"))
+        return _extrude_path_geometry(shape, extrude_path, holes, steps)
+    end
     extrude_path !== nothing && return _extrude_path_geometry(shape, extrude_path, holes)
     depth = _geometry_finite_float(depth, "ExtrudeGeometry depth")
     steps = _geometry_positive_int(steps, "ExtrudeGeometry steps")
@@ -3967,7 +5418,11 @@ function ExtrudeGeometry(shape::Vector{<:Vec2}; depth=1.0, extrude_path=nothing,
                 # negative depth turns the wall inside out, normal included.
                 z2 < z1 ? Vec3(-ey, ex, 0.0) : Vec3(ey, -ex, 0.0)
             else
-                # Planar bevel trapezoid: its diagonals span the face plane.
+                # Bevel quad: the normalized cross product of its diagonals. The
+                # quad is planar only when both corner moves are parallel to the
+                # edge (e.g. a rectangle); otherwise this is the quad's average
+                # normal, a few degrees off each triangle's own. three.js gives
+                # each triangle its flat normal (`triangulation=:earcut`).
                 normalize(cross(Vec3(q2.x - p1.x, q2.y - p1.y, z2 - z1),
                                 Vec3(q1.x - p2.x, q1.y - p2.y, z2 - z1)))
             end
@@ -3992,6 +5447,448 @@ function ExtrudeGeometry(shape::Vector{<:Vec2}; depth=1.0, extrude_path=nothing,
         end
     end
     BufferGeometry(positions, normals, uvs, indices, n_verts, n_faces)
+end
+
+# ---- three.js r186 construction with Earcut (`triangulation=:earcut`) ----
+
+const _SHAPE_TRIANGULATIONS = (:ear_clip, :earcut)
+
+function _shape_triangulation(value::Symbol, label::String)
+    value in _SHAPE_TRIANGULATIONS ||
+        throw(ArgumentError("$label triangulation must be :ear_clip or :earcut"))
+    return value
+end
+
+# The points three.js samples from `new Shape(points)` / `new Path(points)`:
+# Path.setFromPoints builds line curves and CurvePath.getPoints drops exactly
+# repeated consecutive points (CurvePath.js:197-201); one point makes no curve.
+# Points compare as Vector2.equals does, by numeric value (-0.0 equals 0.0);
+# `==` on Vec2 is `===`, which would keep a signed-zero duplicate.
+_vector2_equals(a::Vec2, b::Vec2) = a.x == b.x && a.y == b.y
+
+function _earcut_path_points(points::AbstractVector{<:Vec2}, label::String)
+    out = Vec2{Float64}[]
+    length(points) >= 2 || return out
+    sizehint!(out, length(points))
+    for p in points
+        q = Vec2{Float64}(_geometry_finite_float(p.x, label), _geometry_finite_float(p.y, label))
+        (!isempty(out) && _vector2_equals(out[end], q)) && continue
+        push!(out, q)
+    end
+    return out
+end
+
+# ShapeUtils.area / isClockWise (ShapeUtils.js:16-43).
+function _shape_utils_area(contour::Vector{Vec2{Float64}})
+    n = length(contour)
+    a = 0.0
+    p = n
+    @inbounds for q in 1:n
+        a += contour[p].x * contour[q].y - contour[q].x * contour[p].y
+        p = q
+    end
+    return a * 0.5
+end
+_shape_utils_is_clockwise(points::Vector{Vec2{Float64}}) = _shape_utils_area(points) < 0
+
+# ShapeUtils.triangulateShape (ShapeUtils.js:52-93): drops a closing point
+# equal to the first from `contour` and each hole IN PLACE, as three.js does,
+# then returns Earcut's 0-based vertex indices, three per triangle.
+function _shape_utils_triangulate!(contour::Vector{Vec2{Float64}},
+                                   holes::Vector{Vector{Vec2{Float64}}})
+    _shape_remove_dup_end!(contour)
+    foreach(_shape_remove_dup_end!, holes)
+    total = length(contour) + sum(length, holes; init=0)
+    data = Vector{Float64}(undef, 2total)
+    k = 0
+    for loop in (contour, holes...)
+        @inbounds for p in loop
+            data[k + 1] = p.x
+            data[k + 2] = p.y
+            k += 2
+        end
+    end
+    starts = Vector{Int}(undef, length(holes))
+    hole_start = length(contour)
+    for (h, hole) in enumerate(holes)
+        isempty(hole) && throw(ArgumentError("shape hole $h has no points"))
+        starts[h] = hole_start
+        hole_start += length(hole)
+    end
+    return _earcut(data, starts, 2)
+end
+
+function _shape_remove_dup_end!(points::Vector{Vec2{Float64}})
+    l = length(points)
+    (l > 2 && _vector2_equals(points[l], points[1])) && pop!(points)
+    return points
+end
+
+# three.js ShapeGeometry addShape (ShapeGeometry.js:85-140) for one shape.
+function _shape_geometry_earcut(shape::AbstractVector{<:Vec2}, holes_in)
+    outer = _earcut_path_points(shape, "ShapeGeometry shape points")
+    holes = Vector{Vec2{Float64}}[_earcut_path_points(h, "ShapeGeometry hole points")
+                                  for h in holes_in]
+    _shape_utils_is_clockwise(outer) || reverse!(outer)
+    for hole in holes
+        _shape_utils_is_clockwise(hole) && reverse!(hole)
+    end
+    faces = _shape_utils_triangulate!(outer, holes)
+    np = length(outer) + sum(length, holes; init=0)
+    n_faces = length(faces) ÷ 3
+    position_len, uv_len, index_len =
+        _geometry_mesh_buffer_lengths(np, n_faces, "ShapeGeometry")
+    positions = Vector{Float64}(undef, position_len)
+    normals = Vector{Float64}(undef, position_len)
+    uvs = Vector{Float64}(undef, uv_len)
+    i = 0
+    for loop in (outer, holes...)
+        @inbounds for pt in loop
+            i += 1
+            positions[3i - 2] = pt.x
+            positions[3i - 1] = pt.y
+            positions[3i] = 0.0
+            normals[3i - 2] = 0.0
+            normals[3i - 1] = 0.0
+            normals[3i] = 1.0
+            uvs[2i - 1] = pt.x
+            uvs[2i] = pt.y
+        end
+    end
+    indices = faces
+    indices .+= 1
+    return BufferGeometry(positions, normals, uvs, indices, np, n_faces)
+end
+
+# ExtrudeGeometry.js mergeOverlappingPoints (lines 214-252), in place. The
+# wrap-around step compares the first point with the last kept one.
+function _extrude_merge_overlapping!(points::Vector{Vec2{Float64}})
+    isempty(points) && return points
+    threshold = 1e-10
+    threshold_sq = threshold * threshold
+    prev = points[1]
+    i = 1
+    while i <= length(points)
+        current_index = i % length(points)
+        current = points[current_index + 1]
+        dx = current.x - prev.x
+        dy = current.y - prev.y
+        dist_sq = dx * dx + dy * dy
+        scaling = max(abs(current.x), abs(current.y), abs(prev.x), abs(prev.y))
+        if dist_sq <= threshold_sq * scaling * scaling
+            deleteat!(points, current_index + 1)
+            continue
+        end
+        prev = current
+        i += 1
+    end
+    return points
+end
+
+# ExtrudeGeometry.js getBevelVec (lines 291-399) in three.js's own orientation
+# (outer contour clockwise). Returns the translation for `pt`.
+function _extrude_threejs_bevel_vec(pt::Vec2{Float64}, prev::Vec2{Float64}, next::Vec2{Float64})
+    v_prev_x = pt.x - prev.x
+    v_prev_y = pt.y - prev.y
+    v_next_x = next.x - pt.x
+    v_next_y = next.y - pt.y
+    v_prev_lensq = v_prev_x * v_prev_x + v_prev_y * v_prev_y
+    collinear0 = v_prev_x * v_next_y - v_prev_y * v_next_x
+    if abs(collinear0) > eps(Float64)
+        v_prev_len = sqrt(v_prev_lensq)
+        v_next_len = sqrt(v_next_x * v_next_x + v_next_y * v_next_y)
+        prev_shift_x = prev.x - v_prev_y / v_prev_len
+        prev_shift_y = prev.y + v_prev_x / v_prev_len
+        next_shift_x = next.x - v_next_y / v_next_len
+        next_shift_y = next.y + v_next_x / v_next_len
+        sf = ((next_shift_x - prev_shift_x) * v_next_y -
+              (next_shift_y - prev_shift_y) * v_next_x) /
+             (v_prev_x * v_next_y - v_prev_y * v_next_x)
+        v_trans_x = prev_shift_x + v_prev_x * sf - pt.x
+        v_trans_y = prev_shift_y + v_prev_y * sf - pt.y
+        v_trans_lensq = v_trans_x * v_trans_x + v_trans_y * v_trans_y
+        v_trans_lensq <= 2 && return Vec2(v_trans_x, v_trans_y)
+        shrink_by = sqrt(v_trans_lensq / 2)
+    else
+        direction_eq = if v_prev_x > eps(Float64)
+            v_next_x > eps(Float64)
+        elseif v_prev_x < -eps(Float64)
+            v_next_x < -eps(Float64)
+        else
+            sign(v_prev_y) == sign(v_next_y)
+        end
+        if direction_eq
+            v_trans_x = -v_prev_y
+            v_trans_y = v_prev_x
+            shrink_by = sqrt(v_prev_lensq)
+        else
+            v_trans_x = v_prev_x
+            v_trans_y = v_prev_y
+            shrink_by = sqrt(v_prev_lensq / 2)
+        end
+    end
+    return Vec2(v_trans_x / shrink_by, v_trans_y / shrink_by)
+end
+
+function _extrude_threejs_movements(loop::Vector{Vec2{Float64}})
+    n = length(loop)
+    moves = Vector{Vec2{Float64}}(undef, n)
+    @inbounds for i in 1:n
+        j = i == 1 ? n : i - 1
+        k = i == n ? 1 : i + 1
+        moves[i] = _extrude_threejs_bevel_vec(loop[i], loop[j], loop[k])
+    end
+    return moves
+end
+
+# scalePt2: pt.clone().addScaledVector(vec, size)
+@inline _extrude_scale_pt(pt::Vec2{Float64}, vec::Vec2{Float64}, size::Float64) =
+    Vec2(pt.x + vec.x * size, pt.y + vec.y * size)
+
+# Non-indexed computeVertexNormals (BufferGeometry.js:780-817): each triangle's
+# (C - B) x (A - B), normalized with `length() || 1`.
+function _threejs_flat_normals!(normals::Vector{Float64}, positions::Vector{Float64})
+    @inbounds for t in 0:(length(positions) ÷ 9 - 1)
+        o = 9t
+        ax = positions[o + 1]; ay = positions[o + 2]; az = positions[o + 3]
+        bx = positions[o + 4]; by = positions[o + 5]; bz = positions[o + 6]
+        cx = positions[o + 7]; cy = positions[o + 8]; cz = positions[o + 9]
+        cbx = cx - bx; cby = cy - by; cbz = cz - bz
+        abx = ax - bx; aby = ay - by; abz = az - bz
+        nx = cby * abz - cbz * aby
+        ny = cbz * abx - cbx * abz
+        nz = cbx * aby - cby * abx
+        len = sqrt(nx * nx + ny * ny + nz * nz)
+        inv = 1 / (iszero(len) ? 1.0 : len)
+        nx *= inv; ny *= inv; nz *= inv
+        for v in 0:2
+            normals[o + 3v + 1] = nx
+            normals[o + 3v + 2] = ny
+            normals[o + 3v + 3] = nz
+        end
+    end
+    return normals
+end
+
+@inline function _extrude_add_vertex!(positions::Vector{Float64}, placeholder::Vector{Float64},
+                                      index::Int)
+    @inbounds push!(positions, placeholder[3index + 1], placeholder[3index + 2],
+                    placeholder[3index + 3])
+    return nothing
+end
+
+# ExtrudeGeometry.js f3 with WorldUVGenerator.generateTopUV: the vertices' (x, y).
+function _extrude_f3!(positions::Vector{Float64}, uvs::Vector{Float64},
+                      placeholder::Vector{Float64}, a::Int, b::Int, c::Int)
+    start = length(positions)
+    _extrude_add_vertex!(positions, placeholder, a)
+    _extrude_add_vertex!(positions, placeholder, b)
+    _extrude_add_vertex!(positions, placeholder, c)
+    @inbounds for v in 0:2
+        push!(uvs, positions[start + 3v + 1], positions[start + 3v + 2])
+    end
+    return nothing
+end
+
+# ExtrudeGeometry.js f4 (triangles a-b-d and b-c-d) with
+# WorldUVGenerator.generateSideWallUV on A, the second B, C and D.
+function _extrude_f4!(positions::Vector{Float64}, uvs::Vector{Float64},
+                      placeholder::Vector{Float64}, a::Int, b::Int, c::Int, d::Int)
+    start = length(positions)
+    for index in (a, b, d, b, c, d)
+        _extrude_add_vertex!(positions, placeholder, index)
+    end
+    @inbounds begin
+        ia = start; ib = start + 9; ic = start + 12; id = start + 15
+        use_x = abs(positions[ia + 2] - positions[ib + 2]) <
+                abs(positions[ia + 1] - positions[ib + 1])
+        o = use_x ? 1 : 2
+        ua1 = positions[ia + o]; ua2 = 1 - positions[ia + 3]
+        ub1 = positions[ib + o]; ub2 = 1 - positions[ib + 3]
+        uc1 = positions[ic + o]; uc2 = 1 - positions[ic + 3]
+        ud1 = positions[id + o]; ud2 = 1 - positions[id + 3]
+        push!(uvs, ua1, ua2, ub1, ub2, ud1, ud2, ub1, ub2, uc1, uc2, ud1, ud2)
+    end
+    return nothing
+end
+
+struct _ExtrudeThreeOptions
+    depth::Float64
+    steps::Int
+    bevel_enabled::Bool
+    bevel_thickness::Float64
+    bevel_size::Float64
+    bevel_offset::Float64
+    bevel_segments::Int
+end
+
+# three.js ExtrudeGeometry addShape (ExtrudeGeometry.js:117-760) for one shape
+# given as the points of `shape.extractPoints(curveSegments)`. `path_points` and
+# `frames` are `extrudePath.getSpacedPoints(steps)` and its Frenet frames, or
+# `nothing`. Appends three.js's unindexed positions and UVs.
+function _extrude_threejs_shape!(positions::Vector{Float64}, uvs::Vector{Float64},
+                                 shape_points::Vector{Vec2{Float64}},
+                                 hole_points::Vector{Vector{Vec2{Float64}}},
+                                 opt::_ExtrudeThreeOptions, path_points, frames)
+    steps = opt.steps
+    depth = opt.depth
+    by_path = path_points !== nothing
+    bevel_enabled = opt.bevel_enabled && !by_path
+    bevel_segments = bevel_enabled ? opt.bevel_segments : 0
+    bevel_thickness = bevel_enabled ? opt.bevel_thickness : 0.0
+    bevel_size = bevel_enabled ? opt.bevel_size : 0.0
+    bevel_offset = bevel_enabled ? opt.bevel_offset : 0.0
+
+    contour = copy(shape_points)
+    holes = [copy(h) for h in hole_points]
+    if !_shape_utils_is_clockwise(contour)
+        reverse!(contour)
+        for hole in holes
+            _shape_utils_is_clockwise(hole) && reverse!(hole)
+        end
+    end
+    _extrude_merge_overlapping!(contour)
+    foreach(_extrude_merge_overlapping!, holes)
+    vertices = reduce(vcat, holes; init=copy(contour))
+    vlen = length(vertices)
+
+    contour_moves = _extrude_threejs_movements(contour)
+    hole_moves = [_extrude_threejs_movements(hole) for hole in holes]
+    vertex_moves = reduce(vcat, hole_moves; init=copy(contour_moves))
+
+    layers = steps + 1 + 2bevel_segments
+    placeholder = Float64[]
+    sizehint!(placeholder, 3 * _geometry_checked_mul(vlen, layers, "ExtrudeGeometry vertex count"))
+    faces = if bevel_segments == 0
+        _shape_utils_triangulate!(contour, holes)
+    else
+        contracted = Vec2{Float64}[]
+        expanded = Vector{Vec2{Float64}}[]
+        for b in 0:(bevel_segments - 1)
+            t = b / bevel_segments
+            z = bevel_thickness * cos(t * π / 2)
+            bs = bevel_size * sin(t * π / 2) + bevel_offset
+            for i in eachindex(contour)
+                vert = _extrude_scale_pt(contour[i], contour_moves[i], bs)
+                push!(placeholder, vert.x, vert.y, -z)
+                t == 0 && push!(contracted, vert)
+            end
+            for h in eachindex(holes)
+                one = Vec2{Float64}[]
+                for i in eachindex(holes[h])
+                    vert = _extrude_scale_pt(holes[h][i], hole_moves[h][i], bs)
+                    push!(placeholder, vert.x, vert.y, -z)
+                    t == 0 && push!(one, vert)
+                end
+                t == 0 && push!(expanded, one)
+            end
+        end
+        _shape_utils_triangulate!(contracted, expanded)
+    end
+    bs = bevel_size + bevel_offset
+    for s in 0:steps
+        for i in 1:vlen
+            vert = bevel_enabled ? _extrude_scale_pt(vertices[i], vertex_moves[i], bs) : vertices[i]
+            if by_path
+                n = frames.normals[s + 1]
+                b = frames.binormals[s + 1]
+                p = path_points[s + 1]
+                push!(placeholder, p.x + n.x * vert.x + b.x * vert.y,
+                        p.y + n.y * vert.x + b.y * vert.y,
+                        p.z + n.z * vert.x + b.z * vert.y)
+            else
+                push!(placeholder, vert.x, vert.y, s == 0 ? 0.0 : depth / steps * s)
+            end
+        end
+    end
+    # Top bevel layers. three.js's path branch inside this loop is unreachable:
+    # bevels are disabled for path extrusion, so `bevel_segments` is 0 there.
+    for b in (bevel_segments - 1):-1:0
+        t = b / bevel_segments
+        z = bevel_thickness * cos(t * π / 2)
+        bs_layer = bevel_size * sin(t * π / 2) + bevel_offset
+        for i in eachindex(contour)
+            vert = _extrude_scale_pt(contour[i], contour_moves[i], bs_layer)
+            push!(placeholder, vert.x, vert.y, depth + z)
+        end
+        for h in eachindex(holes), i in eachindex(holes[h])
+            vert = _extrude_scale_pt(holes[h][i], hole_moves[h][i], bs_layer)
+            push!(placeholder, vert.x, vert.y, depth + z)
+        end
+    end
+
+    flen = length(faces) ÷ 3
+    if bevel_enabled
+        offset = 0
+        for f in 0:(flen - 1)
+            _extrude_f3!(positions, uvs, placeholder, faces[3f + 3] + offset, faces[3f + 2] + offset, faces[3f + 1] + offset)
+        end
+        offset = vlen * (steps + 2bevel_segments)
+        for f in 0:(flen - 1)
+            _extrude_f3!(positions, uvs, placeholder, faces[3f + 1] + offset, faces[3f + 2] + offset, faces[3f + 3] + offset)
+        end
+    else
+        for f in 0:(flen - 1)
+            _extrude_f3!(positions, uvs, placeholder, faces[3f + 3], faces[3f + 2], faces[3f + 1])
+        end
+        offset = vlen * steps
+        for f in 0:(flen - 1)
+            _extrude_f3!(positions, uvs, placeholder, faces[3f + 1] + offset, faces[3f + 2] + offset, faces[3f + 3] + offset)
+        end
+    end
+    sl = steps + 2bevel_segments
+    layer_offset = 0
+    for loop in (contour, holes...)
+        len = length(loop)
+        for i in (len - 1):-1:0
+            j = i
+            k = i - 1
+            k < 0 && (k = len - 1)
+            for s in 0:(sl - 1)
+                slen1 = vlen * s
+                slen2 = vlen * (s + 1)
+                _extrude_f4!(positions, uvs, placeholder, layer_offset + j + slen1, layer_offset + k + slen1,
+                    layer_offset + k + slen2, layer_offset + j + slen2)
+            end
+        end
+        layer_offset += len
+    end
+    return nothing
+end
+
+function _extrude_threejs_options(depth, steps, bevel_enabled::Bool, bevel_thickness,
+                                  bevel_size, bevel_offset, bevel_segments)
+    thickness = _geometry_finite_float(bevel_thickness, "ExtrudeGeometry bevel_thickness")
+    return _ExtrudeThreeOptions(
+        _geometry_finite_float(depth, "ExtrudeGeometry depth"),
+        _geometry_positive_int(steps, "ExtrudeGeometry steps"),
+        bevel_enabled, thickness,
+        bevel_size === nothing ? thickness - 0.1 :
+            _geometry_finite_float(bevel_size, "ExtrudeGeometry bevel_size"),
+        _geometry_finite_float(bevel_offset, "ExtrudeGeometry bevel_offset"),
+        _geometry_nonnegative_int(bevel_segments, "ExtrudeGeometry bevel_segments"))
+end
+
+# `extrudePath.getSpacedPoints(steps)` and `computeFrenetFrames(steps, closed)`,
+# closed only for a closed CatmullRomCurve (ExtrudeGeometry.js:148-160).
+function _extrude_curve_samples(path::Curve{Vec3{Float64}}, steps::Int)
+    closed = path isa CatmullRomCurve ? path.closed : false
+    return get_spaced_points(path, steps), compute_frenet_frames(path, steps, closed)
+end
+
+function _extrude_threejs_geometry(shapes, opt::_ExtrudeThreeOptions, extrude_path)
+    path_points, frames = extrude_path === nothing ? (nothing, nothing) :
+                          _extrude_curve_samples(extrude_path, opt.steps)
+    positions = Float64[]
+    uvs = Float64[]
+    for (shape_points, hole_points) in shapes
+        _extrude_threejs_shape!(positions, uvs, shape_points, hole_points, opt,
+                                path_points, frames)
+    end
+    all(isfinite, positions) || _geometry_position_range_error("ExtrudeGeometry")
+    n = length(positions) ÷ 3
+    normals = _threejs_flat_normals!(similar(positions), positions)
+    return BufferGeometry(positions, normals, uvs, collect(1:n), n, n ÷ 3)
 end
 
 # ========================== CapsuleGeometry ==========================
