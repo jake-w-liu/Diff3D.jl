@@ -3312,6 +3312,10 @@ mutable struct _AnimationBinding
     # Whole influence vector a vector binding restores when its width differs
     # from the binding's (empty otherwise).
     original_vector::Vector{Float64}
+    # Euler rotation a quaternion binding restores, so the original angles
+    # come back exactly rather than as the quaternion's canonical Euler
+    # angles (nothing for other bindings).
+    original_rotation::Any
     # Vector tracks bound here: their keyframe vectors must not be written.
     vector_tracks::Vector{AbstractKeyframeTrack}
 end
@@ -4553,6 +4557,9 @@ const _BINDING_VECTOR = 8        # whole influence vector of one node
 @noinline _throw_unreadable_binding(property::Symbol) = throw(ArgumentError(
     "animation property $property cannot be read for blending"))
 
+_binding_original_euler(node) =
+    hasproperty(node, :rotation) && (r = getproperty(node, :rotation)) isa Euler ? r : nothing
+
 # PropertyBinding.getValue into the `orig` region.
 function _binding_get!(node, b::_AnimationBinding)
     buf = b.buffer
@@ -4581,6 +4588,7 @@ function _binding_get!(node, b::_AnimationBinding)
         v = _original_component(value, b.component)
         v === nothing && _throw_unreadable_binding(property)
         buf[o + 1] = v
+        property === :quaternion && (b.original_rotation = _binding_original_euler(node))
     elseif kind == _BINDING_MORPH
         values = getproperty(node, :morph_target_influences)
         1 <= b.component <= length(values) || throw(ArgumentError(
@@ -4594,6 +4602,8 @@ function _binding_get!(node, b::_AnimationBinding)
         buf[o + 2] = q.y
         buf[o + 3] = q.z
         buf[o + 4] = q.w
+        _rotation_track_property(property) &&
+            (b.original_rotation = _binding_original_euler(node))
     else
         values = getproperty(node, property)
         values isa AbstractVector{<:Real} || _throw_unreadable_binding(property)
@@ -4657,10 +4667,23 @@ function _binding_aliases_keyframes(b::_AnimationBinding, values::Vector{Float64
 end
 
 # PropertyMixer.restoreOriginalState. A vector binding whose node had a
-# vector of another width gets that vector's values back.
+# vector of another width gets that vector's values back, and a quaternion
+# binding the original Euler angles, as AnimationMixer restores them.
 function _binding_restore_original!(b::_AnimationBinding)
     if b.kind == _BINDING_VECTOR && !isempty(b.original_vector)
-        setproperty!(b.node, b.property, copy(b.original_vector))
+        original = b.original_vector
+        values = getproperty(b.node, b.property)
+        if values isa Vector{Float64} && length(values) == length(original) &&
+           !_binding_aliases_keyframes(b, values)
+            copyto!(values, original)
+        else
+            setproperty!(b.node, b.property, copy(original))
+        end
+        return nothing
+    end
+    rotation = b.original_rotation
+    if rotation isa Euler
+        setproperty!(b.node, :rotation, rotation)
         return nothing
     end
     b.apply_offset = 3 * b.stride
@@ -4828,8 +4851,16 @@ function _binding_apply!(b::_AnimationBinding, accu_index::Int)
     weight_additive > 0 && _binding_mix_additive!(b, offset, 4 * s, 1.0)
     @inbounds for i in (s + 1):(2 * s)
         if buf[i] != buf[i + s]
-            b.apply_offset = offset
-            _binding_set!(b.node, b)
+            if weight == 0 && !(weight_additive > 0)
+                # No action contributes, so the result is the original
+                # value: write it as saved, which also keeps the width of a
+                # morph-influence vector the track's width does not match
+                # and the original Euler angles of a quaternion property.
+                _binding_restore_original!(b)
+            else
+                b.apply_offset = offset
+                _binding_set!(b.node, b)
+            end
             break
         end
     end
@@ -4942,7 +4973,7 @@ function _bind_action_tracks!(mixer::AnimationActionMixer, clip::AnimationClip)
                 node, property, component, kind, stride = spec
                 b = _AnimationBinding(node, property, component, kind, stride,
                                       zeros(6 * stride), 0.0, 0.0, 0, 0, 0, Float64[],
-                                      AbstractKeyframeTrack[])
+                                      nothing, AbstractKeyframeTrack[])
                 _binding_get!(node, b)
                 push!(added, b)
             end

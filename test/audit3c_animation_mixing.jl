@@ -438,6 +438,83 @@ end
     @test sprint(show, a) == "AnimationAction(\"c\", normal, stopped)"
 end
 
+@testset "audit3c mixing: originals come back as AnimationMixer restores them" begin
+    # A morph-weight track narrower or wider than a driven mesh's influences
+    # writes a vector of the track's width while it plays (as AnimationMixer
+    # does). Once no action contributes (finished, faded out, or weight 0),
+    # PropertyMixer.apply mixes in the original with weight 1, and the mesh
+    # gets its own vector back, not one cut or padded to the track's width.
+    for width in (2, 4), finish in (:once, :weight, :fade)
+        root = Group()
+        m1 = Mesh(BoxGeometry(), MeshBasicMaterial(); morph_target_influences=[0.1, 0.2, 0.3])
+        m2 = Mesh(BoxGeometry(), MeshBasicMaterial(); morph_target_influences=[0.4, 0.5, 0.6])
+        add!(root, m1); add!(root, m2)
+        clip = AnimationClip("w", 1.0, AbstractKeyframeTrack[
+            MorphWeightsKeyframeTrack(root, :morph_target_influences, [0.0, 1.0],
+                                      [fill(0.9, width), fill(0.7, width)])])
+        legacy_root = Group()
+        l1 = Mesh(BoxGeometry(), MeshBasicMaterial(); morph_target_influences=[0.1, 0.2, 0.3])
+        add!(legacy_root, l1)
+        legacy = AnimationMixer(AnimationClip("w", 1.0, AbstractKeyframeTrack[
+            MorphWeightsKeyframeTrack(legacy_root, :morph_target_influences, [0.0, 1.0],
+                                      [fill(0.9, width), fill(0.7, width)])]); loop=:once)
+        mixer = Diff3D.AnimationActionMixer()
+        act = Diff3D.action_play!(Diff3D.mixer_clip_action(mixer, clip))
+        Diff3D.action_set_loop!(act, :once)
+        mixer_update!(mixer, 0.5); mixer_update!(legacy, 0.5)
+        @test m1.morph_target_influences == fill(0.8, width) == l1.morph_target_influences
+        if finish === :once
+            mixer_update!(mixer, 1.0); mixer_update!(legacy, 1.0)
+            @test l1.morph_target_influences == [0.1, 0.2, 0.3]
+        elseif finish === :weight
+            Diff3D.action_set_effective_weight!(act, 0.0)
+            mixer_update!(mixer, 0.1)
+        else
+            Diff3D.action_fade_out!(act, 0.2)
+            mixer_update!(mixer, 0.1); mixer_update!(mixer, 0.15)
+            @test !act.enabled
+        end
+        @test m1.morph_target_influences == [0.1, 0.2, 0.3]
+        @test m2.morph_target_influences == [0.4, 0.5, 0.6]
+        Diff3D.action_stop!(act)
+        @test m1.morph_target_influences == [0.1, 0.2, 0.3]
+    end
+
+    # A quaternion track drives the rotation through its quaternion; when the
+    # action stops contributing or stops, the original Euler angles come
+    # back as they were (y = 2 is outside the range a quaternion converts
+    # to), as AnimationMixer restores them.
+    for (track, stop) in ((:quaternion, false), (:quaternion, true), (:component, false),
+                          (:component, true))
+        obj = Group()
+        obj.rotation = Euler(0.3, 2.0, -0.1, :XYZ)
+        tr = track === :quaternion ?
+            QuaternionKeyframeTrack(obj, :quaternion, [0.0, 1.0],
+                                    [Quaternion(0.0, 0.0, 0.0, 1.0), Quaternion(0.0, 0.6, 0.0, 0.8)]) :
+            NumberKeyframeTrack(obj, "quaternion[y]", [0.0, 1.0], [0.1, 0.3])
+        legacy_obj = Group()
+        legacy_obj.rotation = obj.rotation
+        legacy = AnimationMixer(AnimationClip("q", 1.0, AbstractKeyframeTrack[
+            track === :quaternion ?
+                QuaternionKeyframeTrack(legacy_obj, :quaternion, tr.times, tr.values) :
+                NumberKeyframeTrack(legacy_obj, "quaternion[y]", tr.times, tr.values)]);
+            loop=:once)
+        mixer = Diff3D.AnimationActionMixer()
+        act = Diff3D.action_play!(Diff3D.mixer_clip_action(mixer,
+                                                           AnimationClip("q", 1.0, AbstractKeyframeTrack[tr])))
+        Diff3D.action_set_loop!(act, :once)
+        mixer_update!(mixer, 0.5); mixer_update!(legacy, 0.5)
+        @test obj.rotation != Euler(0.3, 2.0, -0.1, :XYZ)
+        if stop
+            Diff3D.action_stop!(act); mixer_stop!(legacy)
+        else
+            mixer_update!(mixer, 1.0); mixer_update!(legacy, 1.0)
+        end
+        @test legacy_obj.rotation === Euler(0.3, 2.0, -0.1, :XYZ)
+        @test obj.rotation === Euler(0.3, 2.0, -0.1, :XYZ)
+    end
+end
+
 @testset "audit3c mixing: invalid inputs are rejected without changing state" begin
     obj = Group()
     clip = AnimationClip("c", 1.0, AbstractKeyframeTrack[
