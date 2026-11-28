@@ -464,7 +464,8 @@ function _soft_ad_pixel_pullback!(acc, scalars, faces, xs, coverages, faded,
     cx = _soft_pixel_center(Float64, px)
     cy = _soft_pixel_center(Float64, py)
     face_lo, face_hi = _soft_pixel_face_range(tiles, n, px, py)
-    # Pass 1: stabilizing maximum logit (or minimum depth) and its owner.
+    # Pass 1: stabilizing maximum logit (or minimum depth) and its owner over
+    # all candidates; pass 2 may move both to the covering faces.
     m = background_logit
     owner = 0
     @inbounds for k in face_lo:face_hi
@@ -480,6 +481,10 @@ function _soft_ad_pixel_pullback!(acc, scalars, faces, xs, coverages, faded,
     count = 0
     total = 0.0
     average = Color3(0.0, 0.0, 0.0)
+    # Reference over the faces with non-zero coverage (see `_soft_pixel_color`).
+    covered = false
+    reference = background_logit
+    reference_owner = 0
     # Pass 2: the forward weights, recorded per covering face.
     @inbounds for k in face_lo:face_hi
         fi = _soft_pixel_face(tiles, k)
@@ -492,6 +497,14 @@ function _soft_ad_pixel_pullback!(acc, scalars, faces, xs, coverages, faded,
         coverage = sigmoid_approx(x)
         is_faded = _soft_is_faded(tri.area, ε)
         is_faded && (coverage *= _soft_degenerate_fade(tri.area, ε))
+        if !iszero(coverage)
+            covered = true
+            if use_relative
+                tri.depth < reference && (reference = tri.depth; reference_owner = fi)
+            else
+                tri.logit > reference && (reference = tri.logit; reference_owner = fi)
+            end
+        end
         depth_weight = use_relative ?
             _soft_relative_weight_state(m, tri.depth, γ)[1] :
             exp(tri.logit - m)
@@ -510,6 +523,41 @@ function _soft_ad_pixel_pullback!(acc, scalars, faces, xs, coverages, faded,
         distance_grads[1, count] = gax; distance_grads[2, count] = gay
         distance_grads[3, count] = gbx; distance_grads[4, count] = gby
         distance_grads[5, count] = gcx; distance_grads[6, count] = gcy
+    end
+    if covered && reference_owner != owner
+        # Pass 3 of `_soft_pixel_color`: the pass-1 owner has zero coverage, so
+        # accumulate again against the reference of the covering faces and
+        # drop the zero-coverage records, in the same face order.
+        m = reference
+        owner = reference_owner
+        kept = 0
+        total = 0.0
+        average = Color3(0.0, 0.0, 0.0)
+        @inbounds for j in 1:count
+            coverage = coverages[j]
+            iszero(coverage) && continue
+            fi = faces[j]
+            tri = primal[fi]
+            depth_weight = use_relative ?
+                _soft_relative_weight_state(m, tri.depth, γ)[1] :
+                exp(tri.logit - m)
+            w = coverage * depth_weight
+            next_total = total + w
+            average = iszero(total) ? tri.color :
+                _stable_color_lerp(average, tri.color, w / next_total)
+            total = next_total
+            kept += 1
+            faces[kept] = fi
+            xs[kept] = xs[j]
+            coverages[kept] = coverage
+            faded[kept] = faded[j]
+            depth_weights[kept] = depth_weight
+            weights[kept] = w
+            for r in 1:6
+                distance_grads[r, kept] = distance_grads[r, j]
+            end
+        end
+        count = kept
     end
     if iszero(total)
         # The pixel is exactly the background colour.
