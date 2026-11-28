@@ -882,12 +882,108 @@ end
     set_instance_matrix!(instances, 2, mat4_translation(7.0, 0.0, 0.0))
     @test !Diff3D.frustum_intersects_object(frustum, instances)
     @test_throws ArgumentError Diff3D.frustum_intersects_object(frustum, Group())
-    # three.js bounds a SkinnedMesh by its posed vertices; not supported here.
-    geometry = BoxGeometry()
-    skinned = SkinnedMesh(geometry, MeshBasicMaterial(), Skeleton([Bone()]),
-                          fill((1, 1, 1, 1), geometry.n_vertices),
-                          fill((1.0, 0.0, 0.0, 0.0), geometry.n_vertices))
-    @test_throws ArgumentError Diff3D.frustum_intersects_object(frustum, skinned)
+end
+
+# Scene shared by the Box3.setFromObject and SkinnedMesh frustum oracles
+# (rv/part2_oracle.mjs, three.js r186): explicit positions so both sides use
+# the same vertices, and dyadic instance matrices because three.js stores
+# instance matrices as Float32.
+const OBJECT_BOUNDS_POSITIONS = [0.3, -0.2, 0.1, 1.2, 0.4, -0.5, -0.7, 0.9, 0.6,
+                                 0.1, 0.2, -1.1, 0.8, -0.6, 0.9]
+
+function object_bounds_scene()
+    geometry(values) = BufferGeometry(copy(values), Float64[], Float64[], Int[],
+                                      length(values) ÷ 3, 0)
+    P = OBJECT_BOUNDS_POSITIONS
+    material = MeshBasicMaterial()
+    root = Group()
+    root.position = Vec3(0.5, -1.0, 2.0); root.rotation = Euler(0.3, -0.7, 0.2)
+    root.scale = Vec3(1.5, 0.8, 1.2)
+    mesh = Mesh(geometry(P), material)
+    mesh.position = Vec3(-1.0, 0.5, 0.25); mesh.rotation = Euler(1.1, 0.2, -0.4)
+    add!(root, mesh)
+    neg = Mesh(geometry(P), material)
+    neg.scale = Vec3(-0.5, 2.0, 1.0); neg.position = Vec3(0.0, 2.0, 0.0)
+    add!(mesh, neg)
+    morph_geometry = geometry(P)
+    morph_geometry.attributes[:morphPosition0] =
+        BufferAttribute([(i % 3 == 0 ? 0.5 : -0.25) * (1 + i / 10) for i in 0:14], 3)
+    morph = Mesh(morph_geometry, material; morph_target_influences=[0.6])
+    morph.position = Vec3(2.0, 0.0, -1.0)
+    add!(root, morph)
+    points = PointsObject(geometry(P), PointsMaterial())
+    points.position = Vec3(0.0, -2.0, 0.0); points.rotation = Euler(0.0, 0.0, 0.9)
+    add!(root, points)
+    line = LineSegments(geometry(P[1:12]), LineBasicMaterial())
+    line.scale = Vec3(2.0, 2.0, 2.0)
+    add!(root, line)
+    sprite = Sprite(SpriteMaterial())
+    sprite.position = Vec3(-2.0, 1.0, 0.5); sprite.scale = Vec3(0.7, 1.3, 1.0)
+    add!(root, sprite)
+    instances = InstancedMesh(geometry(P), material, 3)
+    set_instance_matrix!(instances, 1, mat4_translation(3.0, 0.0, 0.0))
+    set_instance_matrix!(instances, 2, Mat4((0.5, 0.25, -0.75, 0.0, -0.25, 1.5, 0.125, 0.0,
+                                             0.75, 0.0, 0.5, 0.0, 1.0, -2.0, 0.5, 1.0)))
+    set_instance_matrix!(instances, 3,
+                         mat4_translation(0.0, 1.0, -2.0) * mat4_scaling(0.5, 1.5, 1.0))
+    instances.position = Vec3(0.0, 0.0, 3.0)
+    add!(root, instances)
+    holder = Group()
+    holder.position = Vec3(1.0, 1.0, 1.0); holder.rotation = Euler(0.0, 0.5, 0.0)
+    add!(root, holder)
+    bone1 = Bone(); bone2 = Bone()
+    bone2.position = Vec3(0.0, 1.0, 0.0)
+    add!(bone1, bone2); add!(holder, bone1)
+    skinned = SkinnedMesh(geometry(P), material, Skeleton([bone1, bone2]),
+                          [(1, 1, 1, 1), (2, 1, 1, 1), (1, 1, 1, 1), (2, 1, 1, 1), (2, 1, 1, 1)],
+                          [(1.0, 0.0, 0.0, 0.0) for _ in 1:5])
+    skinned.position = Vec3(0.2, 0.0, -0.3)
+    add!(holder, skinned)
+    # SkinnedMesh.bind(skeleton): the bind matrix is the mesh's world matrix.
+    bind = compute_world_matrix(skinned)
+    skinned.bind_matrix = bind
+    skinned.bind_matrix_inverse = mat4_inverse(bind)
+    bone2.rotation = Euler(0.0, 0.0, 0.9)
+    bone1.position = Vec3(0.3, -0.2, 0.0)
+    return (; root, mesh, neg, morph, points, line, sprite, instances, skinned, holder)
+end
+
+box_vector(box) = [box.min.x, box.min.y, box.min.z, box.max.x, box.max.y, box.max.z]
+bounds_close(actual, expected) =
+    all(abs.(actual .- expected) .<= 8 * eps(1.0) .* max.(abs.(expected), 1.0))
+
+@testset "frustum_intersects_object bounds a SkinnedMesh by its posed vertices" begin
+    objects = object_bounds_scene()
+    skinned = objects.skinned
+    # SkinnedMesh.computeBoundingSphere: center and radius in local space.
+    sphere = Diff3D._skinned_bounding_sphere(skinned)
+    @test bounds_close([sphere.center.x, sphere.center.y, sphere.center.z, sphere.radius],
+                       [0.850058500266877, 0.58504331727922, -0.013233831478703807, 1.448914238658236])
+    world = sphere_apply_matrix4(sphere, compute_world_matrix(skinned))
+    @test bounds_close([world.center.x, world.center.y, world.center.z, world.radius],
+                       [2.127629552189309, 0.18361764665544522, 4.165238987379781, 2.081511644511354])
+    # Frustum.intersectsObject for cameras (fov 30°) looking down -z at the
+    # posed sphere, offset sideways by 0, 4.70 and 4.95, and one looking away.
+    c = world.center
+    for (eye, target, hit) in (
+            (c + Vec3(0.0, 0.0, 10.0), c, true),
+            (c + Vec3(10.0, 0.0, 10.0), c + Vec3(20.0, 0.0, 10.0), false),
+            (c + Vec3(4.95, 0.0, 10.0), c + Vec3(4.95, 0.0, 0.0), false),
+            (c + Vec3(4.70, 0.0, 10.0), c + Vec3(4.70, 0.0, 0.0), true))
+        camera = PerspectiveCamera(fov=π / 6, aspect=1.0, near=0.1, far=100.0)
+        camera.position = eye
+        camera.target = target
+        frustum = frustum_from_matrix(projection_matrix(camera) * view_matrix(camera))
+        @test Diff3D.frustum_intersects_object(frustum, skinned) == hit
+    end
+    # The unposed geometry sphere would miss at offset 4.70: the pose matters.
+    camera = PerspectiveCamera(fov=π / 6, aspect=1.0, near=0.1, far=100.0)
+    camera.position = c + Vec3(4.70, 0.0, 10.0)
+    camera.target = c + Vec3(4.70, 0.0, 0.0)
+    frustum = frustum_from_matrix(projection_matrix(camera) * view_matrix(camera))
+    rest = sphere_apply_matrix4(compute_bounding_sphere(skinned.geometry),
+                                compute_world_matrix(skinned))
+    @test !frustum_intersects_sphere(frustum, rest)
 end
 
 @testset "Box3 constructors, expansion and triangle tests" begin

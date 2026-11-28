@@ -1867,24 +1867,39 @@ const _SPRITE_FRUSTUM_RADIUS = 0.7071067811865476
 Whether the bounding sphere of `object`'s geometry, placed by its world matrix,
 reaches into `frustum` (three.js `Frustum.intersectsObject`). For an
 `InstancedMesh` the sphere bounds every instance, as three.js
-`InstancedMesh.computeBoundingSphere` does. The object needs a `geometry`. A
-`SkinnedMesh` raises `ArgumentError`: three.js bounds its posed vertices
-(`SkinnedMesh.computeBoundingSphere`), which this function does not compute.
+`InstancedMesh.computeBoundingSphere` does, and for a `SkinnedMesh` it bounds
+the posed vertices (morph targets, then skinning, in the mesh's local space),
+as three.js `SkinnedMesh.computeBoundingSphere` does. three.js computes the
+skinned sphere once and keeps it; this function uses the current pose on every
+call. The object needs a `geometry`.
 """
 function frustum_intersects_object(f::Frustum, object::AbstractObject3D)
-    object isa SkinnedMesh &&
-        throw(ArgumentError("frustum_intersects_object does not support SkinnedMesh; it needs the posed bounding sphere"))
     hasproperty(object, :geometry) ||
         throw(ArgumentError("frustum_intersects_object needs an object with a geometry"))
     geometry = getproperty(object, :geometry)
     geometry isa BufferGeometry ||
         throw(ArgumentError("frustum_intersects_object needs a BufferGeometry"))
-    sphere = compute_bounding_sphere(geometry)
-    world = compute_world_matrix(object)
-    if object isa InstancedMesh
-        sphere = _instanced_bounding_sphere(sphere, object.instance_matrices)
+    sphere = if object isa SkinnedMesh
+        _skinned_bounding_sphere(object)
+    elseif object isa InstancedMesh
+        _instanced_bounding_sphere(compute_bounding_sphere(geometry),
+                                   object.instance_matrices)
+    else
+        compute_bounding_sphere(geometry)
     end
+    world = compute_world_matrix(object)
     return frustum_intersects_sphere(f, sphere_apply_matrix4(sphere, world))
+end
+
+# three.js SkinnedMesh.computeBoundingSphere (SkinnedMesh.js:138-159): an empty
+# sphere expanded by every posed vertex (SkinnedMesh.getVertexPosition: morph
+# targets, then the bone transform) in the mesh's local space.
+function _skinned_bounding_sphere(sm::SkinnedMesh)
+    sphere = BoundingSphere(Vec3(0.0, 0.0, 0.0), -1.0)
+    for point in apply_skinning(sm)
+        sphere = sphere_expand_by_point(sphere, point)
+    end
+    return sphere
 end
 
 # InstancedMesh.computeBoundingSphere (InstancedMesh.js:155-180): the union of
@@ -1911,3 +1926,4 @@ function frustum_intersects_sprite(f::Frustum, sprite::Sprite)
     return frustum_intersects_sphere(f, sphere_apply_matrix4(sphere,
                                                              compute_world_matrix(sprite)))
 end
+
