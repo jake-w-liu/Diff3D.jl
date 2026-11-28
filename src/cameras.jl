@@ -62,7 +62,11 @@ mutable struct PerspectiveCamera <: AbstractCamera
     film_gauge::Float64
     film_offset::Float64
     view::Union{Nothing, CameraView}
+    render_order::Float64  # three.js Object3D.renderOrder
 end
+
+# Field layout before `render_order` was added (three.js default 0).
+PerspectiveCamera(args::Vararg{Any,21}) = PerspectiveCamera(args..., 0.0)
 
 # Earlier field layouts: without `rotation_driven`, and without the film,
 # focus and view-offset fields added after it (three.js defaults).
@@ -610,7 +614,11 @@ mutable struct OrthographicCamera <: AbstractCamera
     ignore_parent_scale::Bool
     rotation_driven::Bool
     view::Union{Nothing, CameraView}
+    render_order::Float64  # three.js Object3D.renderOrder
 end
+
+# Field layout before `render_order` was added (three.js default 0).
+OrthographicCamera(args::Vararg{Any,20}) = OrthographicCamera(args..., 0.0)
 
 # Earlier field layouts: without `rotation_driven`, and without `view`.
 OrthographicCamera(args::Vararg{Any,18}) = OrthographicCamera(args..., false)

@@ -84,6 +84,7 @@ mutable struct InstancedMesh <: AbstractObject3D
     instance_matrices::Vector{Mat4{Float64}}
     instance_colors::Vector{Color3{Float64}}
     draw_mode::Symbol
+    render_order::Float64  # three.js Object3D.renderOrder
 
     function InstancedMesh(position::Vec3{Float64}, rotation::Euler{Float64},
                            scale::Vec3{Float64},
@@ -94,12 +95,13 @@ mutable struct InstancedMesh <: AbstractObject3D
                            receive_shadow::Bool,
                            instance_matrices::Vector{Mat4{Float64}},
                            instance_colors::Vector{Color3{Float64}},
-                           draw_mode::Symbol)
+                           draw_mode::Symbol, render_order::Real=0.0)
         _validate_instanced_data(instance_matrices, instance_colors,
                                  "InstancedMesh")
         new(position, rotation, scale, parent, children, visible, name, id,
             geometry, material, cast_shadow, receive_shadow, instance_matrices,
-            instance_colors, _validate_instanced_draw_mode(draw_mode))
+            instance_colors, _validate_instanced_draw_mode(draw_mode),
+            Float64(render_order))
     end
 end
 
@@ -241,7 +243,11 @@ mutable struct LineSegments <: AbstractObject3D
     material::Any
     morph_target_influences::Vector{Float64}
     morph_target_names::Vector{String}
+    render_order::Float64  # three.js Object3D.renderOrder
 end
+
+# Field layout before `render_order` was added (three.js default 0).
+LineSegments(args::Vararg{Any,12}) = LineSegments(args..., 0.0)
 
 function LineSegments(geometry, material; name="LineSegments",
                       morph_target_influences=Float64[], morph_target_names=String[])
@@ -286,7 +292,11 @@ mutable struct LineLoop <: AbstractObject3D
     material::Any
     morph_target_influences::Vector{Float64}
     morph_target_names::Vector{String}
+    render_order::Float64  # three.js Object3D.renderOrder
 end
+
+# Field layout before `render_order` was added (three.js default 0).
+LineLoop(args::Vararg{Any,12}) = LineLoop(args..., 0.0)
 
 function LineLoop(geometry, material; name="LineLoop",
                   morph_target_influences=Float64[], morph_target_names=String[])
@@ -339,7 +349,11 @@ mutable struct Sprite <: AbstractObject3D
     id::Int
     material::Any
     center::Vec2{Float64}
+    render_order::Float64  # three.js Object3D.renderOrder
 end
+
+# Field layout before `render_order` was added (three.js default 0).
+Sprite(args::Vararg{Any,10}) = Sprite(args..., 0.0)
 
 @inline function _validate_sprite_center(sprite::Sprite, context::String)
     center = sprite.center
@@ -453,7 +467,11 @@ mutable struct LOD <: AbstractObject3D
     auto_update::Bool
     _camera_levels::WeakKeyDict{AbstractCamera,Int}
     _manual_level::Int
+    render_order::Float64  # three.js Object3D.renderOrder
 end
+
+# Field layout before `render_order` was added (three.js default 0).
+LOD(args::Vararg{Any,12}) = LOD(args..., 0.0)
 
 LOD(position, rotation, scale, parent, children, visible, name, id, levels) =
     LOD(position, rotation, scale, parent, children, visible, name, id, levels, true)
@@ -665,7 +683,11 @@ mutable struct Bone <: AbstractObject3D
     visible::Bool
     name::String
     id::Int
+    render_order::Float64  # three.js Object3D.renderOrder
 end
+
+# Field layout before `render_order` was added (three.js default 0).
+Bone(args::Vararg{Any,8}) = Bone(args..., 0.0)
 
 function Bone(; name="Bone")
     Bone(Vec3(), Euler(), Vec3(1.0,1.0,1.0), nothing, AbstractObject3D[],
@@ -722,7 +744,11 @@ mutable struct SkinnedMesh <: AbstractObject3D
     bind_mode::Symbol                       # :attached or :detached
     bind_matrix::Mat4{Float64}
     bind_matrix_inverse::Mat4{Float64}
+    render_order::Float64  # three.js Object3D.renderOrder
 end
+
+# Field layout before `render_order` was added (three.js default 0).
+SkinnedMesh(args::Vararg{Any,20}) = SkinnedMesh(args..., 0.0)
 
 function SkinnedMesh(geometry, material, skeleton::Skeleton,
                      skin_indices, skin_weights; name="SkinnedMesh",
@@ -1199,7 +1225,8 @@ function _skinned_render_mesh(sm::SkinnedMesh)
     scale.x < 0.0 && _mirror_skinned_proxy_geometry!(geo)
     Mesh(Vec3(), Euler(), scale, nothing, AbstractObject3D[],
          sm.visible, sm.name, sm.id, geo, sm.material,
-         nothing, sm.cast_shadow, sm.receive_shadow, Float64[], String[])
+         nothing, sm.cast_shadow, sm.receive_shadow, Float64[], String[],
+         sm.render_order, _ancestor_group_order(sm))
 end
 
 function _skinned_normal_output_length(geo::BufferGeometry)
@@ -1294,6 +1321,8 @@ function _update_skinned_render_mesh!(proxy::Mesh, sm::SkinnedMesh,
     proxy.flat_shading = nothing
     proxy.cast_shadow = sm.cast_shadow
     proxy.receive_shadow = sm.receive_shadow
+    proxy.render_order = sm.render_order
+    proxy._render_group_order = _ancestor_group_order(sm)
     empty!(proxy.morph_target_influences)
     empty!(proxy.morph_target_names)
     return proxy
@@ -1397,7 +1426,7 @@ function _morph_render_mesh(mesh::Mesh, scratch)
                 AbstractObject3D[], mesh.visible, mesh.name, mesh.id,
                 _morph_render_geometry(mesh, scratch), mesh.material,
                 mesh.flat_shading, mesh.cast_shadow, mesh.receive_shadow,
-                Float64[], String[])
+                Float64[], String[], mesh.render_order, mesh._render_group_order)
 end
 
 function _update_morph_render_mesh!(posed::Mesh, mesh::Mesh, scratch)
@@ -1413,6 +1442,8 @@ function _update_morph_render_mesh!(posed::Mesh, mesh::Mesh, scratch)
     posed.flat_shading = mesh.flat_shading
     posed.cast_shadow = mesh.cast_shadow
     posed.receive_shadow = mesh.receive_shadow
+    posed.render_order = mesh.render_order
+    posed._render_group_order = mesh._render_group_order
     return posed
 end
 
@@ -1463,3 +1494,128 @@ function compute_world_matrices(root::AbstractObject3D)
     compute_world_matrices(root, parent_world, cache)
     return cache
 end
+
+# ========================== Render order ==========================
+# three.js WebGLRenderer.projectObject (src/renderers/WebGLRenderer.js:1860-1975)
+# hands every drawable the renderOrder of its nearest Group ancestor as
+# `groupOrder` (0 at the scene root), and the render lists sort by groupOrder,
+# then the drawable's own renderOrder, before depth (painterSortStable and
+# reversePainterSortStable, src/renderers/webgl/WebGLRenderLists.js:1-51).
+
+@noinline _throw_render_order(kind::Symbol) =
+    throw(ArgumentError("$kind render_order must not be NaN"))
+
+# Adding 0.0 maps -0.0 to 0.0, so keys that compare equal are also identical.
+@inline function _checked_render_order(value::Float64, kind::Symbol)
+    isnan(value) && _throw_render_order(kind)
+    return value + 0.0
+end
+
+function _ancestor_group_order(obj::AbstractObject3D)
+    parent = get_parent(obj)
+    while parent !== nothing
+        parent isa Group && return _checked_render_order(parent.render_order, :Group)
+        parent = get_parent(parent)
+    end
+    return 0.0
+end
+
+# The parent chain is abstractly typed; branch over the drawable types so the
+# Float64 field is read without boxing.
+@inline function _node_render_order(obj::AbstractObject3D)
+    value = if obj isa Mesh
+        obj.render_order
+    elseif obj isa InstancedMesh
+        obj.render_order
+    elseif obj isa Sprite
+        obj.render_order
+    elseif obj isa LineObject
+        obj.render_order
+    elseif obj isa LineSegments
+        obj.render_order
+    elseif obj isa LineLoop
+        obj.render_order
+    elseif obj isa PointsObject
+        obj.render_order
+    elseif obj isa SkinnedMesh
+        obj.render_order
+    else
+        getfield(obj, :render_order)::Float64
+    end
+    return _checked_render_order(value, nameof(typeof(obj)))
+end
+
+# A posed-skin render proxy has no parent; it records its source's group order.
+@inline function _render_group_order(obj::AbstractObject3D)
+    if obj isa Mesh
+        group = obj._render_group_order
+        group === nothing || return _checked_render_order(group, :Mesh)
+    end
+    return _ancestor_group_order(obj)
+end
+
+@inline _render_order_key(obj::AbstractObject3D) =
+    (_render_group_order(obj), _node_render_order(obj))
+
+@inline _render_order_key(obj::AbstractObject3D, sorted::Bool) =
+    sorted ? _render_order_key(obj) : (0.0, 0.0)
+
+const _DEFAULT_RENDER_ORDER_KEYS = Float64[]
+
+# Insert `key` into the ascending, duplicate-free key list stored as
+# interleaved (group order, render order) pairs in `keys[1:2count]`.
+function _insert_render_order_key!(keys::Vector{Float64}, count::Int,
+                                   key::NTuple{2,Float64})
+    position = count + 1
+    @inbounds for bucket in 1:count
+        existing = (keys[2bucket - 1], keys[2bucket])
+        existing == key && return count
+        if key < existing
+            position = bucket
+            break
+        end
+    end
+    length(keys) < 2count + 2 && resize!(keys, 2count + 2)
+    @inbounds for bucket in count:-1:position
+        keys[2bucket + 1] = keys[2bucket - 1]
+        keys[2bucket + 2] = keys[2bucket]
+    end
+    @inbounds keys[2position - 1] = key[1]
+    @inbounds keys[2position] = key[2]
+    return count + 1
+end
+
+function _collect_render_order_keys!(keys::Vector{Float64}, count::Int, objects)
+    @inbounds for object in objects
+        count = _insert_render_order_key!(keys, count, _render_order_key(object))
+    end
+    return count
+end
+
+function _has_render_order(objects)
+    @inbounds for object in objects
+        _render_order_key(object) == (0.0, 0.0) || return true
+    end
+    return false
+end
+
+"""
+Distinct `(group order, render order)` keys of the drawables in ascending
+order, as `(count, keys)` with key `i` at `keys[2i-1:2i]`. Scenes whose keys are
+all zero return `(1, _DEFAULT_RENDER_ORDER_KEYS)` without touching `scratch`;
+`scratch === nothing` allocates only when a non-zero key exists.
+"""
+function _render_order_buckets(scratch::Union{Nothing,Vector{Float64}},
+                               meshes, instanced, primitives=())
+    (_has_render_order(meshes) || _has_render_order(instanced) ||
+     _has_render_order(primitives)) || return (1, _DEFAULT_RENDER_ORDER_KEYS)
+    keys = scratch === nothing ? Float64[] : scratch
+    count = _collect_render_order_keys!(keys, 0, meshes)
+    count = _collect_render_order_keys!(keys, count, instanced)
+    count = _collect_render_order_keys!(keys, count, primitives)
+    return (count, keys)
+end
+
+@inline _in_render_order_bucket(obj::AbstractObject3D, keys::Vector{Float64},
+                                bucket::Int, count::Int) =
+    count == 1 || @inbounds(_render_order_key(obj) == (keys[2bucket - 1], keys[2bucket]))

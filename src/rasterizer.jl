@@ -1627,6 +1627,15 @@ makes opaque rendering order-independent, this changes only the draw order, not
 the final pixels. Transparent meshes keep their back-to-front order, which is
 required for correct alpha blending.
 
+With `sort_objects=true`, each object's `render_order` (three.js
+`Object3D.renderOrder`, default 0) and the `render_order` of its nearest
+[`Group`](@ref) ancestor (three.js `groupOrder`) take precedence over depth:
+the opaque pass draws its objects in ascending (group order, render order),
+and so does the transparent pass, back to front within equal keys, as
+three.js `painterSortStable` and `reversePainterSortStable` do. Every opaque
+object is still drawn before any transparent one. With `sort_objects=false`,
+as in three.js, `render_order` has no effect. A NaN `render_order` is an error.
+
 `logarithmic_depth=false` mirrors `WebGLRenderer.logarithmicDepthBuffer`. When
 enabled, the z-buffer stores `log2(max(1e-6, w + 1)) / log2(far + 1)` (with `w`
 the clip-space w, i.e. the positive view distance) instead of NDC z. An infinite
@@ -1872,18 +1881,16 @@ function _render_camera!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
                                depth_scratch, bounds_cache)
     end
 
-    for i in eachindex(opaque_flat)
-        mesh = opaque_flat[i]
-        _rasterize_flat_mesh_from_mesh!(rt, mesh, opaque_flat_worlds[i], lights,
-                                        proj, view, near, camera_position, tri, clipped,
-                                        sx, sy, sz, colorbuf, 1.0, nothing, 0,
-                                        shadow_fn, xlo, xhi, ylo, yhi,
-                                        clipping_planes, log_depth, inv_log_far,
-                                        ortho_dir,
-                                        cache === nothing ? nothing : cache.smooth_tri,
-                                        cache === nothing ? nothing : cache.smooth_clipped,
-                                        cache === nothing ? nothing : cache.smooth_iw)
-    end
+    # three.js sorts its opaque and transparent lists by group order, then
+    # renderOrder, ahead of material and depth (WebGLRenderLists.js:1-51), and
+    # only when sortObjects is set (WebGLRenderer.js:1714-1716). Each distinct
+    # key runs the opaque pass below in ascending order; a scene whose drawables
+    # share one key (the default 0) draws exactly as before. The depth scratch
+    # is free again once the sorts above are done.
+    order_count, order_keys = sort_objects ?
+        _render_order_buckets(cache === nothing ? nothing : cache.mesh_depths,
+                              meshes, instanced, primitives) :
+        (1, _DEFAULT_RENDER_ORDER_KEYS)
 
     smooth_instance_tri = if shading === :smooth
         cache === nothing ? Vector{ShadeVtx}(undef, 3) : cache.smooth_tri
@@ -1907,62 +1914,6 @@ function _render_camera!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
         nothing
     end
 
-    # InstancedMesh: same geometry/material drawn at each instance transform.
-    for (instanced_slot, im) in pairs(instanced)
-        _instanced_triangle_drawable(im) || continue
-        base = instanced_worlds[instanced_slot]
-        geo = _instanced_geometry(im)
-        mat = _instanced_material(im)
-        (material_wireframe(mat) ? _primitive_transparent(mat) :
-         is_transparent_material(mat)) && continue
-        mesh_shadow_fn = object_receives_shadow(im) ? shadow_fn : nothing
-        instance_materials = cache === nothing ? nothing :
-                             _instanced_materials!(cache.instanced_materials,
-                                                   instanced_slot, im, mat,
-                                                   im.instance_colors)
-        if shading === :smooth && !material_wireframe(mat)
-            _render_instanced_mesh_smooth!(
-                rt, geo, mat, im.instance_colors, im.instance_matrices, base,
-                instanced_slot, lights, proj, view, near, camera_position,
-                mesh_shadow_fn, smooth_instance_tri::Vector{ShadeVtx},
-                smooth_instance_clipped::Vector{ShadeVtx}, sx, sy, sz,
-                smooth_instance_iw::Vector{Float64}, clipping_planes,
-                xlo, xhi, ylo, yhi, log_depth, inv_log_far, ortho_dir,
-                cache, frustum, bounds_cache)
-            continue
-        end
-        _render_instanced_mesh_flat!(rt, geo, mat, instance_materials, im.instance_colors,
-                                     im.instance_matrices, base, lights, proj, view, near,
-                                     camera_position, tri, clipped, sx, sy, sz,
-                                     mesh_shadow_fn, clipping_planes, colorbuf,
-                                     xlo, xhi, ylo, yhi, log_depth, inv_log_far,
-                                     ortho_dir, cache, frustum, bounds_cache)
-    end
-
-    # Smooth (per-pixel) opaque meshes share the same depth buffer.
-    isempty(smooth_meshes) ||
-        _render_smooth!(rt, smooth_meshes, lights, proj, view, near, camera_position, shadow_fn;
-                        clipping_planes=clipping_planes,
-                        xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
-                        log_depth=log_depth, inv_log_far=inv_log_far, ortho_dir=ortho_dir,
-                        smooth_tri=cache === nothing ? nothing : cache.smooth_tri,
-                        smooth_clipped=cache === nothing ? nothing : cache.smooth_clipped,
-                        smooth_sx=cache === nothing ? nothing : sx,
-                        smooth_sy=cache === nothing ? nothing : sy,
-                        smooth_sz=cache === nothing ? nothing : sz,
-                        smooth_iw=cache === nothing ? nothing : cache.smooth_iw,
-                        worlds=smooth_worlds)
-
-    # Opaque wireframes and primitive objects participate in the depth pass
-    # before any transparent object is blended.
-    for i in eachindex(wireframe_meshes)
-        mesh = wireframe_meshes[i]
-        _primitive_transparent(_mesh_material(mesh)) && continue
-        _render_wireframe_mesh_from_mesh!(
-            rt, mesh, wireframe_worlds[i], proj, view, near,
-            xlo, xhi, ylo, yhi, cache)
-    end
-
     primitive_stamp = if primitive_flags.sprites || primitive_flags.lines
         cache === nothing ? zeros(Int, H, W) :
         _render_cache_primitive_stamp!(cache, H, W)
@@ -1972,39 +1923,137 @@ function _render_camera!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
     sprite_state = cache === nothing ?
         _SpriteRenderState(primitive_stamp, 0) : cache.sprite_state
     vp = proj * view
-    for primitive_index in eachindex(primitives)
-        object = primitives[primitive_index]
-        _render_primitive_blends(object) && continue
-        world = primitive_worlds[primitive_index]
-        if object isa Sprite
-            fill!(primitive_stamp, 0)
-            sprite_state.stamp = primitive_stamp
-            sprite_state.stamp_id = 0
-            _draw_sprite_object!(
-                rt, object, world, camera, view, vp, W, H,
-                clipping_planes, xlo, xhi, ylo, yhi, cache,
-                sprite_state)
-        elseif object isa LineObject || object isa LineSegments ||
-               object isa LineLoop
-            fill!(primitive_stamp, 0)
-            _draw_line_object!(
-                rt, object, world, proj, view, near,
-                xlo, xhi, ylo, yhi, primitive_stamp, 0,
-                cache === nothing ? nothing : cache.morph_positions)
-        elseif object isa PointsObject
-            _draw_points_object!(
-                rt, object, world, camera, proj, view, near,
-                W, H, xlo, xhi, ylo, yhi,
-                cache === nothing ? nothing : cache.morph_positions)
-        elseif object isa InstancedMesh && _instanced_line_drawable(object)
-            fill!(primitive_stamp, 0)
-            _draw_instanced_lines!(
-                rt, object, world, proj, view, near,
-                xlo, xhi, ylo, yhi, primitive_stamp, 0)
+    for order_bucket in 1:order_count
+        for i in eachindex(opaque_flat)
+            mesh = opaque_flat[i]
+            _in_render_order_bucket(mesh, order_keys, order_bucket, order_count) ||
+                continue
+            _rasterize_flat_mesh_from_mesh!(rt, mesh, opaque_flat_worlds[i], lights,
+                                            proj, view, near, camera_position, tri, clipped,
+                                            sx, sy, sz, colorbuf, 1.0, nothing, 0,
+                                            shadow_fn, xlo, xhi, ylo, yhi,
+                                            clipping_planes, log_depth, inv_log_far,
+                                            ortho_dir,
+                                            cache === nothing ? nothing : cache.smooth_tri,
+                                            cache === nothing ? nothing : cache.smooth_clipped,
+                                            cache === nothing ? nothing : cache.smooth_iw)
+        end
+
+        # InstancedMesh: same geometry/material drawn at each instance transform.
+        for (instanced_slot, im) in pairs(instanced)
+            _instanced_triangle_drawable(im) || continue
+            _in_render_order_bucket(im, order_keys, order_bucket, order_count) ||
+                continue
+            base = instanced_worlds[instanced_slot]
+            geo = _instanced_geometry(im)
+            mat = _instanced_material(im)
+            (material_wireframe(mat) ? _primitive_transparent(mat) :
+             is_transparent_material(mat)) && continue
+            mesh_shadow_fn = object_receives_shadow(im) ? shadow_fn : nothing
+            instance_materials = cache === nothing ? nothing :
+                                 _instanced_materials!(cache.instanced_materials,
+                                                       instanced_slot, im, mat,
+                                                       im.instance_colors)
+            if shading === :smooth && !material_wireframe(mat)
+                _render_instanced_mesh_smooth!(
+                    rt, geo, mat, im.instance_colors, im.instance_matrices, base,
+                    instanced_slot, lights, proj, view, near, camera_position,
+                    mesh_shadow_fn, smooth_instance_tri::Vector{ShadeVtx},
+                    smooth_instance_clipped::Vector{ShadeVtx}, sx, sy, sz,
+                    smooth_instance_iw::Vector{Float64}, clipping_planes,
+                    xlo, xhi, ylo, yhi, log_depth, inv_log_far, ortho_dir,
+                    cache, frustum, bounds_cache)
+                continue
+            end
+            _render_instanced_mesh_flat!(rt, geo, mat, instance_materials, im.instance_colors,
+                                         im.instance_matrices, base, lights, proj, view, near,
+                                         camera_position, tri, clipped, sx, sy, sz,
+                                         mesh_shadow_fn, clipping_planes, colorbuf,
+                                         xlo, xhi, ylo, yhi, log_depth, inv_log_far,
+                                         ortho_dir, cache, frustum, bounds_cache)
+        end
+
+        # Smooth (per-pixel) opaque meshes share the same depth buffer.
+        if order_count == 1
+            isempty(smooth_meshes) ||
+                _render_smooth!(rt, smooth_meshes, lights, proj, view, near, camera_position, shadow_fn;
+                                clipping_planes=clipping_planes,
+                                xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
+                                log_depth=log_depth, inv_log_far=inv_log_far, ortho_dir=ortho_dir,
+                                smooth_tri=cache === nothing ? nothing : cache.smooth_tri,
+                                smooth_clipped=cache === nothing ? nothing : cache.smooth_clipped,
+                                smooth_sx=cache === nothing ? nothing : sx,
+                                smooth_sy=cache === nothing ? nothing : sy,
+                                smooth_sz=cache === nothing ? nothing : sz,
+                                smooth_iw=cache === nothing ? nothing : cache.smooth_iw,
+                                worlds=smooth_worlds)
         else
-            _draw_instanced_points!(
-                rt, object::InstancedMesh, world, camera, proj, view,
-                near, W, H, xlo, xhi, ylo, yhi)
+            for i in eachindex(smooth_meshes)
+                mesh = smooth_meshes[i]
+                _in_render_order_bucket(mesh, order_keys, order_bucket, order_count) ||
+                    continue
+                _render_smooth!(rt, (mesh,), lights, proj, view, near, camera_position, shadow_fn;
+                                clipping_planes=clipping_planes,
+                                xlo=xlo, xhi=xhi, ylo=ylo, yhi=yhi,
+                                log_depth=log_depth, inv_log_far=inv_log_far, ortho_dir=ortho_dir,
+                                smooth_tri=cache === nothing ? nothing : cache.smooth_tri,
+                                smooth_clipped=cache === nothing ? nothing : cache.smooth_clipped,
+                                smooth_sx=cache === nothing ? nothing : sx,
+                                smooth_sy=cache === nothing ? nothing : sy,
+                                smooth_sz=cache === nothing ? nothing : sz,
+                                smooth_iw=cache === nothing ? nothing : cache.smooth_iw,
+                                worlds=(smooth_worlds[i],))
+            end
+        end
+
+        # Opaque wireframes and primitive objects participate in the depth pass
+        # before any transparent object is blended.
+        for i in eachindex(wireframe_meshes)
+            mesh = wireframe_meshes[i]
+            _in_render_order_bucket(mesh, order_keys, order_bucket, order_count) ||
+                continue
+            _primitive_transparent(_mesh_material(mesh)) && continue
+            _render_wireframe_mesh_from_mesh!(
+                rt, mesh, wireframe_worlds[i], proj, view, near,
+                xlo, xhi, ylo, yhi, cache)
+        end
+
+        for primitive_index in eachindex(primitives)
+            object = primitives[primitive_index]
+            _render_primitive_blends(object) && continue
+            _in_render_order_bucket(object, order_keys, order_bucket, order_count) ||
+                continue
+            world = primitive_worlds[primitive_index]
+            if object isa Sprite
+                fill!(primitive_stamp, 0)
+                sprite_state.stamp = primitive_stamp
+                sprite_state.stamp_id = 0
+                _draw_sprite_object!(
+                    rt, object, world, camera, view, vp, W, H,
+                    clipping_planes, xlo, xhi, ylo, yhi, cache,
+                    sprite_state)
+            elseif object isa LineObject || object isa LineSegments ||
+                   object isa LineLoop
+                fill!(primitive_stamp, 0)
+                _draw_line_object!(
+                    rt, object, world, proj, view, near,
+                    xlo, xhi, ylo, yhi, primitive_stamp, 0,
+                    cache === nothing ? nothing : cache.morph_positions)
+            elseif object isa PointsObject
+                _draw_points_object!(
+                    rt, object, world, camera, proj, view, near,
+                    W, H, xlo, xhi, ylo, yhi,
+                    cache === nothing ? nothing : cache.morph_positions)
+            elseif object isa InstancedMesh && _instanced_line_drawable(object)
+                fill!(primitive_stamp, 0)
+                _draw_instanced_lines!(
+                    rt, object, world, proj, view, near,
+                    xlo, xhi, ylo, yhi, primitive_stamp, 0)
+            else
+                _draw_instanced_points!(
+                    rt, object::InstancedMesh, world, camera, proj, view,
+                    near, W, H, xlo, xhi, ylo, yhi)
+            end
         end
     end
 
@@ -2022,7 +2071,8 @@ function _render_camera!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
             _render_sort_depth(
                 transparent_worlds[index], view,
                 _render_sort_center(_mesh_geometry(mesh), bounds_cache)),
-            _TRANSPARENT_MESH_ITEM, index, 0, mesh.id))
+            _TRANSPARENT_MESH_ITEM, index, 0, mesh.id,
+            _render_order_key(mesh, sort_objects)...))
     end
     @inbounds for (instanced_slot, im) in pairs(instanced)
         _instanced_triangle_drawable(im) || continue
@@ -2047,7 +2097,7 @@ function _render_camera!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
             push!(transparent_items, _TransparentRenderItem(
                 _render_sort_depth(world, view, center),
                 kind, instanced_slot,
-                instance_index, im.id))
+                instance_index, im.id, _render_order_key(im, sort_objects)...))
         end
     end
     @inbounds for index in eachindex(wireframe_meshes)
@@ -2058,7 +2108,8 @@ function _render_camera!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
             _render_sort_depth(
                 wireframe_worlds[index], view,
                 _render_sort_center(_mesh_geometry(mesh), bounds_cache)),
-            _TRANSPARENT_WIREFRAME_ITEM, index, 0, mesh.id))
+            _TRANSPARENT_WIREFRAME_ITEM, index, 0, mesh.id,
+            _render_order_key(mesh, sort_objects)...))
     end
     @inbounds for primitive_index in eachindex(primitives)
         object = primitives[primitive_index]
@@ -2073,13 +2124,14 @@ function _render_camera!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
                        _TRANSPARENT_INSTANCED_POINT_ITEM
                 push!(transparent_items, _TransparentRenderItem(
                     _render_sort_depth(world, view, center), kind,
-                    primitive_index, instance_index, object.id))
+                    primitive_index, instance_index, object.id,
+                    _render_order_key(object, sort_objects)...))
             end
         else
             push!(transparent_items, _TransparentRenderItem(
                 _render_sort_depth(base, view, center),
                 _render_primitive_item_kind(object), primitive_index, 0,
-                object.id))
+                object.id, _render_order_key(object, sort_objects)...))
         end
     end
     if !isempty(transparent_items)
@@ -2403,14 +2455,22 @@ struct _TransparentRenderItem
     object_index::Int
     instance_index::Int
     id::Int
+    group_order::Float64
+    render_order::Float64
 end
 
-# three.js reversePainterSortStable (WebGLRenderLists.js:31-51): farther items
-# first, equal depths in ascending object id. Instances of one InstancedMesh
-# share its id and keep their index order, as in its single draw call. The key
-# is a total order, so the result does not depend on the sorting algorithm.
+_TransparentRenderItem(depth, kind, object_index, instance_index, id) =
+    _TransparentRenderItem(depth, kind, object_index, instance_index, id, 0.0, 0.0)
+
+# three.js reversePainterSortStable (WebGLRenderLists.js:31-51): ascending group
+# order and renderOrder, then farther items first, equal depths in ascending
+# object id. Instances of one InstancedMesh share its id and keep their index
+# order, as in its single draw call. The key is a total order, so the result
+# does not depend on the sorting algorithm.
 @inline function _transparent_item_before(a::_TransparentRenderItem,
                                           b::_TransparentRenderItem)
+    a.group_order != b.group_order && return a.group_order < b.group_order
+    a.render_order != b.render_order && return a.render_order < b.render_order
     a.depth != b.depth && return a.depth < b.depth
     a.id != b.id && return a.id < b.id
     return a.instance_index < b.instance_index

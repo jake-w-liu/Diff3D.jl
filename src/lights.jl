@@ -428,7 +428,11 @@ mutable struct AmbientLight <: AbstractLight
     id::Int
     color::Color3{Float64}
     intensity::Float64
+    render_order::Float64  # three.js Object3D.renderOrder
 end
+
+# Field layout before `render_order` was added (three.js default 0).
+AmbientLight(args::Vararg{Any,10}) = AmbientLight(args..., 0.0)
 
 function AmbientLight(; color=Color3(1.0, 1.0, 1.0), intensity=1.0, name="AmbientLight")
     AmbientLight(Vec3(), Euler(), Vec3(1.0,1.0,1.0),
@@ -525,7 +529,11 @@ mutable struct DirectionalLight <: AbstractLight
     shadow_intensity::Float64     # three.js light.shadow.intensity
     shadow_normal_bias::Float64   # three.js light.shadow.normalBias
     rotation_driven::Bool
+    render_order::Float64  # three.js Object3D.renderOrder
 end
+
+# Field layout before `render_order` was added (three.js default 0).
+DirectionalLight(args::Vararg{Any,17}) = DirectionalLight(args..., 0.0)
 
 # Positional forms: 14 fields (before rotation_driven existed), 15 (with
 # rotation_driven, before the shadow settings), and 16 (all but rotation_driven).
@@ -586,7 +594,11 @@ mutable struct PointLight <: AbstractLight
     ies_profile::Union{Nothing, IESProfile}   # nothing = isotropic
     shadow_intensity::Float64     # three.js light.shadow.intensity
     shadow_normal_bias::Float64   # three.js light.shadow.normalBias
+    render_order::Float64  # three.js Object3D.renderOrder
 end
+
+# Field layout before `render_order` was added (three.js default 0).
+PointLight(args::Vararg{Any,18}) = PointLight(args..., 0.0)
 
 PointLight(args::Vararg{Any,16}) = PointLight(args..., 1.0, 0.0)
 
@@ -649,7 +661,11 @@ mutable struct SpotLight <: AbstractLight
     shadow_intensity::Float64     # three.js light.shadow.intensity
     shadow_normal_bias::Float64   # three.js light.shadow.normalBias
     rotation_driven::Bool
+    render_order::Float64  # three.js Object3D.renderOrder
 end
+
+# Field layout before `render_order` was added (three.js default 0).
+SpotLight(args::Vararg{Any,22}) = SpotLight(args..., 0.0)
 
 # Positional forms: 19 fields (before rotation_driven existed), 20 (with
 # rotation_driven, before the shadow settings), and 21 (all but rotation_driven).
@@ -710,7 +726,11 @@ mutable struct HemisphereLight <: AbstractLight
     color::Color3{Float64}        # sky color
     ground_color::Color3{Float64}  # ground color
     intensity::Float64
+    render_order::Float64  # three.js Object3D.renderOrder
 end
+
+# Field layout before `render_order` was added (three.js default 0).
+HemisphereLight(args::Vararg{Any,11}) = HemisphereLight(args..., 0.0)
 
 # three.js HemisphereLight.js:50 builds `groundColor` with `new Color(groundColor)`,
 # which is white when the argument is omitted.
@@ -751,7 +771,11 @@ mutable struct RectAreaLight <: AbstractLight
     width::Float64
     height::Float64
     target::Vec3{Float64}
+    render_order::Float64  # three.js Object3D.renderOrder
 end
+
+# Field layout before `render_order` was added (three.js default 0).
+RectAreaLight(args::Vararg{Any,13}) = RectAreaLight(args..., 0.0)
 
 # three.js RectAreaLight.js:38: `constructor( color, intensity, width = 10, height = 10 )`.
 function RectAreaLight(; color=Color3(1.0,1.0,1.0), intensity=1.0, width=10.0, height=10.0,
@@ -821,7 +845,11 @@ mutable struct LightProbe <: AbstractLight
     coeffs::NTuple{4, Color3{Float64}}
     intensity::Float64
     sh::NTuple{9, Color3{Float64}}   # three.js LightProbe.sh coefficients
+    render_order::Float64  # three.js Object3D.renderOrder
 end
+
+# Field layout before `render_order` was added (three.js default 0).
+LightProbe(args::Vararg{Any,11}) = LightProbe(args..., 0.0)
 
 LightProbe(position, rotation, scale, parent, children, visible, name, id, coeffs,
            intensity) =

@@ -995,6 +995,20 @@ function _web_write_layer_mask(io::IO, object::AbstractObject3D, num_buf::Vector
     return nothing
 end
 
+# three.js groupOrder and renderOrder (WebGLRenderLists.js:1-51), written only
+# when non-zero; the viewer reads a missing value as 0. JSON has no infinity,
+# and 1e999 parses to one.
+function _web_write_render_order(io::IO, object::AbstractObject3D, num_buf::Vector{UInt8})
+    group, order = _render_order_key(object)
+    for (label, value) in ((",\"groupOrder\":", group), (",\"renderOrder\":", order))
+        iszero(value) && continue
+        write(io, label)
+        isinf(value) ? write(io, value > 0 ? "1e999" : "-1e999") :
+                       _js_write_num(io, value, num_buf)
+    end
+    return nothing
+end
+
 function _web_write_camera_pose_fields(io::IO, camera, num_buf::Vector{UInt8})
     write(io, ",\"localTarget\":")
     _js_write_vec(io, camera.target, num_buf)
@@ -2859,6 +2873,7 @@ function _web_write_drawable_json(io::IO, obj, world::Mat4, num_buf::Vector{UInt
     effective_visible = visibility_extra_id == transform_obj.id ? visibility_extra_value : is_visible(obj)
     write(io, effective_visible ? "true" : "false")
     _web_write_layer_mask(io, transform_obj, num_buf)
+    _web_write_render_order(io, transform_obj, num_buf)
     write(io, ",\"castShadow\":")
     write(io, object_casts_shadow(obj) ? "true" : "false")
     write(io, ",\"receiveShadow\":")
@@ -5965,14 +5980,15 @@ function _web_write_webgl_html(io::IO, data_json::String, title::String;
   function objectIsTransparent(o){ return o.transparent===true; }
   // Draw order follows three.js WebGLRenderLists.sort (:168-170): opaque items front to back by
   // painterSortStable (:1-29), transparent ones back to front by reversePainterSortStable
-  // (:31-51). Diff3D has no renderOrder or group order, and its immutable materials carry no
-  // creation id, so the shader program stands in for material.id. z is the clip-space z of the
+  // (:31-51), both keyed first by group order and renderOrder. Diff3D's immutable materials carry
+  // no creation id, so the shader program stands in for material.id. z is the clip-space z of the
   // bounding-sphere centre (a sprite's origin), as WebGLRenderer.js projectObject computes it
   // (:1890-1935); ties keep the object id order, and Array.prototype.sort is stable.
   function drawProgram(o){ return o.mode==="points"?pointProgram:(o.mode==="sprite"?spriteProgram:(o.mode==="triangles"?skinProgramFor(o,meshProgram,meshSkinProgram,meshBoneProgram):skinProgramFor(o,colorProgram,colorSkinProgram,colorBoneProgram))); }
   function renderDepth(o,pv){ const c=o.sortCenter||ORIGIN3, m=o.skin?(o.transformMatrix||o.matrix):o.matrix, x=m[0]*c[0]+m[4]*c[1]+m[8]*c[2]+m[12], y=m[1]*c[0]+m[5]*c[1]+m[9]*c[2]+m[13], z=m[2]*c[0]+m[6]*c[1]+m[10]*c[2]+m[14]; return pv[2]*x+pv[6]*y+pv[10]*z+pv[14]; }
-  function painterSortStable(a,b){ if(a.renderProgramId!==b.renderProgramId) return a.renderProgramId-b.renderProgramId; if(a.renderVariant!==b.renderVariant) return a.renderVariant-b.renderVariant; if(a.renderZ!==b.renderZ) return a.renderZ-b.renderZ; return a.renderId-b.renderId; }
-  function reversePainterSortStable(a,b){ if(a.renderZ!==b.renderZ) return b.renderZ-a.renderZ; return a.renderId-b.renderId; }
+  function renderOrderCompare(a,b){ const ga=a.groupOrder||0, gb=b.groupOrder||0; if(ga!==gb) return ga<gb?-1:1; const ra=a.renderOrder||0, rb=b.renderOrder||0; return ra===rb?0:(ra<rb?-1:1); }
+  function painterSortStable(a,b){ const order=renderOrderCompare(a,b); if(order!==0) return order; if(a.renderProgramId!==b.renderProgramId) return a.renderProgramId-b.renderProgramId; if(a.renderVariant!==b.renderVariant) return a.renderVariant-b.renderVariant; if(a.renderZ!==b.renderZ) return a.renderZ-b.renderZ; return a.renderId-b.renderId; }
+  function reversePainterSortStable(a,b){ const order=renderOrderCompare(a,b); if(order!==0) return order; if(a.renderZ!==b.renderZ) return b.renderZ-a.renderZ; return a.renderId-b.renderId; }
   function drawSceneView(state,visible,light,clip,fg,tm){ const vp=state.viewport||[0,0,canvas.width,canvas.height]; if(vp[2]<=0||vp[3]<=0) return 0; gl.viewport(vp[0],vp[1],vp[2],vp[3]); gl.scissor(vp[0],vp[1],vp[2],vp[3]); gl.enable(gl.SCISSOR_TEST); setDepthMask(true); gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT); currentDrawCamera=state.camera; currentDrawDistance=state.distance; let drawn=0; opaqueScratch.length=0; transparentScratch.length=0; const pv=M4.mul(state.proj,state.view); for(const o of visible){ const z=renderDepth(o,pv); o.renderZ=Number.isNaN(z)?0:z; o.renderId=Number(o.id)||0; if(objectIsTransparent(o)) transparentScratch.push(o); else { o.renderProgramId=linkedProgramInfo(drawProgram(o)).id; o.renderVariant=(o.instanceMatrices&&o.instanceMatrices.length?2:0)+(o.skin?1:0); opaqueScratch.push(o); } } opaqueScratch.sort(painterSortStable); transparentScratch.sort(reversePainterSortStable); for(const o of opaqueScratch){ draw(o,state,light,clip,fg,tm); drawn++; } for(const o of transparentScratch){ draw(o,state,light,clip,fg,tm); drawn++; } return drawn; }
   // A frame that throws after the early clear leaves the canvas showing only the
   // background, so the loop re-arms and retries rather than dying on one bad frame.
