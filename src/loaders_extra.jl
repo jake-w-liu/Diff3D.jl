@@ -1765,6 +1765,521 @@ load_hdr(path::String) = load_rgbe(path)
 RGBELoader(path::String; colorspace::Symbol=:linear, kwargs...) =
     Texture(load_rgbe(path); colorspace=colorspace, kwargs...)
 
+# ========================== TGA (Truevision Targa) ==========================
+# three.js TGALoader (examples/jsm/loaders/TGALoader.js): colour-mapped,
+# true-colour and greyscale images, raw or run-length encoded, 8/16/24/32-bit
+# pixels and all four origins, decoded to RGBA8.
+
+const _TGA_TYPES = (1, 2, 3, 9, 10, 11)
+
+function _decode_tga(bytes::AbstractVector{UInt8})
+    n = length(bytes)
+    # TGALoader.js:446 (header is 18 bytes; three.js asks for 19)
+    n >= 19 || error("TGA file is truncated: not enough data to contain the header")
+    id_length = Int(bytes[1])
+    colormap_type = Int(bytes[2])
+    image_type = Int(bytes[3])
+    colormap_length = Int(bytes[6]) | (Int(bytes[7]) << 8)
+    colormap_size = Int(bytes[8])
+    width = Int(bytes[13]) | (Int(bytes[14]) << 8)
+    height = Int(bytes[15]) | (Int(bytes[16]) << 8)
+    pixel_size = Int(bytes[17])
+    flags = Int(bytes[18])
+    # tgaCheckHeader (TGALoader.js:41-100)
+    image_type == 0 && error("TGA file has no image data (image type 0)")
+    image_type in _TGA_TYPES || error("TGA image type $image_type is not supported")
+    use_pal = image_type in (1, 9)
+    use_rle = image_type >= 9
+    use_grey = image_type in (3, 11)
+    if use_pal
+        (colormap_length <= 256 && colormap_size == 24 && colormap_type == 1) ||
+            error("TGA colour-mapped image needs a colour map of at most 256 24-bit entries")
+        pixel_size == 8 || error("TGA colour-mapped image must have 8-bit indices, got $pixel_size")
+    else
+        colormap_type == 0 || error("TGA true-colour and greyscale images cannot have a colour map")
+    end
+    (width > 0 && height > 0) || error("TGA image size $(width)x$(height) is invalid")
+    pixel_size in (8, 16, 24, 32) || error("TGA pixel size $pixel_size is not supported")
+    use_grey && !(pixel_size in (8, 16)) &&
+        error("TGA greyscale images must have 8 or 16-bit pixels, got $pixel_size")
+    offset = 18 + id_length
+    offset <= n || error("TGA file is truncated in its image ID")
+    palette = UInt8[]
+    if use_pal
+        stop = offset + 3 * colormap_length
+        stop <= n || error("TGA colour map is truncated")
+        palette = bytes[(offset + 1):stop]
+        offset = stop
+    end
+    psize = pixel_size >> 3
+    total = width * height * psize            # at most 65535^2 * 4 bytes
+    pixels = if use_rle
+        # A run-length packet of 1 + psize bytes or more expands to at most
+        # 128 pixels, which bounds the image a file of this size can hold.
+        width * height <= 128 * (n - offset) ||
+            error("TGA run-length data is truncated: $(width)x$(height) pixels need more than $(n - offset) bytes")
+        _tga_unrle(bytes, offset, total, psize)
+    else
+        offset + total <= n || error("TGA pixel data is truncated")
+        @view bytes[(offset + 1):(offset + total)]
+    end
+    return _tga_rgba(pixels, width, height, pixel_size, use_grey, use_pal, palette,
+                     (flags & 0x30) >> 4)
+end
+
+# TGALoader.js tgaParse: packets with the high bit set repeat one pixel
+# (count = low 7 bits + 1), others copy that many pixels. A packet that would
+# run past the image or the file is an error (three.js has no check).
+function _tga_unrle(bytes::AbstractVector{UInt8}, offset::Int, total::Int, psize::Int)
+    n = length(bytes)
+    out = Vector{UInt8}(undef, total)
+    shift = 0
+    p = offset + 1
+    @inbounds while shift < total
+        p <= n || error("TGA run-length data is truncated")
+        c = Int(bytes[p]); p += 1
+        count = (c & 0x7f) + 1
+        shift + count * psize <= total || error("TGA run-length packet runs past the image")
+        if c & 0x80 != 0
+            p + psize - 1 <= n || error("TGA run-length data is truncated")
+            for k in 0:(count - 1), b in 1:psize
+                out[shift + k * psize + b] = bytes[p + b - 1]
+            end
+            p += psize
+        else
+            len = count * psize
+            p + len - 1 <= n || error("TGA run-length data is truncated")
+            copyto!(out, shift + 1, bytes, p, len)
+            p += len
+        end
+        shift += count * psize
+    end
+    return out
+end
+
+# getTgaRGBA (TGALoader.js:328-427): pixels in file order are placed by the
+# origin bits (0 bottom-left, 1 bottom-right, 2 top-left, 3 top-right); row 1
+# of the result is the top of the image. Values are the RGBA bytes / 255.
+function _tga_rgba(pixels::AbstractVector{UInt8}, width::Int, height::Int, pixel_size::Int,
+                   use_grey::Bool, use_pal::Bool, palette::Vector{UInt8}, origin::Int)
+    img = Array{Float64}(undef, height, width, 4)
+    top = origin >= 2
+    right = origin == 1 || origin == 3
+    psize = pixel_size >> 3
+    i = 0
+    @inbounds for fy in 0:(height - 1), fx in 0:(width - 1)
+        y = top ? fy + 1 : height - fy
+        x = right ? width - fx : fx + 1
+        q = i * psize + 1
+        i += 1
+        if use_grey
+            g = pixels[q]
+            r = gr = b = g
+            a = pixel_size == 16 ? pixels[q + 1] : 0xff
+        elseif use_pal
+            k = 3 * Int(pixels[q])
+            k + 3 <= length(palette) || error("TGA colour index $(pixels[q]) is outside the colour map")
+            # tgaGetImageData8bits: palette entries are stored B, G, R.
+            r, gr, b, a = palette[k + 3], palette[k + 2], palette[k + 1], 0xff
+        elseif pixel_size == 16
+            # tgaGetImageData16bits: A1R5G5B5 with 5-bit channels shifted to
+            # the top of the byte, and alpha 0 when bit 15 is set.
+            c = UInt16(pixels[q]) | (UInt16(pixels[q + 1]) << 8)
+            r = UInt8((c & 0x7c00) >> 7)
+            gr = UInt8((c & 0x03e0) >> 2)
+            b = UInt8((c & 0x001f) << 3)
+            a = (c & 0x8000) != 0 ? 0x00 : 0xff
+        else
+            b, gr, r = pixels[q], pixels[q + 1], pixels[q + 2]
+            a = pixel_size == 32 ? pixels[q + 3] : 0xff
+        end
+        img[y, x, 1] = r / 255
+        img[y, x, 2] = gr / 255
+        img[y, x, 3] = b / 255
+        img[y, x, 4] = a / 255
+    end
+    return img
+end
+
+"""
+    load_tga(path) -> Array{Float64,3}
+
+Decode a Truevision Targa (`.tga`) image into an H×W×4 RGBA array with values
+in [0, 1] and row 1 at the top of the image, as three.js `TGALoader` does:
+colour-mapped (24-bit palettes of up to 256 entries), true-colour (16, 24 and
+32-bit) and greyscale (8-bit, or 16-bit grey + alpha) images, raw or
+run-length encoded, in any of the four origins. 16-bit colour pixels follow
+`TGALoader`: each 5-bit channel `c` becomes `8c / 255`, and the pixel is
+transparent when its top bit is set. Malformed files raise an error.
+"""
+load_tga(path::AbstractString) = _decode_tga(read(path))
+
+"""
+    TGALoader(path; kwargs...) -> Texture
+
+Load a `.tga` file with `load_tga` into a [`Texture`](@ref); keywords
+are passed to `Texture`. three.js `TGALoader` returns its texture with
+`flipY = true`, which is Diff3D's row order, so UVs sample the same texels.
+"""
+TGALoader(path::AbstractString; kwargs...) = Texture(load_tga(path); kwargs...)
+
+# ========================== PCD (Point Cloud Library) ==========================
+# three.js PCDLoader (examples/jsm/loaders/PCDLoader.js): ascii, binary and
+# binary_compressed (LZF) data with x/y/z, rgb, normal_x/y/z, intensity and
+# label fields, returned as a point cloud.
+
+# LZF decompression (PCDLoader.js decompressLZF, liblzf lzf_d.c): a control
+# byte below 32 copies ctrl + 1 literal bytes; otherwise it is a back
+# reference of (ctrl >> 5) + 2 bytes (7 extends the length by the next byte)
+# at distance ((ctrl & 0x1f) << 8) + next byte + 1. The output must be exactly
+# `out_len` bytes.
+function _lzf_decompress(data::AbstractVector{UInt8}, out_len::Int)
+    out = Vector{UInt8}(undef, out_len)
+    n = length(data)
+    ip = 1
+    op = 0
+    @inbounds while ip <= n
+        ctrl = Int(data[ip]); ip += 1
+        if ctrl < 32
+            len = ctrl + 1
+            op + len <= out_len || error("PCD LZF data decompresses past its declared size")
+            ip + len - 1 <= n || error("PCD LZF literal run is truncated")
+            copyto!(out, op + 1, data, ip, len)
+            ip += len
+            op += len
+        else
+            len = ctrl >> 5
+            ip <= n || error("PCD LZF back reference is truncated")
+            if len == 7
+                len += Int(data[ip]); ip += 1
+                ip <= n || error("PCD LZF back reference is truncated")
+            end
+            ref = op - ((ctrl & 0x1f) << 8) - Int(data[ip]) - 1
+            ip += 1
+            op + len + 2 <= out_len || error("PCD LZF data decompresses past its declared size")
+            ref >= 0 || error("PCD LZF back reference points before the start of the data")
+            # Overlapping copies repeat bytes, so copy one byte at a time.
+            for k in 1:(len + 2)
+                out[op + k] = out[ref + k]
+            end
+            op += len + 2
+        end
+    end
+    op == out_len || error("PCD LZF data decompresses to $op bytes, expected $out_len")
+    return out
+end
+
+const _PCD_FIELD_NAMES = ("x", "y", "z", "rgb", "normal_x", "normal_y", "normal_z",
+                          "intensity", "label")
+
+# Value of one field element at 0-based byte `off` of `buf` (little-endian,
+# PCDLoader.js _getDataView with littleEndian = true).
+@inline function _pcd_value(buf::AbstractVector{UInt8}, off::Int, type::Char, size::Int)
+    if type == 'F'
+        return size == 8 ? reinterpret(Float64, _rd_le64(buf, off + 1) % UInt64) :
+                           Float64(_rd_f32(buf, off + 1))
+    end
+    u = size == 1 ? UInt32(buf[off + 1]) : size == 2 ? UInt32(_rd_le16(buf, off + 1)) :
+        UInt32(_rd_le32(buf, off + 1))
+    type == 'U' && return Float64(u)
+    return Float64(size == 1 ? reinterpret(Int8, u % UInt8) :
+                   size == 2 ? reinterpret(Int16, u % UInt16) : reinterpret(Int32, u))
+end
+
+function _pcd_header(bytes::AbstractVector{UInt8})
+    n = length(bytes)
+    fields = String[]; sizes = Int[]; types = Char[]; counts = Int[]
+    width = height = points = nothing
+    data_kind = nothing
+    pos = 1
+    while pos <= n && data_kind === nothing
+        stop = something(findnext(==(UInt8('\n')), bytes, pos), n + 1)
+        line = strip(String(bytes[pos:(stop - 1)]))
+        pos = stop + 1
+        isvalid(line) || error("PCD header line $(repr(line)) is not valid UTF-8 text")
+        (isempty(line) || startswith(line, "#")) && continue
+        parts = split(line)
+        key = uppercase(parts[1])
+        values = parts[2:end]
+        function int(s, what)
+            v = tryparse(Int, s)
+            v === nothing && error("PCD $what $(repr(s)) is not an integer")
+            return v
+        end
+        if key == "FIELDS"
+            fields = String.(values)
+        elseif key == "SIZE"
+            sizes = [int(s, "SIZE") for s in values]
+        elseif key == "TYPE"
+            all(s -> s in ("F", "I", "U"), values) ||
+                error("PCD TYPE entries must be F, I or U, got $(join(values, ' '))")
+            types = [only(s) for s in values]
+        elseif key == "COUNT"
+            counts = [int(s, "COUNT") for s in values]
+        elseif key in ("WIDTH", "HEIGHT", "POINTS")
+            length(values) == 1 || error("PCD $key line must hold one integer")
+            v = int(values[1], key)
+            key == "WIDTH" ? (width = v) : key == "HEIGHT" ? (height = v) : (points = v)
+        elseif key == "DATA"
+            length(values) == 1 || error("PCD DATA line must name one data kind")
+            data_kind = lowercase(values[1])
+        end
+    end
+    data_kind === nothing && error("PCD header has no DATA line")
+    data_kind in ("ascii", "binary", "binary_compressed") ||
+        error("PCD DATA $(repr(data_kind)) is not supported; expected ascii, binary or binary_compressed")
+    nf = length(fields)
+    nf > 0 || error("PCD header has no FIELDS")
+    isempty(counts) && (counts = ones(Int, nf))
+    (length(types) == nf && length(counts) == nf && (data_kind == "ascii" ? length(sizes) in (0, nf) :
+                                                     length(sizes) == nf)) ||
+        error("PCD FIELDS, SIZE, TYPE and COUNT must have one entry per field")
+    isempty(sizes) && (sizes = fill(4, nf))
+    for k in 1:nf
+        valid = types[k] == 'F' ? sizes[k] in (4, 8) : sizes[k] in (1, 2, 4)
+        valid || error("PCD field $(fields[k]) has unsupported TYPE $(types[k]) SIZE $(sizes[k])")
+        # Every element takes at least a byte, so a larger COUNT cannot fit.
+        1 <= counts[k] <= n || error("PCD field $(fields[k]) COUNT $(counts[k]) must be positive and fit in the file")
+    end
+    if points === nothing
+        (width === nothing || height === nothing) &&
+            error("PCD header needs POINTS or WIDTH and HEIGHT")
+        points = _checked_mul_int(width, height, "PCD WIDTH * HEIGHT")
+    end
+    points >= 0 || error("PCD POINTS must be non-negative")
+    for f in ("x", "y", "z")
+        f in fields || error("PCD file has no $f field")
+    end
+    return (; fields, sizes, types, counts, points, data_kind, data_start=pos)
+end
+
+function _decode_pcd(bytes::AbstractVector{UInt8})
+    h = _pcd_header(bytes)
+    nf = length(h.fields)
+    fidx = Dict{String,Int}()
+    for (k, f) in enumerate(h.fields)
+        f in _PCD_FIELD_NAMES && !haskey(fidx, f) && (fidx[f] = k)
+    end
+    ascii = h.data_kind == "ascii"
+    # A packed rgb value is 4 bytes (B, G, R, unused), which binary data reads directly.
+    !ascii && haskey(fidx, "rgb") && h.sizes[fidx["rgb"]] != 4 &&
+        error("PCD rgb field must have SIZE 4, got $(h.sizes[fidx["rgb"]])")
+    # Token index (ascii) or byte offset (binary) of each field's first element.
+    offsets = zeros(Int, nf)
+    for k in 2:nf
+        offsets[k] = offsets[k - 1] + (ascii ? 1 : h.sizes[k - 1]) * h.counts[k - 1]
+    end
+    row = offsets[end] + (ascii ? 1 : h.sizes[end]) * h.counts[end]
+    if ascii
+        rows = Vector{Vector{SubString{String}}}()
+        for line in eachsplit(String(bytes[h.data_start:end]), '\n')
+            tokens = split(line)
+            isempty(tokens) && continue
+            length(tokens) >= row ||
+                error("PCD ascii point $(length(rows) + 1) has $(length(tokens)) values, expected $row")
+            push!(rows, tokens)
+        end
+        function ascii_value(i, k)
+            s = rows[i][offsets[k] + 1]
+            v = tryparse(Float64, s)
+            v === nothing && error("PCD ascii value $(repr(s)) is not a number")
+            return v
+        end
+        function ascii_rgb(i, k)
+            v = ascii_value(i, k)
+            # PCDLoader.js:410-421: a float rgb holds the packed integer's bits.
+            if h.types[k] == 'F'
+                packed = Int64(reinterpret(Int32, Float32(v)))
+            else
+                (isinteger(v) && abs(v) <= 2.0^32) || error("PCD ascii rgb value $v is not a packed integer")
+                packed = Int64(v)
+            end
+            return ((packed >> 16) & 0xff, (packed >> 8) & 0xff, packed & 0xff)
+        end
+        return _pcd_collect(length(rows), fidx, ascii_value, ascii_rgb)
+    end
+    N = h.points
+    avail = length(bytes) - h.data_start + 1
+    data = if h.data_kind == "binary"
+        N <= avail ÷ row ||
+            error("PCD binary data is truncated: $N points of $row bytes need more than the $avail bytes present")
+        @view bytes[h.data_start:(h.data_start + N * row - 1)]
+    else
+        avail >= 8 || error("PCD binary_compressed sizes are truncated")
+        csize = _rd_le32(bytes, h.data_start)
+        dsize = _rd_le32(bytes, h.data_start + 4)
+        first = h.data_start + 8
+        csize <= avail - 8 || error("PCD binary_compressed data is truncated")
+        (N <= dsize ÷ row && dsize == N * row) ||
+            error("PCD binary_compressed size $dsize does not match $N points of $row bytes")
+        # An LZF back reference expands 3 input bytes to at most 264 output bytes.
+        dsize <= 88 * csize ||
+            error("PCD binary_compressed size $dsize exceeds what $csize LZF bytes can hold")
+        _lzf_decompress(@view(bytes[first:(first + csize - 1)]), dsize)
+    end
+    # binary: array of structures; binary_compressed: one array per field
+    # (PCDLoader.js:459-462).
+    soa = h.data_kind == "binary_compressed"
+    at(i, k) = soa ? N * offsets[k] + h.sizes[k] * h.counts[k] * (i - 1) :
+                     (i - 1) * row + offsets[k]
+    binary_value(i, k) = _pcd_value(data, at(i, k), h.types[k], h.sizes[k])
+    # PCDLoader.js:551-553: the packed bytes are B, G, R.
+    binary_rgb(i, k) = (Int(data[at(i, k) + 3]), Int(data[at(i, k) + 2]), Int(data[at(i, k) + 1]))
+    return _pcd_collect(N, fidx, binary_value, binary_rgb)
+end
+
+function _pcd_collect(N::Int, fidx::Dict{String,Int}, value::F, rgb_bytes::G) where {F,G}
+    has(f) = haskey(fidx, f)
+    has_normal = has("normal_x") && has("normal_y") && has("normal_z")
+    positions = Vector{Float64}(undef, 3N)
+    normals = has_normal ? Vector{Float64}(undef, 3N) : Float64[]
+    colors = has("rgb") ? Vector{Float64}(undef, 3N) : Float64[]
+    intensity = has("intensity") ? Vector{Float64}(undef, N) : Float64[]
+    label = has("label") ? Vector{Int}(undef, N) : Int[]
+    kx, ky, kz = fidx["x"], fidx["y"], fidx["z"]
+    for i in 1:N
+        positions[3i - 2] = value(i, kx)
+        positions[3i - 1] = value(i, ky)
+        positions[3i] = value(i, kz)
+        if has_normal
+            normals[3i - 2] = value(i, fidx["normal_x"])
+            normals[3i - 1] = value(i, fidx["normal_y"])
+            normals[3i] = value(i, fidx["normal_z"])
+        end
+        if has("rgb")
+            # Color.setRGB(r, g, b, SRGBColorSpace) stores linear values.
+            r, g, b = rgb_bytes(i, fidx["rgb"])
+            colors[3i - 2] = _srgb_texel_to_linear(r / 255)
+            colors[3i - 1] = _srgb_texel_to_linear(g / 255)
+            colors[3i] = _srgb_texel_to_linear(b / 255)
+        end
+        has("intensity") && (intensity[i] = value(i, fidx["intensity"]))
+        if has("label")
+            v = value(i, fidx["label"])
+            (isinteger(v) && abs(v) <= 2.0^32) || error("PCD label $v is not an integer")
+            label[i] = Int(v)
+        end
+    end
+    return (; positions, normals, colors, intensity, label)
+end
+
+"""
+    load_pcd(path) -> PointsObject
+
+Load a Point Cloud Library `.pcd` file as three.js `PCDLoader` does: `ascii`,
+`binary` and `binary_compressed` (LZF) data, little-endian. The `x`, `y`, `z`
+fields give the positions; `normal_x/y/z` the normals; a packed `rgb` field
+the geometry attribute `:color` (decoded from sRGB to linear, as
+`Color.setRGB(r, g, b, SRGBColorSpace)` does); `intensity` and `label` the
+attributes `:intensity` and `:label`. Other fields are skipped. The material is
+`PointsMaterial(size=0.005)` as in `PCDLoader`; Diff3D point materials do not
+draw vertex colours, so `:color` is kept as data.
+
+Differences from `PCDLoader`: values keep full precision (three.js stores
+32-bit floats); ascii rows may be separated by any whitespace and honour
+`COUNT` when locating fields (three.js assumes one value per field); a file
+without `x`, `y` and `z` fields, short rows, truncated data, LZF data that
+does not decompress to the declared size and invalid `TYPE`/`SIZE` pairs
+raise an error.
+"""
+function load_pcd(path::AbstractString)
+    d = _decode_pcd(read(path))
+    n = length(d.positions) ÷ 3
+    geo = BufferGeometry(d.positions, d.normals, Float64[], Int[], n, 0)
+    isempty(d.colors) || set_attribute!(geo, :color, d.colors, 3)
+    isempty(d.intensity) || set_attribute!(geo, :intensity, d.intensity, 1)
+    isempty(d.label) || set_attribute!(geo, :label, d.label, 1)
+    return PointsObject(geo, PointsMaterial(size=0.005); name="")
+end
+
+# ========================== DDS (DirectDraw Surface) ==========================
+# three.js DDSLoader (examples/jsm/loaders/DDSLoader.js) for its uncompressed
+# layouts: 32-bit B8G8R8A8 and 24-bit B8G8R8. Block-compressed payloads
+# (DXT1/3/5, ETC1, BC6H) are GPU formats three.js uploads without decoding;
+# Diff3D samples textures on the CPU and rejects them.
+
+const _DDS_MAGIC = 0x20534444                       # "DDS "
+
+function _dds_fourcc_string(v::Int)
+    chars = [Char(UInt8((v >> (8k)) & 0xff)) for k in 0:3]
+    return all(c -> isprint(c), chars) ? repr(String(chars)) : "0x" * string(v; base=16, pad=8)
+end
+
+function _decode_dds(bytes::AbstractVector{UInt8})
+    n = length(bytes)
+    n >= 128 || error("DDS file is truncated: the header needs 128 bytes, got $n")
+    _rd_le32(bytes, 1) == _DDS_MAGIC || error("not a DDS file (bad magic number)")
+    header_size = _rd_le32(bytes, 5)
+    header_size == 124 || error("DDS header size $header_size is not 124")
+    height = _rd_le32(bytes, 13)
+    width = _rd_le32(bytes, 17)
+    pf_flags = _rd_le32(bytes, 81)
+    fourcc = _rd_le32(bytes, 85)
+    bit_count = _rd_le32(bytes, 89)
+    rmask, gmask, bmask, amask = (_rd_le32(bytes, 93), _rd_le32(bytes, 97),
+                                  _rd_le32(bytes, 101), _rd_le32(bytes, 105))
+    caps2 = _rd_le32(bytes, 113)
+    if (pf_flags & 0x4) != 0 && fourcc != 0          # DDPF_FOURCC
+        name = _dds_fourcc_string(fourcc)
+        fourcc == 0x30315844 &&
+            error("DDS DX10 extended headers are not supported; only uncompressed B8G8R8A8 and B8G8R8 DDS images are supported")
+        # DXT1, DXT3, DXT5, ETC1 (DDSLoader.js:166-169)
+        fourcc in (0x31545844, 0x33545844, 0x35545844, 0x31435445) &&
+            error("DDS $name data is block-compressed; only uncompressed B8G8R8A8 and B8G8R8 DDS images are supported")
+        error("DDS FourCC $name is not supported; only uncompressed B8G8R8A8 and B8G8R8 DDS images are supported")
+    end
+    (caps2 & 0x200) == 0 || error("DDS cube maps are not supported")
+    (caps2 & 0x200000) == 0 || error("DDS volume textures are not supported")
+    # DDSLoader.js:246-262 tests the masks with `&`; the byte order it then
+    # reads (B, G, R[, A]) holds only for these exact masks.
+    channels = if bit_count == 32 && (rmask, gmask, bmask, amask) ==
+                  (0x00ff0000, 0x0000ff00, 0x000000ff, 0xff000000)
+        4
+    elseif bit_count == 24 && (rmask, gmask, bmask) == (0x00ff0000, 0x0000ff00, 0x000000ff)
+        3
+    else
+        error("DDS pixel format ($bit_count-bit, masks R=0x$(string(rmask; base=16)) G=0x$(string(gmask; base=16)) B=0x$(string(bmask; base=16)) A=0x$(string(amask; base=16))) is not supported; only B8G8R8A8 and B8G8R8 are")
+    end
+    (width > 0 && height > 0) || error("DDS image size $(width)x$(height) is invalid")
+    offset = 128                                      # header_size + magic
+    avail = n - offset
+    (width <= avail ÷ channels && height <= avail ÷ (width * channels)) ||
+        error("DDS pixel data is truncated: $(width)x$(height)x$channels bytes do not fit in the file")
+    img = Array{Float64}(undef, height, width, 4)
+    @inbounds for y in 1:height, x in 1:width
+        p = offset + ((y - 1) * width + (x - 1)) * channels
+        img[y, x, 1] = bytes[p + 3] / 255
+        img[y, x, 2] = bytes[p + 2] / 255
+        img[y, x, 3] = bytes[p + 1] / 255
+        img[y, x, 4] = channels == 4 ? bytes[p + 4] / 255 : 1.0
+    end
+    return img
+end
+
+"""
+    load_dds(path) -> Array{Float64,3}
+
+Decode the base level of an uncompressed DirectDraw Surface (`.dds`) image —
+32-bit B8G8R8A8 or 24-bit B8G8R8, the uncompressed layouts three.js
+`DDSLoader` reads — into an H×W×4 RGBA array with values in [0, 1], row 1
+being the first row of the file (the top of the image). Mipmap levels after
+the first are ignored. Block-compressed (DXT/BC/ETC1) data, other pixel
+layouts, cube maps and volume textures raise an error: three.js hands
+compressed blocks to the GPU, while Diff3D samples textures on the CPU.
+"""
+load_dds(path::AbstractString) = _decode_dds(read(path))
+
+"""
+    DDSLoader(path; kwargs...) -> Texture
+
+Load an uncompressed `.dds` file (see `load_dds`) as a
+[`Texture`](@ref); keywords are passed to `Texture`. three.js uploads DDS
+data as a compressed texture without `flipY`, so UV `v = 0` samples the first
+row of the file; the rows are reversed here so Diff3D samples the same texels.
+"""
+DDSLoader(path::AbstractString; kwargs...) =
+    Texture(reverse(load_dds(path); dims=1); kwargs...)
+
 # ========================== OpenEXR (scanline) ==========================
 # Supports single-part scanline and tiled (level 0 of ONE_LEVEL/MIPMAP)
 # images with NONE/RLE/ZIP/ZIPS/PIZ/PXR24/B44/B44A compression and
@@ -14018,7 +14533,7 @@ end
 Write `object` as a glTF 2.0 file, like three.js `GLTFExporter.parse`. A
 [`Scene`](@ref) gives the glTF scene its visible children as root nodes; any
 other exportable object becomes the only root node. With `binary=true` the file
-is a `.glb` container (see [`save_glb`](@ref)); otherwise it is JSON with the
+is a `.glb` container (see `save_glb`); otherwise it is JSON with the
 buffer and images embedded as base64 data URIs. [`load_gltf_asset`](@ref) and
 [`load_glb_asset`](@ref) read the result back (with each mesh node loaded as a
 `Group` holding its primitive). Hidden objects are left out, as with

@@ -504,3 +504,237 @@ end
         @test result isa Array{Float64,3} || result isa ErrorException
     end
 end
+# TGA files and the RGBA bytes three.js TGALoader.parse returned for them
+# (TGALoader.js; `data` is row-major RGBA with the image top first).
+const _A3C_TGA = Dict(
+    "rgb24_bl" => (UInt8[2, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 2, 0, 24, 0, 7, 9, 10, 20,
+                         30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 170, 180],
+                   3, 2, [120, 110, 100, 255, 150, 140, 130, 255, 180, 170, 160, 255, 30, 20, 10,
+                          255, 60, 50, 40, 255, 90, 80, 70, 255]),
+    "rgba32_tl" => (UInt8[0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 2, 0, 32, 40, 1, 2, 3, 4, 5,
+                          6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 255],
+                    2, 2, [3, 2, 1, 4, 7, 6, 5, 8, 11, 10, 9, 12, 15, 14, 13, 255]),
+    "rle24_tr" => (UInt8[0, 0, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 2, 0, 24, 48, 130, 1, 2, 3,
+                         2, 10, 11, 12, 20, 21, 22, 30, 31, 32, 129, 200, 201, 202],
+                   4, 2, [12, 11, 10, 255, 3, 2, 1, 255, 3, 2, 1, 255, 3, 2, 1, 255, 202, 201,
+                          200, 255, 202, 201, 200, 255, 32, 31, 30, 255, 22, 21, 20, 255]),
+    "pal_br" => (UInt8[0, 1, 1, 0, 0, 3, 0, 24, 0, 0, 0, 0, 2, 0, 2, 0, 8, 16, 0, 0, 255, 0,
+                       255, 0, 255, 0, 0, 0, 1, 2, 1],
+                 2, 2, [0, 255, 0, 255, 0, 0, 255, 255, 0, 255, 0, 255, 255, 0, 0, 255]),
+    "rlepal_bl" => (UInt8[0, 1, 9, 0, 0, 3, 0, 24, 0, 0, 0, 0, 3, 0, 1, 0, 8, 0, 0, 0, 255, 0,
+                          255, 0, 255, 0, 0, 129, 2, 0, 0],
+                    3, 1, [0, 0, 255, 255, 0, 0, 255, 255, 255, 0, 0, 255]),
+    "grey8_tl" => (UInt8[0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 2, 0, 8, 32, 0, 85, 170, 255],
+                   2, 2, [0, 0, 0, 255, 85, 85, 85, 255, 170, 170, 170, 255, 255, 255, 255, 255]),
+    "rlegrey16_tl" => (UInt8[0, 0, 11, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 1, 0, 16, 32, 129, 50,
+                             128, 0, 7, 9],
+                       3, 1, [50, 50, 50, 128, 50, 50, 50, 128, 7, 7, 7, 9]),
+    "rgb16_tl" => (UInt8[0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 1, 0, 16, 32, 31, 124, 224, 131],
+                   2, 1, [248, 0, 248, 255, 0, 248, 0, 0]))
+
+function _a3c_rgba_rows(data, w, h)
+    img = Array{Float64}(undef, h, w, 4)
+    for y in 1:h, x in 1:w, c in 1:4
+        img[y, x, c] = data[((y - 1) * w + (x - 1)) * 4 + c] / 255
+    end
+    return img
+end
+
+@testset "TGALoader" begin
+    mktempdir() do dir
+        for (name, (bytes, w, h, rgba)) in _A3C_TGA
+            path = joinpath(dir, name * ".tga")
+            write(path, bytes)
+            @test Diff3D.load_tga(path) == _a3c_rgba_rows(rgba, w, h)
+        end
+        path = joinpath(dir, "rgb24_bl.tga")
+        tex = Diff3D.TGALoader(path; wrap_s=:clamp)
+        @test tex isa Texture && tex.data == Diff3D.load_tga(path) && tex.wrap_s === :clamp
+        # TGALoader.js tgaCheckHeader errors, plus truncation three.js misses.
+        base = _A3C_TGA["rgb24_bl"][1]
+        bad(f) = (b = copy(base); f(b); b)
+        @test_throws "TGA file is truncated" Diff3D._decode_tga(base[1:10])
+        @test_throws "no image data" Diff3D._decode_tga(bad(b -> b[3] = 0))
+        @test_throws "image type 4 is not supported" Diff3D._decode_tga(bad(b -> b[3] = 4))
+        @test_throws "cannot have a colour map" Diff3D._decode_tga(bad(b -> b[2] = 1))
+        @test_throws "image size 0x2 is invalid" Diff3D._decode_tga(bad(b -> b[13] = 0))
+        @test_throws "pixel size 12 is not supported" Diff3D._decode_tga(bad(b -> b[17] = 12))
+        @test_throws "pixel data is truncated" Diff3D._decode_tga(base[1:end - 1])
+        rle = _A3C_TGA["rle24_tr"][1]
+        @test_throws "run-length data is truncated" Diff3D._decode_tga(rle[1:end - 2])
+        @test_throws "runs past the image" Diff3D._decode_tga(
+            (b = copy(rle); b[33] = 0x83; b))
+        pal = _A3C_TGA["pal_br"][1]
+        @test_throws "outside the colour map" Diff3D._decode_tga((b = copy(pal); b[end] = 5; b))
+        @test_throws "colour map of at most 256 24-bit entries" Diff3D._decode_tga(
+            (b = copy(pal); b[8] = 32; b))
+        # Random corruption: an image or an ErrorException, nothing else.
+        state = UInt32(7)
+        for (_, (bytes, _, _, _)) in _A3C_TGA, trial in 1:150
+            f = copy(bytes)
+            for _ in 1:2
+                state = state * UInt32(1664525) + UInt32(1013904223)
+                f[1 + Int(state % UInt32(length(f)))] = UInt8((state >> 16) & 0xff)
+            end
+            result = try
+                Diff3D._decode_tga(f)
+            catch err
+                err
+            end
+            @test result isa Array{Float64,3} || result isa ErrorException
+            result isa Array && @test size(result, 1) * size(result, 2) <= length(f) * 128
+        end
+    end
+end
+
+_A3C_PCD_HEADER(kind, fields, size, type, count) =
+    "# .PCD v0.7\nVERSION 0.7\nFIELDS $fields\nSIZE $size\nTYPE $type\nCOUNT $count\n" *
+    "WIDTH 3\nHEIGHT 1\nVIEWPOINT 0 0 0 1 0 0 0\nPOINTS 3\nDATA $kind\n"
+
+function _a3c_pcd_files()
+    ascii = _A3C_PCD_HEADER("ascii", "x y z rgb normal_x normal_y normal_z intensity label",
+                            "4 4 4 4 4 4 4 4 4", "F F F F F F F F U", "1 1 1 1 1 1 1 1 1") *
+        "0.5 -1.25 2.0 9.90143482e-40 0.0 0.0 1.0 0.75 3\n" *
+        "1.5 2.25 -3.0 2.34182309e-38 0.0 1.0 0.0 1.5 7\n" *
+        "0.5 -1.25 2.0 9.90143482e-40 1.0 0.0 0.0 2.0 3\n"
+    pts = ((0.5f0, -1.25f0, 2.0f0, (10, 200, 30), 0.75, 3),
+           (1.5f0, 2.25f0, -3.0f0, (255, 0, 128), 1.5, 7),
+           (0.5f0, -1.25f0, 2.0f0, (10, 200, 30), 2.0, 3))
+    binary = IOBuffer()
+    write(binary, _A3C_PCD_HEADER("binary", "x y z rgb intensity label curv", "4 4 4 4 8 2 4",
+                                  "F F F U F I F", "1 1 1 1 1 1 2"))
+    for (x, y, z, (r, g, b), it, lb) in pts
+        write(binary, htol(x), htol(y), htol(z), UInt8(b), UInt8(g), UInt8(r), 0x00,
+              htol(Float64(it)), htol(Int16(-lb)), htol(9.0f0), htol(9.5f0))
+    end
+    # liblzf-format stream of the 72-byte x/y/z/normal_x/y/z columns.
+    lzf = UInt8[6, 0, 0, 0, 63, 0, 0, 192, 32, 3, 64, 7, 5, 160, 191, 0, 0, 16, 64, 128, 7, 0,
+                0, 32, 7, 1, 64, 192, 128, 7, 192, 1, 0, 128, 64, 39, 224, 10, 7, 1, 0, 0]
+    compressed = IOBuffer()
+    write(compressed, _A3C_PCD_HEADER("binary_compressed", "x y z normal_x normal_y normal_z",
+                                      "4 4 4 4 4 4", "F F F F F F", "1 1 1 1 1 1"))
+    write(compressed, htol(UInt32(length(lzf))), htol(UInt32(72)), lzf)
+    return Dict("ascii" => Vector{UInt8}(codeunits(ascii)), "binary" => take!(binary),
+                "compressed" => take!(compressed))
+end
+
+@testset "PCDLoader" begin
+    # three.js PCDLoader.parse of the same files (Float32 attributes).
+    position = [0.5, -1.25, 2, 1.5, 2.25, -3, 0.5, -1.25, 2]
+    color = [0.0030352699104696512, 0.577580451965332, 0.012983032502233982, 1, 0,
+             0.2158605009317398, 0.0030352699104696512, 0.577580451965332, 0.012983032502233982]
+    normal = [0, 0, 1, 0, 1, 0, 1, 0, 0]
+    mktempdir() do dir
+        files = _a3c_pcd_files()
+        for (name, bytes) in files
+            write(joinpath(dir, name * ".pcd"), bytes)
+        end
+        p = Diff3D.load_pcd(joinpath(dir, "ascii.pcd"))
+        @test p isa PointsObject && p.material isa PointsMaterial && p.material.size == 0.005
+        @test p.geometry.positions == position && p.geometry.normals == normal
+        @test get_attribute(p.geometry, :color).data ≈ color atol = 1e-7
+        @test get_attribute(p.geometry, :intensity).data == [0.75, 1.5, 2.0]
+        @test get_attribute(p.geometry, :label).data == [3, 7, 3]
+        b = Diff3D.load_pcd(joinpath(dir, "binary.pcd"))
+        @test b.geometry.positions == position && isempty(b.geometry.normals)
+        @test get_attribute(b.geometry, :color).data ≈ color atol = 1e-7
+        @test get_attribute(b.geometry, :intensity).data == [0.75, 1.5, 2.0]
+        @test get_attribute(b.geometry, :label).data == [-3, -7, -3]
+        c = Diff3D.load_pcd(joinpath(dir, "compressed.pcd"))
+        @test c.geometry.positions == position && c.geometry.normals == normal
+        @test !haskey(c.geometry.attributes, :color)
+        # LZF: literal runs and overlapping back references (liblzf lzf_d.c).
+        @test Diff3D._lzf_decompress(UInt8[2, 1, 2, 3, 0xe0, 3, 2], 15) ==
+              UInt8[1, 2, 3, 1, 2, 3, 1, 2, 3, 1, 2, 3, 1, 2, 3]
+        @test_throws "points before the start" Diff3D._lzf_decompress(UInt8[0x20, 5], 3)
+        @test_throws "decompresses past its declared size" Diff3D._lzf_decompress(UInt8[3, 1, 2, 3, 4], 2)
+        @test_throws "decompresses to 1 bytes, expected 4" Diff3D._lzf_decompress(UInt8[0, 9], 4)
+        bin = files["binary"]
+        @test_throws "binary data is truncated" Diff3D._decode_pcd(bin[1:end - 1])
+        cmp = files["compressed"]
+        @test_throws "binary_compressed data is truncated" Diff3D._decode_pcd(cmp[1:end - 1])
+        hdr(s) = Vector{UInt8}(codeunits(s))
+        @test_throws "no DATA line" Diff3D._decode_pcd(hdr("FIELDS x y z\n"))
+        @test_throws "DATA \"lzma\" is not supported" Diff3D._decode_pcd(hdr(
+            replace(String(copy(files["ascii"])), "DATA ascii" => "DATA lzma")))
+        @test_throws "has no z field" Diff3D._decode_pcd(hdr(
+            "FIELDS x y\nSIZE 4 4\nTYPE F F\nCOUNT 1 1\nPOINTS 1\nDATA ascii\n1 2\n"))
+        @test_throws "unsupported TYPE F SIZE 2" Diff3D._decode_pcd(hdr(
+            "FIELDS x y z\nSIZE 4 4 2\nTYPE F F F\nPOINTS 1\nDATA ascii\n1 2 3\n"))
+        @test_throws "has 2 values, expected 3" Diff3D._decode_pcd(hdr(
+            "FIELDS x y z\nSIZE 4 4 4\nTYPE F F F\nPOINTS 1\nDATA ascii\n1 2\n"))
+        state = UInt32(99)
+        for (_, bytes) in files, trial in 1:150
+            f = copy(bytes)
+            for _ in 1:2
+                state = state * UInt32(1664525) + UInt32(1013904223)
+                f[1 + Int(state % UInt32(length(f)))] = UInt8((state >> 16) & 0xff)
+            end
+            result = try
+                Diff3D._decode_pcd(f)
+            catch err
+                err
+            end
+            @test result isa NamedTuple || result isa ErrorException
+        end
+    end
+end
+
+function _a3c_dds(w, h, flags, mips, pf_flags, fourcc, bits, masks, caps2, payload)
+    io = IOBuffer()
+    write(io, b"DDS ", htol.(UInt32[124, flags, h, w, 0, 0, mips])...)
+    write(io, zeros(UInt8, 44))
+    write(io, htol(UInt32(32)), htol(UInt32(pf_flags)), fourcc,
+          htol.(UInt32[bits, masks...])...)
+    write(io, htol.(UInt32[0x1000, caps2, 0, 0, 0])...)
+    write(io, UInt8.(payload))
+    return take!(io)
+end
+
+@testset "DDSLoader (uncompressed)" begin
+    # three.js DDSLoader.parse(buffer, true).mipmaps[1].data (RGBA, file row order).
+    bgra = _a3c_dds(3, 2, 0x2100f, 2, 0x41, b"\0\0\0\0", 32,
+                    (0x00ff0000, 0x0000ff00, 0x000000ff, 0xff000000), 0,
+                    vcat([(17i) % 256 for i in 0:23], [1, 2, 3, 4, 5, 6, 7, 8]))
+    bgr = _a3c_dds(2, 2, 0x100f, 0, 0x40, b"\0\0\0\0", 24,
+                   (0x00ff0000, 0x0000ff00, 0x000000ff, 0), 0, [(29i + 3) % 256 for i in 0:11])
+    dxt1 = _a3c_dds(4, 4, 0x100f, 0, 0x4, b"DXT1", 0, (0, 0, 0, 0), 0, zeros(Int, 8))
+    mktempdir() do dir
+        p32 = joinpath(dir, "a.dds"); write(p32, bgra)
+        p24 = joinpath(dir, "b.dds"); write(p24, bgr)
+        @test Diff3D.load_dds(p32) == _a3c_rgba_rows(
+            [34, 17, 0, 51, 102, 85, 68, 119, 170, 153, 136, 187, 238, 221, 204, 255, 50, 33,
+             16, 67, 118, 101, 84, 135], 3, 2)
+        @test Diff3D.load_dds(p24) == _a3c_rgba_rows(
+            [61, 32, 3, 255, 148, 119, 90, 255, 235, 206, 177, 255, 66, 37, 8, 255], 2, 2)
+        # CompressedTexture.flipY is false: v = 0 samples the first file row.
+        tex = Diff3D.DDSLoader(p32)
+        @test tex isa Texture && tex.data == reverse(Diff3D.load_dds(p32); dims=1)
+        p = joinpath(dir, "c.dds"); write(p, dxt1)
+        @test_throws "DDS \"DXT1\" data is block-compressed" Diff3D.load_dds(p)
+        @test_throws "DX10 extended headers are not supported" Diff3D._decode_dds(
+            _a3c_dds(4, 4, 0x100f, 0, 0x4, b"DX10", 0, (0, 0, 0, 0), 0, zeros(Int, 32)))
+        @test_throws "pixel format (32-bit" Diff3D._decode_dds(_a3c_dds(
+            1, 1, 0x100f, 0, 0x40, b"\0\0\0\0", 32, (0x000000ff, 0x0000ff00, 0x00ff0000, 0xff000000),
+            0, zeros(Int, 4)))
+        @test_throws "cube maps are not supported" Diff3D._decode_dds(_a3c_dds(
+            1, 1, 0x100f, 0, 0x40, b"\0\0\0\0", 24, (0x00ff0000, 0x0000ff00, 0x000000ff, 0),
+            0xfe00, zeros(Int, 18)))
+        @test_throws "pixel data is truncated" Diff3D._decode_dds(bgr[1:end - 1])
+        @test_throws "bad magic number" Diff3D._decode_dds((b = copy(bgr); b[1] = 0x00; b))
+        @test_throws "DDS file is truncated" Diff3D._decode_dds(bgr[1:100])
+        @test_throws "image size 0x2 is invalid" Diff3D._decode_dds((b = copy(bgr); b[17] = 0; b))
+        state = UInt32(3)
+        for bytes in (bgra, bgr), trial in 1:200
+            f = copy(bytes)
+            state = state * UInt32(1664525) + UInt32(1013904223)
+            f[1 + Int(state % UInt32(length(f)))] = UInt8((state >> 16) & 0xff)
+            result = try
+                Diff3D._decode_dds(f)
+            catch err
+                err
+            end
+            @test result isa Array{Float64,3} || result isa ErrorException
+        end
+    end
+end
