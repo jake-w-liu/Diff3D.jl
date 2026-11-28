@@ -122,3 +122,89 @@ const _C3_FP_STEPS2 = [
     @test_throws ArgumentError Diff3D.first_person_update!(fc, Inf)
     @test_throws ArgumentError Diff3D.first_person_pointer_down!(fc, 0, 0; pointer_type=:stylus)
 end
+
+# ---- FlyControls (three.js behaviour) ----------------------------------------
+
+function _c3_fly_run(fc, steps)
+    states = Any[]
+    function snap()
+        q = Diff3D._camera_local_quaternion(fc.camera)
+        push!(states, (p=fc.camera.position,
+                       d=Diff3D.quat_rotate_vector(q, Vec3(0.0, 0.0, -1.0)),
+                       u=Diff3D.quat_rotate_vector(q, Vec3(0.0, 1.0, 0.0)),
+                       mv=fc.move_vector, rv=fc.rotation_vector))
+    end
+    snap()
+    for s in steps
+        haskey(s, :k) && Diff3D.fly_key_down!(fc, s.k; alt_key=get(s, :alt, false))
+        haskey(s, :ku) && Diff3D.fly_key_up!(fc, s.ku)
+        haskey(s, :pd) && Diff3D.fly_pointer_down!(fc; button=s.pd)
+        haskey(s, :pm) && Diff3D.fly_pointer_move!(fc, s.pm...; width=800, height=600,
+                                                   left=10, top=20)
+        haskey(s, :pu) && Diff3D.fly_pointer_up!(fc; button=s.pu)
+        haskey(s, :pc) && Diff3D.fly_pointer_cancel!(fc)
+        haskey(s, :en) && (fc.enabled = s.en)
+        haskey(s, :dt) && Diff3D.fly_update!(fc, s.dt)
+        snap()
+    end
+    return states
+end
+
+@testset "FlyControls event-driven update follows three.js r186" begin
+    # FlyControls.js:132-158 (update: translateX/Y/Z then quaternion.multiply),
+    # 162-182 (move/rotation vectors), 207-366 (handlers). The element is
+    # 800x600 at offset (10, 20).
+    steps1 = [
+        (k="KeyW", dt=0.1), (k="KeyR", dt=0.2), (k="ArrowLeft", dt=0.3),
+        (k="KeyQ", dt=0.25), (ku="KeyW", k="KeyA", dt=0.1), (k="KeyE", ku="KeyQ", dt=0.2),
+        (k="ArrowUp", alt=true, dt=0.1), (k="ArrowDown", dt=0.15),
+        (pm=(700, 100), dt=0.2), (pd=0, dt=0.1), (pu=0, dt=0.1), (pd=2, dt=0.3),
+        (pc=true, dt=0.1), (en=false, k="KeyS", dt=0.5), (en=true, dt=0.2),
+        (ku="ArrowLeft", dt=0.1)]
+    steps2 = [
+        (dt=0.2,), (pm=(300, 400), dt=0.1), (pd=0, dt=0.1), (pm=(600, 150), dt=0.3),
+        (pm=(50, 500), dt=0.2), (pu=0, dt=0.2), (pd=2, pm=(410, 320), dt=0.1),
+        (k="KeyS", dt=0.2), (ku="KeyS", dt=0.2), (pc=true, dt=0.1)]
+    expected1 = Dict(
+        7 => (p=(0.9371501717805667, 3.8434754488727143, 1.2792583347849293), d=(-0.3935195031087021, -0.21033751981758844, -0.8949304601085304), u=(0.029850226943336645, 0.9700371854785197, -0.24111578699940697), mv=(-1.0, 1.0, 0.0), rv=(0.0, 1.0, -1.0)),
+        9 => (p=(0.3712906979713555, 4.650988952358451, 1.3283970198794794), d=(-0.3800941839068769, -0.24290576430154792, -0.8924826054491182), u=(0.329664413236358, 0.8659568931901842, -0.37608514166599555), mv=(-1.0, 1.0, 0.0), rv=(0.7333333333333333, -0.725, -1.0)),
+        14 => (p=(0.0831875229695345, 6.34653458820193, 1.4852279349349613), d=(0.20889127872854873, -0.19075274870770326, -0.9591547437883043), u=(0.8148542169329096, 0.576247227997776, 0.0628628457161683), mv=(-1.0, 1.0, 1.0), rv=(0.7333333333333333, -0.725, -1.0)),
+        16 => (p=(0.13594063086064773, 7.279924574381022, 1.9385930890524545), d=(0.4574468510564975, -0.2067503125420864, -0.864868016937986), u=(0.8550840432686249, 0.36923030198104223, 0.3640058557858241), mv=(-1.0, 1.0, 1.0), rv=(0.7333333333333333, 0.0, -1.0)))
+    expected2 = Dict(
+        4 => (p=(1.0, 2.0, 3.0), d=(0.6886008223817961, 0.10119166750490644, -0.718045370323276), u=(-0.07564864368190397, 0.9948368895571107, 0.0676523900939317), mv=(0.0, 0.0, 0.0), rv=(0.5666666666666667, -0.475, 0.0)),
+        10 => (p=(1.0691487708786502, 1.9861534512017218, 2.8676114786986844), d=(0.46099180585766764, -0.0923103253218539, -0.8825901420087696), u=(0.03471224862908458, 0.9956894984066837, -0.0860086190899447), mv=(0.0, 0.0, -1.0), rv=(0.0, 0.0, 0.0)))
+    for rotation_driven in (false, true)
+        for (kw, steps, expected) in (
+                ((movement_speed=2, roll_speed=0.5), steps1, expected1),
+                ((movement_speed=1.5, roll_speed=0.8, drag_to_look=true,
+                  auto_forward=true), steps2, expected2))
+            cam = _c3_first_person_camera(; rotation_driven=rotation_driven)
+            states = _c3_fly_run(Diff3D.FlyControls(cam; kw...), steps)
+            for (i, e) in expected, key in (:p, :d, :u, :mv, :rv)
+                @test _c3_close(getproperty(states[i + 1], key), getproperty(e, key))
+            end
+        end
+    end
+    # The roll is carried by camera.up, so the rendered view matches the
+    # three.js quaternion: view_matrix rows are the camera's local axes.
+    cam = _c3_first_person_camera()
+    fc = Diff3D.FlyControls(cam; roll_speed=1.0)
+    Diff3D.fly_key_down!(fc, "KeyQ")
+    Diff3D.fly_update!(fc, 0.3)
+    # Rolling left by 0.3 rad about the view axis (FlyControls.js:148-149:
+    # quaternion (0, 0, 0.3, 1) normalized = rotation by 2 atan(0.3)).
+    angle = 2 * atan(0.3)
+    V = view_matrix(cam)
+    right0 = normalize(cross(Vec3(3.0, -1.0, -5.0), Vec3(0.0, 1.0, 0.0)))
+    up0 = cross(right0, normalize(Vec3(3.0, -1.0, -5.0)))
+    up_expected = up0 * cos(angle) - right0 * sin(angle)
+    @test _c3_close(Vec3(mat4_get(V, 2, 1), mat4_get(V, 2, 2), mat4_get(V, 2, 3)),
+                    _c3_vec(up_expected))
+    # The earlier direct calls keep working on the extended struct.
+    fly_translate!(fc, 1.0, 0.0, 0.0)
+    fly_rotate!(fc, 0.1, 0.0)
+    @test all(isfinite, _c3_vec(cam.target))
+    @test_throws ArgumentError Diff3D.fly_update!(fc, NaN)
+    @test_throws ArgumentError Diff3D.fly_pointer_move!(fc, 1, 1; width=0, height=10)
+    @test_throws ArgumentError Diff3D.FlyControls(cam; roll_speed=Inf)
+end

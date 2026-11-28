@@ -882,9 +882,267 @@ function trackball_pan!(tc::TrackballControls, dx, dy)
     return tc
 end
 
-# FlyControls: first-person translation/rotation along the camera basis.
+"""
+    FlyMoveState()
+
+The twelve inputs of three.js `FlyControls._moveState` (`up`, `down`,
+`left`, `right`, `forward`, `back`, `pitch_up`, `pitch_down`, `yaw_left`,
+`yaw_right`, `roll_left`, `roll_right`), each 0 when idle. Keys set them to 0
+or 1; pointer movement sets `yaw_left` and `pitch_down` to the pointer offset
+from the element centre in half-sizes.
+"""
+mutable struct FlyMoveState
+    up::Float64
+    down::Float64
+    left::Float64
+    right::Float64
+    forward::Float64
+    back::Float64
+    pitch_up::Float64
+    pitch_down::Float64
+    yaw_left::Float64
+    yaw_right::Float64
+    roll_left::Float64
+    roll_right::Float64
+end
+FlyMoveState() = FlyMoveState(0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                              0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+
+"""
+    FlyControls(camera::PerspectiveCamera; enabled=true, movement_speed=1.0,
+                roll_speed=0.005, drag_to_look=false, auto_forward=false)
+
+Free-flight camera control. [`fly_translate!`](@ref) and [`fly_rotate!`](@ref)
+move and turn the camera directly. The event-driven three.js r186
+`FlyControls` behaviour is available through [`fly_key_down!`](@ref),
+[`fly_key_up!`](@ref), [`fly_pointer_down!`](@ref),
+[`fly_pointer_move!`](@ref), [`fly_pointer_up!`](@ref),
+[`fly_pointer_cancel!`](@ref) and [`fly_update!`](@ref)`(controls, delta)`:
+the inputs set `move_state` ([`FlyMoveState`](@ref)), from which
+`move_vector` (right, up, back) and `rotation_vector` (pitch, yaw, roll) are
+derived, and each update translates the camera along its own axes by
+`move_vector * movement_speed * delta` and turns it by the quaternion
+`(rotation_vector * roll_speed * delta, 1)` normalized, including roll. As in
+three.js, `move_vector` and `rotation_vector` are recomputed only by input
+events, so `auto_forward` takes effect at the next key or pointer event.
+"""
 mutable struct FlyControls
     camera::PerspectiveCamera
+    enabled::Bool
+    movement_speed::Float64
+    roll_speed::Float64
+    drag_to_look::Bool
+    auto_forward::Bool
+    move_state::FlyMoveState
+    move_vector::Vec3{Float64}
+    rotation_vector::Vec3{Float64}
+    # Number of pointers down while `drag_to_look` (three.js `_status`).
+    status::Int
+end
+
+function FlyControls(camera::PerspectiveCamera; enabled::Bool=true,
+                     movement_speed::Real=1.0, roll_speed::Real=0.005,
+                     drag_to_look::Bool=false, auto_forward::Bool=false)
+    return FlyControls(
+        camera, enabled,
+        _checked_control_scalar(movement_speed, "FlyControls movement_speed"),
+        _checked_control_scalar(roll_speed, "FlyControls roll_speed"),
+        drag_to_look, auto_forward, FlyMoveState(),
+        Vec3(0.0, 0.0, 0.0), Vec3(0.0, 0.0, 0.0), 0)
+end
+
+# FlyControls.js _updateMovementVector / _updateRotationVector.
+function _fly_update_movement_vector!(fc::FlyControls)
+    m = fc.move_state
+    forward = (m.forward != 0 || (fc.auto_forward && m.back == 0)) ? 1.0 : 0.0
+    fc.move_vector = Vec3(-m.left + m.right, -m.down + m.up, -forward + m.back)
+    return fc
+end
+
+function _fly_update_rotation_vector!(fc::FlyControls)
+    m = fc.move_state
+    fc.rotation_vector = Vec3(-m.pitch_down + m.pitch_up,
+                              -m.yaw_right + m.yaw_left,
+                              -m.roll_right + m.roll_left)
+    return fc
+end
+
+function _fly_key!(fc::FlyControls, code::AbstractString, value::Float64)
+    m = fc.move_state
+    if code == "KeyW"
+        m.forward = value
+    elseif code == "KeyS"
+        m.back = value
+    elseif code == "KeyA"
+        m.left = value
+    elseif code == "KeyD"
+        m.right = value
+    elseif code == "KeyR"
+        m.up = value
+    elseif code == "KeyF"
+        m.down = value
+    elseif code == "ArrowUp"
+        m.pitch_up = value
+    elseif code == "ArrowDown"
+        m.pitch_down = value
+    elseif code == "ArrowLeft"
+        m.yaw_left = value
+    elseif code == "ArrowRight"
+        m.yaw_right = value
+    elseif code == "KeyQ"
+        m.roll_left = value
+    elseif code == "KeyE"
+        m.roll_right = value
+    end
+    _fly_update_movement_vector!(fc)
+    return _fly_update_rotation_vector!(fc)
+end
+
+"""
+    fly_key_down!(controls::FlyControls, code::AbstractString; alt_key=false)
+
+Press the key `code` (a `KeyboardEvent.code`), like three.js `FlyControls`:
+W/S forward/back, A/D left/right, R/F up/down, the up/down arrows pitch, the
+left/right arrows yaw and Q/E roll. Ignored while `alt_key` is held or the
+controls are disabled.
+"""
+function fly_key_down!(fc::FlyControls, code::AbstractString; alt_key::Bool=false)
+    (alt_key || !fc.enabled) && return fc
+    return _fly_key!(fc, code, 1.0)
+end
+
+"""
+    fly_key_up!(controls::FlyControls, code::AbstractString)
+
+Release the key `code`; see [`fly_key_down!`](@ref).
+"""
+function fly_key_up!(fc::FlyControls, code::AbstractString)
+    fc.enabled || return fc
+    return _fly_key!(fc, code, 0.0)
+end
+
+"""
+    fly_pointer_down!(controls::FlyControls; button=0)
+
+A pointer button goes down (three.js `pointerdown`): with `drag_to_look` it
+starts looking, otherwise button 0 flies forward and button 2 backward.
+"""
+function fly_pointer_down!(fc::FlyControls; button::Integer=0)
+    fc.enabled || return fc
+    if fc.drag_to_look
+        fc.status += 1
+    else
+        button == 0 && (fc.move_state.forward = 1.0)
+        button == 2 && (fc.move_state.back = 1.0)
+        _fly_update_movement_vector!(fc)
+    end
+    return fc
+end
+
+"""
+    fly_pointer_move!(controls::FlyControls, page_x, page_y; width, height,
+                      left=0, top=0)
+
+The pointer moves to page position `(page_x, page_y)` over an element of
+`width`×`height` pixels whose top-left corner is at `(left, top)` (three.js
+`pointermove` with the element's offset size and position). Unless
+`drag_to_look` is set and no pointer is down, the offset from the element
+centre in half-sizes sets the yaw (`yaw_left`) and pitch (`pitch_down`) rates.
+"""
+function fly_pointer_move!(fc::FlyControls, page_x, page_y; width::Real,
+                           height::Real, left::Real=0.0, top::Real=0.0)
+    x = _checked_control_scalar(page_x, "FlyControls page_x")
+    y = _checked_control_scalar(page_y, "FlyControls page_y")
+    w = _checked_control_scalar(width, "FlyControls element width")
+    h = _checked_control_scalar(height, "FlyControls element height")
+    (w > 0.0 && h > 0.0) || throw(ArgumentError(
+        "FlyControls element width and height must be positive"))
+    ox = _checked_control_scalar(left, "FlyControls element left")
+    oy = _checked_control_scalar(top, "FlyControls element top")
+    fc.enabled || return fc
+    if !fc.drag_to_look || fc.status > 0
+        half_width = w / 2
+        half_height = h / 2
+        fc.move_state.yaw_left = -((x - ox) - half_width) / half_width
+        fc.move_state.pitch_down = ((y - oy) - half_height) / half_height
+        _fly_update_rotation_vector!(fc)
+    end
+    return fc
+end
+
+"""
+    fly_pointer_up!(controls::FlyControls; button=0)
+
+A pointer button is released (three.js `pointerup`): with `drag_to_look` the
+look rates stop, otherwise button 0 stops forward and button 2 backward
+flight.
+"""
+function fly_pointer_up!(fc::FlyControls; button::Integer=0)
+    fc.enabled || return fc
+    if fc.drag_to_look
+        fc.status -= 1
+        fc.move_state.yaw_left = 0.0
+        fc.move_state.pitch_down = 0.0
+    else
+        button == 0 && (fc.move_state.forward = 0.0)
+        button == 2 && (fc.move_state.back = 0.0)
+        _fly_update_movement_vector!(fc)
+    end
+    return _fly_update_rotation_vector!(fc)
+end
+
+"""
+    fly_pointer_cancel!(controls::FlyControls)
+
+The pointer is cancelled (three.js `pointercancel`): looking (with
+`drag_to_look`) or pointer-driven flight stops.
+"""
+function fly_pointer_cancel!(fc::FlyControls)
+    fc.enabled || return fc
+    if fc.drag_to_look
+        fc.status = 0
+        fc.move_state.yaw_left = 0.0
+        fc.move_state.pitch_down = 0.0
+    else
+        fc.move_state.forward = 0.0
+        fc.move_state.back = 0.0
+        _fly_update_movement_vector!(fc)
+    end
+    return _fly_update_rotation_vector!(fc)
+end
+
+"""
+    fly_update!(controls::FlyControls, delta)
+
+Advance the flight by `delta` seconds (three.js `FlyControls.update`): move
+the camera along its local x, y and z axes by `move_vector * movement_speed *
+delta`, then turn it by the normalized quaternion `(rotation_vector *
+roll_speed * delta, 1)` in its own frame. The camera keeps its target
+distance; `camera.up` follows the roll. Does nothing while disabled.
+"""
+function fly_update!(fc::FlyControls, delta)
+    fc.enabled || return fc
+    dt = _checked_control_scalar(delta, "FlyControls delta")
+    speed = _checked_control_scalar(fc.movement_speed, "FlyControls movement_speed")
+    roll = _checked_control_scalar(fc.roll_speed, "FlyControls roll_speed")
+    mv = _checked_control_vec3(fc.move_vector, "FlyControls move_vector")
+    rv = _checked_control_vec3(fc.rotation_vector, "FlyControls rotation_vector")
+    cam = fc.camera
+    q = _camera_local_quaternion(cam)
+    distance = norm(cam.target - cam.position)
+    move_mult = dt * speed
+    rot_mult = dt * roll
+    # Object3D.translateX/Y/Z: position += (axis rotated by q) * distance.
+    position = cam.position
+    position += quat_rotate_vector(q, Vec3(1.0, 0.0, 0.0)) * (mv.x * move_mult)
+    position += quat_rotate_vector(q, Vec3(0.0, 1.0, 0.0)) * (mv.y * move_mult)
+    position += quat_rotate_vector(q, Vec3(0.0, 0.0, 1.0)) * (mv.z * move_mult)
+    position = _checked_control_vec3(position, "FlyControls camera position")
+    turn = quat_normalize(Quaternion(rv.x * rot_mult, rv.y * rot_mult,
+                                     rv.z * rot_mult, 1.0))
+    _set_camera_pose!(cam, position, quat_multiply(q, turn), distance,
+                      "FlyControls")
+    return fc
 end
 
 # A rotation-driven camera renders from `rotation`, so first-person controls
@@ -1019,26 +1277,28 @@ function _camera_local_quaternion(cam::AbstractCamera)
         mat4_transpose(mat4_look_at(position, target, up)))
 end
 
-# Writes a local orientation back to a camera. A rotation-driven camera takes
-# it as its rotation; a target-driven camera keeps its target distance (1 when
-# the target is on the camera) and takes the rotated +y axis as `up`, so a roll
-# survives the round trip through position, target and up.
-function _set_camera_local_quaternion!(cam::AbstractCamera, q::Quaternion,
-                                       label::String)
+# Writes a position and local orientation to a camera, validating everything
+# before changing anything. A rotation-driven camera takes the orientation as
+# its rotation. The target is placed `distance` along the view direction (1
+# when that is not a positive finite length) and `up` becomes the rotated +y
+# axis, so a roll survives the round trip through position, target and up.
+function _set_camera_pose!(cam::AbstractCamera, position::Vec3, q::Quaternion,
+                           distance, label::String)
     q = quat_normalize(q)
+    position = _checked_control_vec3(position, "$label camera position")
     forward = quat_rotate_vector(q, Vec3(0.0, 0.0, -1.0))
-    up = quat_rotate_vector(q, Vec3(0.0, 1.0, 0.0))
-    distance = norm(cam.target - cam.position)
+    up = _checked_control_vec3(quat_rotate_vector(q, Vec3(0.0, 1.0, 0.0)),
+                               "$label camera up")
     (isfinite(distance) && distance > 0.0) || (distance = 1.0)
-    target = _checked_control_vec3(cam.position + forward * distance,
+    target = _checked_control_vec3(position + forward * distance,
                                    "$label camera target")
-    up = _checked_control_vec3(up, "$label camera up")
     if cam.rotation_driven
         euler = _transform_quaternion_to_euler(q, cam.rotation.order)
         _checked_control_vec3(Vec3(euler.x, euler.y, euler.z),
                               "$label camera rotation")
         cam.rotation = euler
     end
+    cam.position = position
     cam.target = target
     cam.up = up
     return cam
