@@ -364,6 +364,16 @@ end
     return tail / (one_plus * one_plus)
 end
 
+# c̄_f δ for a derivative δ <= c_f of a face's coverage, at a pixel with several
+# covering faces (`_soft_ad_pixel_pullback!`). With color_diff = ḡ·(colour_f -
+# colour) and floor_bar = w̄_bg eps S / C, this is the colour term plus the
+# floor's terms through S and C, (w̄_bg eps / C) d_f δ - (w̄_bg eps S / C²) δ.
+# Each quotient is at most 1: d_f δ <= w_f <= S <= denom and δ <= c_f <= C.
+@inline _soft_ad_coverage_term(color_diff, floor_bar, depth_weight, δ, denom, total,
+                               coverage_sum) =
+    color_diff * ((depth_weight * δ) / denom) +
+    floor_bar * ((depth_weight * δ) / total - δ / coverage_sum)
+
 mutable struct _SoftADScalarAdjoints
     sigma::Float64
     gamma::Float64
@@ -480,6 +490,8 @@ function _soft_ad_pixel_pullback!(acc, scalars, faces, xs, coverages, faded,
     end
     count = 0
     total = 0.0
+    coverage_sum = 0.0
+    covering = 0
     average = Color3(0.0, 0.0, 0.0)
     # Reference over the faces with non-zero coverage (see `_soft_pixel_color`).
     covered = false
@@ -499,6 +511,7 @@ function _soft_ad_pixel_pullback!(acc, scalars, faces, xs, coverages, faded,
         is_faded && (coverage *= _soft_degenerate_fade(tri.area, ε))
         if !iszero(coverage)
             covered = true
+            covering += 1
             if use_relative
                 tri.depth < reference && (reference = tri.depth; reference_owner = fi)
             else
@@ -513,6 +526,7 @@ function _soft_ad_pixel_pullback!(acc, scalars, faces, xs, coverages, faded,
         average = iszero(total) ? tri.color :
             _stable_color_lerp(average, tri.color, w / next_total)
         total = next_total
+        coverage_sum += coverage
         count += 1
         faces[count] = fi
         xs[count] = x
@@ -532,6 +546,7 @@ function _soft_ad_pixel_pullback!(acc, scalars, faces, xs, coverages, faded,
         owner = reference_owner
         kept = 0
         total = 0.0
+        coverage_sum = 0.0
         average = Color3(0.0, 0.0, 0.0)
         @inbounds for j in 1:count
             coverage = coverages[j]
@@ -546,6 +561,7 @@ function _soft_ad_pixel_pullback!(acc, scalars, faces, xs, coverages, faded,
             average = iszero(total) ? tri.color :
                 _stable_color_lerp(average, tri.color, w / next_total)
             total = next_total
+            coverage_sum += coverage
             kept += 1
             faces[kept] = fi
             xs[kept] = xs[j]
@@ -567,32 +583,56 @@ function _soft_ad_pixel_pullback!(acc, scalars, faces, xs, coverages, faded,
     bg_weight, bg_scaled, bg_varies = use_relative ?
         _soft_relative_weight_state(m, 1.0, γ) :
         (exp(background_logit - m), 0.0, true)
-    w_bg = bg_weight + ε
+    # Floor eps * S / C (see `_soft_pixel_color`). With one face of non-zero
+    # coverage, the reference, S / C is identically 1 and the floor is eps.
+    multi = covering > 1
+    w_bg = bg_weight + (multi ? ε * (total / coverage_sum) : ε)
     denom = total + w_bg
     color = _stable_color_lerp(average, bg, w_bg / denom)
-    # C = (Σ w_f c_f + w_bg bg) / S:  dC/dc_f = w_f/S, dC/dw_f = (c_f - C)/S,
-    # dC/dbg = w_bg/S, dC/dw_bg = (bg - C)/S.
+    # Pixel P = (Σ w_f col_f + w_bg bg) / denom:  dP/dcol_f = w_f/denom,
+    # dP/dw_f = (col_f - P)/denom, dP/dbg = w_bg/denom, dP/dw_bg = (bg - P)/denom.
     bg_share = w_bg / denom
     scalars.bg_r += g_r * bg_share
     scalars.bg_g += g_g * bg_share
     scalars.bg_b += g_b * bg_share
-    w_bg_bar = (g_r * (bg.r - color.r) + g_g * (bg.g - color.g) +
-                g_b * (bg.b - color.b)) / denom
-    scalars.eps += w_bg_bar
+    bg_diff = g_r * (bg.r - color.r) + g_g * (bg.g - color.g) + g_b * (bg.b - color.b)
+    # With several covering faces the denominator can be as small as S, which
+    # is tiny when the reference face barely covers the pixel; then an adjoint
+    # with respect to a weight or coverage alone may overflow although its
+    # product with the weight or the coverage derivative is bounded. This
+    # path therefore forms only bounded quotients: weight / denom, weight / S,
+    # coverage derivative / C, and the floor's share of the denominator
+    # floor_share = eps (S / C) / denom = eps / (C + C d_bg / S + eps).
+    # With w̄_bg = bg_diff / denom, the floor adds w̄_bg eps / C to every w̄_f
+    # (through S), -w̄_bg eps S / C² to every c̄_f (through C) and w̄_bg S / C to
+    # eps̄; floor_bar = bg_diff floor_share = w̄_bg eps S / C.
+    if multi
+        floor_share = ε / (coverage_sum + coverage_sum * (bg_weight / total) + ε)
+        floor_bar = bg_diff * floor_share
+        scalars.eps += bg_diff * (floor_share / ε)
+        bg_weight_bar = bg_diff * (bg_weight / denom)   # w̄_bg d_bg
+    else
+        floor_bar = 0.0
+        w_bg_bar = bg_diff / denom
+        scalars.eps += w_bg_bar
+        bg_weight_bar = w_bg_bar * bg_weight
+    end
     m_bar = 0.0
     if use_relative
-        if bg_varies && !iszero(w_bg_bar)
-            scaled_bar = -(w_bg_bar * bg_weight)
+        if bg_varies && !iszero(bg_weight_bar)
+            scaled_bar = -bg_weight_bar
             m_bar -= scaled_bar * inv_γ
             gamma_is_ad && (scalars.gamma += scaled_bar * (-bg_scaled / γ))
         end
     else
-        # Mathematically the stabilizer's adjoint is eps * w̄_bg (the image is
-        # invariant to m except through eps). Accumulate the individual terms
+        # With m held free, every weight and the floor eps * S / C scale with
+        # exp(-m), so the stabilizer's total adjoint is zero (with one covering
+        # face S / C is taken as the constant 1 and the owner, that face,
+        # receives the eps term instead). Accumulate the individual terms
         # instead, as the recorded graph does: their rounding then cancels
         # against the per-logit adjoints, which matters when 1/γ² amplifies
         # the logit adjoints into the γ derivative.
-        background_bar = w_bg_bar * bg_weight
+        background_bar = bg_weight_bar
         scalars.background_logit += background_bar
         m_bar -= background_bar
     end
@@ -603,34 +643,59 @@ function _soft_ad_pixel_pullback!(acc, scalars, faces, xs, coverages, faded,
         acc[7, fi] += g_r * share
         acc[8, fi] += g_g * share
         acc[9, fi] += g_b * share
-        w_bar = (g_r * (tri.color.r - color.r) + g_g * (tri.color.g - color.g) +
-                 g_b * (tri.color.b - color.b)) / denom
-        iszero(w_bar) && continue
-        coverage_bar = w_bar * depth_weights[j]
-        depth_weight_bar = w_bar * coverages[j]
+        color_diff = g_r * (tri.color.r - color.r) + g_g * (tri.color.g - color.g) +
+                     g_b * (tri.color.b - color.b)
+        x = xs[j]
+        depth_weight = depth_weights[j]
+        if multi
+            iszero(color_diff) && iszero(floor_bar) && continue
+            # w̄_f c_f d_f, the adjoint of the depth weight times d_f.
+            weight_bar = color_diff * share + floor_bar * (weights[j] / total)
+            if faded[j]
+                # coverage = sigmoid(x) * s(t), t = |A| / ε (`_soft_degenerate_fade`).
+                fade = _soft_degenerate_fade(tri.area, ε)
+                fade_bar = _soft_ad_coverage_term(color_diff, floor_bar, depth_weight,
+                    sigmoid_approx(x), denom, total, coverage_sum)
+                x_bar = _soft_ad_coverage_term(color_diff, floor_bar, depth_weight,
+                    fade * _soft_sigmoid_derivative(x), denom, total, coverage_sum)
+            else
+                fade_bar = 0.0
+                x_bar = _soft_ad_coverage_term(color_diff, floor_bar, depth_weight,
+                    _soft_sigmoid_derivative(x), denom, total, coverage_sum)
+            end
+        else
+            w_bar = color_diff / denom
+            iszero(w_bar) && continue
+            coverage_bar = w_bar * depth_weight
+            weight_bar = (w_bar * coverages[j]) * depth_weight
+            if iszero(coverage_bar)
+                fade_bar = 0.0
+                x_bar = 0.0
+            elseif faded[j]
+                fade_bar = coverage_bar * sigmoid_approx(x)
+                coverage_bar *= _soft_degenerate_fade(tri.area, ε)
+                x_bar = coverage_bar * _soft_sigmoid_derivative(x)
+            else
+                fade_bar = 0.0
+                x_bar = coverage_bar * _soft_sigmoid_derivative(x)
+            end
+        end
         if use_relative
             weight, scaled, varies = _soft_relative_weight_state(m, tri.depth, γ)
-            if varies && !iszero(depth_weight_bar)
-                scaled_bar = -(depth_weight_bar * weight)
+            if varies && !iszero(weight_bar)
+                scaled_bar = -weight_bar
                 delta_bar = scaled_bar * inv_γ
                 acc[10, fi] += delta_bar
                 m_bar -= delta_bar
                 gamma_is_ad && (scalars.gamma += scaled_bar * (-scaled / γ))
             end
         else
-            logit_bar = depth_weight_bar * depth_weights[j]
+            logit_bar = weight_bar
             acc[10, fi] += logit_bar
             m_bar -= logit_bar
         end
-        iszero(coverage_bar) && continue
-        x = xs[j]
-        if faded[j]
-            # coverage = sigmoid(x) * s(t), t = |A| / ε (`_soft_degenerate_fade`).
-            fade_bar = coverage_bar * sigmoid_approx(x)
-            coverage_bar *= _soft_degenerate_fade(tri.area, ε)
+        faded[j] && !iszero(fade_bar) &&
             _soft_ad_fade_pullback!(acc, scalars, fi, tri, ε, fade_bar)
-        end
-        x_bar = coverage_bar * _soft_sigmoid_derivative(x)
         iszero(x_bar) && continue
         d_bar = x_bar / σ
         scalars.sigma -= x_bar * (x / σ)

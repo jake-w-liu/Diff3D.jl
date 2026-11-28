@@ -1,12 +1,14 @@
 using Test, Diff3D, ForwardDiff
 
-# Regression tests for the soft rasterizer's softmax reference (deep-debug
-# finding XB-1). `_soft_pixel_color` adds the eps floor to the background
-# weight on the scale of the reference m. A nearer candidate whose padded
-# bounding box holds the pixel but whose coverage there is exactly zero used to
-# set m, so a farther face that fully covers the pixel had relative weight
-# exp(-dz/γ) below eps and the pixel turned into the background as γ -> 0. A
-# zero-coverage face adds nothing to the sums, so it must not set m either.
+# Regression tests for the soft rasterizer's background floor (deep-debug
+# finding XB-1). `_soft_pixel_color` used to add eps to the background weight
+# on the scale of the reference m, the nearest candidate face. A nearer face
+# whose padded bounding box holds the pixel but whose coverage there is zero or
+# tiny then set m, a farther face that fully covers the pixel had relative
+# weight exp(-dz/γ) below eps, and the pixel turned into the background as
+# γ -> 0. Now a zero-coverage face does not set m, and the floor is
+# eps * S / C (S = Σ c_i d_i, C = Σ c_i), so a barely-covering face cannot
+# hide a covering one; with one covering face S / C = 1 and nothing changes.
 
 # Identity view-projection: NDC x maps to screen (x + 1) W / 2, NDC y to
 # (1 - y) H / 2, and z is the NDC depth.
@@ -44,6 +46,44 @@ function sg_render(triangles, colors, σ, γ, form; bg=SG_GREEN, W=9, H=9)
                        SoftRasterizerConfig(sigma=σ, gamma=γ, bg_color=bg))
 end
 
+sg_screen_tris(triangles, colors, σ, γ, eps, relative, W, H) =
+    [Diff3D._soft_screen_triangle(sg_screen(t[1], W, H), sg_screen(t[2], W, H),
+                                  sg_screen(t[3], W, H), c, σ, γ, eps, relative, W, H)
+     for (t, c) in zip(triangles, colors)]
+
+# Pixel (px, py) under the floor before this change, w_bg = d_bg + eps, for
+# pixels whose nearest candidate has non-zero coverage (passes 1 and 2 of
+# `_soft_pixel_color`, in the same order and with the same helpers). Returns
+# the colour, S against that reference and the number of covering faces.
+function sg_old_floor_pixel(tris, px, py, σ, γ, eps, bg, relative)
+    background = relative ? 1.0 : -1.0 / γ
+    m = background
+    for t in tris
+        Diff3D._soft_covers(t, px, py) || continue
+        relative ? (t.depth < m && (m = t.depth)) : (t.logit > m && (m = t.logit))
+    end
+    total = 0.0
+    average = Color3(0.0, 0.0, 0.0)
+    covering = 0
+    for t in tris
+        Diff3D._soft_covers(t, px, py) || continue
+        @assert !Diff3D._soft_is_faded(t.area, eps)
+        d = Diff3D._signed_distance_to_triangle_area(px - 0.5, py - 0.5, t.s1.x, t.s1.y,
+                                                     t.s2.x, t.s2.y, t.s3.x, t.s3.y, t.area)
+        c = sigmoid_approx(d / σ)
+        c == 0 || (covering += 1)
+        weight = c * (relative ? Diff3D._soft_relative_depth_weight(m, t.depth, γ) :
+                      exp(t.logit - m))
+        next = total + weight
+        average = iszero(total) ? t.color :
+            Diff3D._stable_color_lerp(average, t.color, weight / next)
+        total = next
+    end
+    iszero(total) && return bg, total, covering
+    w_bg = (relative ? Diff3D._soft_relative_depth_weight(m, 1.0, γ) : exp(background - m)) + eps
+    return Diff3D._stable_color_lerp(average, bg, w_bg / (total + w_bg)), total, covering
+end
+
 @testset "A zero-coverage nearer face does not turn a covered pixel into the background" begin
     σ = 1e-4
     # Preconditions: the near triangle is a candidate of the centre pixel (its
@@ -75,15 +115,48 @@ end
     @test isapprox(both[5, 5, :], [1.0, 0.0, 0.0]; atol=1e-7)
 end
 
+@testset "A barely-covering nearer face does not hide the covering face" begin
+    # At σ = 1e-3 the near face's coverage at the centre pixel is
+    # sigmoid(-169.3), about 3e-74: tiny but not zero, so it is the reference.
+    σ = 1e-3
+    near = Diff3D._soft_screen_triangle(sg_screen.(SG_NEAR, 9, 9)..., SG_BLUE,
+                                        σ, 1e-2, 1e-8, false, 9, 9)
+    d = signed_distance_to_triangle(4.5, 4.5, near.s1.x, near.s1.y, near.s2.x,
+                                    near.s2.y, near.s3.x, near.s3.y)
+    c_near = sigmoid_approx(d / σ)
+    @test 0 < c_near < 1e-70
+    dz = 1.0   # depth 0.5 (far) - depth -0.5 (near)
+    # In the floor-free softmax the far face has weight 1 and the near face
+    # c_near exp(dz/γ), so the near face takes the pixel once that exceeds 1,
+    # below γ* = dz / -log(c_near) ≈ 5.9e-3. That is the image model at fixed
+    # σ, not a defect. Blue fraction r / (1 + r), r = c_near exp(dz/γ); the
+    # background weight exp(-0.5/γ) <= e^-50 and the floor (about 1e-8 of the
+    # pixel) are below the tolerance.
+    γ_star = dz / -log(c_near)
+    for form in (:logit, :relative),
+        γ in (1e-2, γ_star / 0.98, γ_star / 0.995, γ_star, γ_star / 1.005, γ_star / 1.02, 1e-3, 1e-4)
+        image = sg_render([SG_FAR, SG_NEAR], [SG_RED, SG_BLUE], σ, γ, form)
+        blue = 1 / (1 + exp(-(log(c_near) + dz / γ)))
+        @test isapprox(image[5, 5, :], [1 - blue, 0.0, blue]; atol=1e-6)
+    end
+    # At γ = 1e-2 the covering far face wins (before the change the floor,
+    # scaled by the near reference, made the pixel the green background).
+    for form in (:logit, :relative)
+        image = sg_render([SG_FAR, SG_NEAR], [SG_RED, SG_BLUE], σ, 1e-2, form)
+        @test image[5, 5, 1] > 1 - 1e-7 && image[5, 5, 2] < 1e-7
+    end
+end
+
 # Derivative scene. Red F1 and green F2 share the vertical edge x = δ (NDC),
 # 2e-3 px right of the centre pixel's centre, so at σ = 4e-3 both cover it
 # partially (sigmoid(±0.5)) and every input kind has a derivative there. The
 # blue N lies nearer (depth -0.5); its padded bounding box holds the centre
-# pixel, 3.5 px from its hypotenuse, where its coverage sigmoid(-875) is
-# exactly zero. N therefore owns the pass-1 reference and the changed branch
-# is active. eps = 1e-3 makes the floor, whose scale is set by the reference
-# owner, a sizeable part of the pixel. Parameters: N's vertices 19:27 and
-# colour 34:36 last among the geometry and colours; then σ, γ, eps, bg.
+# pixel, 3.5 px from its hypotenuse. At σ = 4e-3 its coverage there,
+# sigmoid(-875), is exactly zero, so N owns the pass-1 reference and is
+# dropped; at σ = 0.1 it is sigmoid(-35) ≈ 6e-16, so N is the reference. eps =
+# 1e-3 makes the floor eps * S / C, with both its S and C adjoints, a sizeable
+# part of the pixel. Parameters: N's vertices 19:27 and colour 34:36 last
+# among the geometry and colours; then σ, γ, eps, bg.
 const SG_DELTA = 2e-3 / 4.5
 const SG_PARAMS = [SG_DELTA, -3.0, 0.5, SG_DELTA, 3.0, 0.52, -3.0, 0.0, 0.48,
                    SG_DELTA, -3.0, 0.56, 3.0, 0.0, 0.55, SG_DELTA, 3.0, 0.54,
@@ -125,42 +198,83 @@ sg_expand(q) = vcat(q[1:18], zeros(eltype(q), 9), q[19:24], zeros(eltype(q), 3),
 sg_normwise(a, b) = maximum(abs, a .- b) / maximum(abs, b)
 
 @testset "Soft derivatives follow the covering reference face" begin
-    p = SG_PARAMS
-    # Preconditions for the changed branch at the centre pixel: N is the
-    # nearest candidate there and its coverage is exactly zero.
-    n_tri = Diff3D._soft_screen_triangle(
-        sg_screen(Vec3(p[19], p[20], p[21]), 9, 9), sg_screen(Vec3(p[22], p[23], p[24]), 9, 9),
-        sg_screen(Vec3(p[25], p[26], p[27]), 9, 9), SG_BLUE, p[37], p[38], p[39], false, 9, 9)
-    @test Diff3D._soft_covers(n_tri, 5, 5)
-    @test sigmoid_approx(signed_distance_to_triangle(4.5, 4.5, n_tri.s1.x, n_tri.s1.y,
-        n_tri.s2.x, n_tri.s2.y, n_tri.s3.x, n_tri.s3.y) / p[37]) == 0.0
-    shared = setdiff(eachindex(p), SG_N_PARAMS)
+    for σ in (4e-3, 0.1)
+        p = copy(SG_PARAMS)
+        p[37] = σ
+        # N is a candidate of the centre pixel; its coverage there is exactly
+        # zero at σ = 4e-3 and tiny but non-zero at σ = 0.1.
+        n_tri = Diff3D._soft_screen_triangle(
+            sg_screen(Vec3(p[19], p[20], p[21]), 9, 9), sg_screen(Vec3(p[22], p[23], p[24]), 9, 9),
+            sg_screen(Vec3(p[25], p[26], p[27]), 9, 9), SG_BLUE, p[37], p[38], p[39], false, 9, 9)
+        @test Diff3D._soft_covers(n_tri, 5, 5)
+        c_n = sigmoid_approx(signed_distance_to_triangle(4.5, 4.5, n_tri.s1.x, n_tri.s1.y,
+            n_tri.s2.x, n_tri.s2.y, n_tri.s3.x, n_tri.s3.y) / σ)
+        @test σ == 4e-3 ? c_n == 0.0 : 0 < c_n < 1e-12
+        shared = setdiff(eachindex(p), SG_N_PARAMS)
+        for form in (:logit, :relative)
+            centre = q -> sg_centre(q, form)
+            forward = ForwardDiff.gradient(centre, p)
+            reverse = reverse_gradient(centre, p)
+            @test all(isfinite, forward) && all(isfinite, reverse)
+            # The two AD modes differentiate the same branch choices; the
+            # fused reverse pullback carries the floor's S / C adjoints.
+            @test sg_normwise(reverse, forward) <= 1e-9
+            # Central differences of the Float64 renderer agree.
+            @test sg_normwise(sg_central_differences(centre, p), forward) <= 1e-6
+            if iszero(c_n)
+                # N has no influence: no derivative (before the fix its depths
+                # received the reference's eps-floor derivative), and the
+                # pixel and its gradient are exactly those of the scene
+                # without N. `sg_expand` re-inserts unused N slots, so
+                # `without` sees F1, F2 and the scalars at the same positions.
+                @test all(iszero, forward[SG_N_PARAMS])
+                @test all(iszero, reverse[SG_N_PARAMS])
+                without = q -> sg_centre(sg_expand(q), form; with_near=false)
+                @test sg_centre(p, form) == without(p[shared])
+                @test forward[shared] == ForwardDiff.gradient(without, p[shared])
+                @test reverse[shared] == reverse_gradient(without, p[shared])
+            else
+                # N's tiny coverage enters through the softmax and C.
+                @test any(!iszero, forward[19:27])
+            end
+            # Whole image: the reference changes at other pixels of N's box too.
+            image = q -> sum(sg_derivative_image(q, form) .* SG_WEIGHTS)
+            @test sg_normwise(reverse_gradient(image, p), ForwardDiff.gradient(image, p)) <= 1e-9
+        end
+    end
+end
+
+@testset "Reverse derivatives stay finite when the reference coverage is subnormal" begin
+    # σ puts the near face's coverage at the centre pixel near e^-730, a
+    # subnormal number; at γ = 1e-3 the far face's relative depth weight
+    # e^-1000 underflows to zero. Then S = c_near and the denominator are
+    # subnormal and 1 / denom overflows; the fused pullback must not form it
+    # (it gave Inf * 0 = NaN). The derivatives here are rounding-level: the
+    # floor eps * S / C itself underflows, so the two AD modes need not agree
+    # beyond that. Parameters: the 18 vertex coordinates of both faces.
+    near = Diff3D._soft_screen_triangle(sg_screen.(SG_NEAR, 9, 9)..., SG_BLUE,
+                                        1e-3, 1e-3, 1e-8, false, 9, 9)
+    d = signed_distance_to_triangle(4.5, 4.5, near.s1.x, near.s1.y, near.s2.x,
+                                    near.s2.y, near.s3.x, near.s3.y)
+    σ = -d / 730
+    @test 0 < sigmoid_approx(d / σ) < floatmin(Float64)
+    p = [c for v in vcat(SG_FAR, SG_NEAR) for c in (v.x, v.y, v.z)]
     for form in (:logit, :relative)
-        centre = q -> sg_centre(q, form)
-        forward = ForwardDiff.gradient(centre, p)
-        reverse = reverse_gradient(centre, p)
-        @test all(isfinite, forward) && all(isfinite, reverse)
-        # The two AD modes differentiate the same branch choices.
-        @test sg_normwise(reverse, forward) <= 1e-9
-        # Central differences of the Float64 renderer agree; the parameters
-        # include F1's depths, whose logit sets the reference after the fix and
-        # so carries the eps-floor derivative.
-        @test sg_normwise(sg_central_differences(centre, p), forward) <= 1e-6
-        # N has zero coverage at the centre pixel, so it has no influence
-        # there: no derivative (before the fix its depths received the
-        # reference's eps-floor derivative), and the pixel and its gradient
-        # are exactly those of the scene without N.
-        @test all(iszero, forward[SG_N_PARAMS])
-        @test all(iszero, reverse[SG_N_PARAMS])
-        # `sg_expand` re-inserts unused N slots, so `without` sees F1, F2 and
-        # the scalars at the same parameter positions.
-        without = q -> sg_centre(sg_expand(q), form; with_near=false)
-        @test sg_centre(p, form) == without(p[shared])
-        @test forward[shared] == ForwardDiff.gradient(without, p[shared])
-        @test reverse[shared] == reverse_gradient(without, p[shared])
-        # Whole image: the changed branch also runs at other pixels of N's box.
-        image = q -> sum(sg_derivative_image(q, form) .* SG_WEIGHTS)
-        @test sg_normwise(reverse_gradient(image, p), ForwardDiff.gradient(image, p)) <= 1e-9
+        function centre(q)
+            triangles = [[Vec3(q[9k + 3i - 2], q[9k + 3i - 1], q[9k + 3i]) for i in 1:3] for k in 0:1]
+            T = eltype(q)
+            colors = [Color3{T}(1, 0, 0), Color3{T}(0, 0, 1)]
+            vertices = reduce(vcat, triangles)
+            γ = form === :relative ? T(1e-310) : T(1e-3)
+            config = SoftRasterizerConfig(sigma=T(σ), gamma=γ, bg_color=Color3{T}(0, 1, 0))
+            image = soft_render(vertices, [(1, 2, 3), (4, 5, 6)], colors,
+                                convert(Mat4{T}, SG_VP), 9, 9, config)
+            return sum(image[5, 5, :] .* [0.3, -0.5, 0.7])
+        end
+        # c_near exp(dz/γ) is huge, so the near face takes the pixel.
+        @test isapprox(centre(p), 0.7; atol=1e-7)
+        @test all(isfinite, ForwardDiff.gradient(centre, p))
+        @test all(isfinite, reverse_gradient(centre, p))
     end
 end
 
@@ -218,46 +332,39 @@ end
     end
 end
 
-# FNV-1a over the Float64 bit patterns: a checksum that does not depend on the
-# Julia version's `hash`.
-function sg_checksum(image)
-    h = 0xcbf29ce484222325
-    for x in image
-        h = (h ⊻ reinterpret(UInt64, Float64(x))) * 0x00000100000001b3
+@testset "Pixels with one covering face keep the eps floor; others move by at most eps / (S + eps)" begin
+    # No candidate of these renders has zero coverage (σ >= 0.3 with a
+    # bounding-box margin of max(3σ, 1) px), so the exact-zero rule is inactive
+    # and the floor is the only change. With b = d_bg and r = S / C <= 1 the
+    # background fraction moves from (b + eps) / (S + b + eps) to
+    # (b + eps r) / (S + b + eps r), a difference of at most eps / (S + eps);
+    # colours lie in [0, 1], so that bounds each channel. Exactly one covering
+    # face gives r = 1: the same bits as before.
+    disjoint = [[Vec3(-0.9, -0.9, 0.2), Vec3(-0.2, -0.8, 0.3), Vec3(-0.6, -0.1, 0.25)],
+                [Vec3(0.3, 0.3, -0.4), Vec3(0.9, 0.2, -0.3), Vec3(0.5, 0.9, -0.35)]]
+    scenes = ((disjoint, [Color3(0.9, 0.2, 0.1), Color3(0.1, 0.3, 0.8)], 0.5, 0.05, 24),
+              ([SG_FAR, SG_NEAR], [SG_RED, SG_BLUE], 0.3, 1e-4, 9),
+              ([SG_FAR, SG_NEAR], [SG_RED, SG_BLUE], 0.3, 0.05, 9))
+    bg = Color3(0.2, 0.6, 0.4)
+    counts = zeros(Int, 3)   # single-face pixels, multi-face pixels, changed multi-face pixels
+    for (triangles, colors, σ, γ, W) in scenes, relative in (false, true), eps in (1e-8, 1e-3)
+        tris = sg_screen_tris(triangles, colors, σ, γ, eps, relative, W, W)
+        image = Diff3D._soft_render_screen(Float64, tris, length(tris), W, W, σ, γ, bg,
+                                           eps, relative, nothing)
+        for py in 1:W, px in 1:W
+            old, total, covering = sg_old_floor_pixel(tris, px, py, σ, γ, eps, bg, relative)
+            new = image[py, px, :]
+            if covering <= 1
+                counts[1] += 1
+                @test new == [old.r, old.g, old.b]
+            else
+                counts[2] += 1
+                change = maximum(abs, new .- [old.r, old.g, old.b])
+                change > 0 && (counts[3] += 1)
+                @test change <= eps / (total + eps) * (1 + 1e-12) + 1e-15
+            end
+        end
     end
-    return h
-end
-
-# Checksums of the images before the fix, recorded on Julia 1.10 and 1.13 with
-# the code before and after the fix (identical bits on each version). The two
-# versions differ from each other already before the fix: the Float64
-# `point_segment_distance` calls Base's three-argument `hypot`, which sums the
-# squares with fast-math additions (Base.Math `_hypot` for tuples), so LLVM
-# may reassociate them and the last bit of some distances depends on the
-# compiler version. Other versions have not been recorded and are skipped.
-const SG_PINNED = VERSION.major == 1 && VERSION.minor == 10 ?
-    (0x365338aee837936f, 0x27cc03e769899a8a, 0x13f2f7dce59950ce) :
-    VERSION.major == 1 && VERSION.minor == 13 ?
-    (0xb2af542443f4a073, 0xdd962baeea661237, 0xfb0290ada526f99e) : nothing
-
-@testset "Soft images without zero-coverage reference owners are unchanged" begin
-    # No pixel of these renders has a pass-1 reference owner with zero
-    # coverage, so the fix must leave every bit as it was. This guards the
-    # compatibility of the 2.x image model rather than the defect itself, so
-    # it also passes on the code before the fix.
-    if SG_PINNED === nothing
-        @test_skip "image checksums are recorded for Julia 1.10 and 1.13 only"
-    else
-        camera = sg_camera()
-        scene = sg_lit_scene(:sphere)
-        @test sg_checksum(soft_render_scene(scene, camera, 40, 40; sigma=0.5, gamma=0.1)) ==
-              SG_PINNED[1]
-        @test sg_checksum(soft_render_scene(scene, camera, 40, 40; sigma=1e-2, gamma=1e-3)) ==
-              SG_PINNED[2]
-        # The two-triangle scene at σ = 0.3: the near face has non-zero
-        # coverage at every pixel of its box, so it keeps the reference where
-        # it is nearest.
-        image = sg_render([SG_FAR, SG_NEAR], [SG_RED, SG_BLUE], 0.3, 1e-4, :logit)
-        @test sg_checksum(image) == SG_PINNED[3]
-    end
+    # Both kinds occur, and the floor does move multi-face pixels.
+    @test all(>(0), counts)
 end

@@ -17,9 +17,11 @@ Configuration for [`soft_render`](@ref). `sigma` is the edge softness in
 pixels (coverage `sigmoid_approx(d / sigma)` of the signed distance `d`),
 `gamma` the depth-softmax temperature in NDC depth units, and `bg_color` the
 colour of the virtual background surface at the far plane. `eps` (positive)
-is the floor added to the background weight, the relative near/far clipping
-margin, and the doubled screen area (in pixel²) below which a triangle's
-coverage fades smoothly to zero as it degenerates.
+scales the floor added to the background weight (`eps` times the
+coverage-weighted mean depth weight of the faces at the pixel, see
+[`soft_render`](@ref)), and is also the relative near/far clipping margin and
+the doubled screen area (in pixel²) below which a triangle's coverage fades
+smoothly to zero as it degenerates.
 """
 struct SoftRasterizerConfig{T<:Real}
     sigma::T       # Edge softness in pixel units (larger = softer)
@@ -197,6 +199,20 @@ Arguments:
 - config: SoftRasterizerConfig
 
 Returns: Array{T, 3} of size (height, width, 3) — RGB image.
+
+Image model: each pixel is a softmax over the faces whose padded bounding box
+holds it and a background surface at the far plane `z = 1`. With coverage
+`c_i = sigmoid(d_i / sigma)` and mean NDC depth `z_i`, and `z_ref` the depth of
+the nearest face with non-zero coverage, face `i` has weight
+`c_i * exp(-(z_i - z_ref) / gamma)` and the background
+`exp(-(1 - z_ref) / gamma) + eps * S / C`, where `S` is the sum of the face
+weights and `C` the sum of the coverages (with one covering face the floor is
+`eps`). A pixel no face covers is the background colour. As `sigma` and `gamma`
+shrink, a pixel takes the face with the largest `c_i * exp(-z_i / gamma)`: a
+nearer face whose coverage at the pixel is `c` wins over a face `dz` farther
+that covers it once `c * exp(dz / gamma) > 1`. The image therefore converges to
+the hard rasterizer only when `sigma` is small enough that off-face coverage is
+negligible against `exp(-dz / gamma)`.
 
 Degenerate triangles: a triangle whose doubled screen area `|A|` is below
 `config.eps` (pixel²) has its coverage multiplied by `s(|A| / eps)` with
@@ -411,9 +427,25 @@ end
 # SoftRas aggregation for one pixel. The foreground face weights and a
 # background weight (a virtual surface at the far plane z=+1, hence exponent
 # -1/γ) form a softmax over {faces, background}, stabilized by the maximum
-# logit `m`. A covered pixel approaches the nearest face colour as σ,γ -> 0
-# (recovering the hard rasterizer); an uncovered pixel reduces exactly to the
-# background. The eps floor keeps the denominator strictly positive.
+# logit `m`. An uncovered pixel reduces exactly to the background.
+#
+# Background floor. With c_i the (faded) coverage and d_i = exp(logit_i - m)
+# the depth weight of each contributing face, S = Σ c_i d_i and C = Σ c_i, the
+# background weight is w_bg = d_bg + eps * S / C. When d_bg underflows, the
+# background fraction is eps / (C + eps): it depends on the total coverage
+# only, not on which face sets m, so a face whose coverage is tiny cannot push
+# a face that fully covers the pixel below the floor, while a pixel that no
+# face really covers (C << eps) still resolves to the background. In absolute
+# terms the floor is eps Σ c_i exp(logit_i) / C, smooth in every c_i and
+# logit_i, also where a new face's coverage leaves zero and it takes over the
+# reference. With one face of non-zero coverage, which is then the reference
+# (d = 1), S / C is identically 1 and the floor is eps, as it always was.
+#
+# Limits. As σ, γ -> 0 the softmax picks, among the faces with non-zero
+# coverage, the one maximising c_i exp(logit_i): a nearer face whose
+# coverage at the pixel is c wins over a covering face dz farther once
+# c exp(dz/γ) > 1. Convergence to the hard rasterizer therefore needs σ small
+# enough that off-face coverage is negligible against exp(-dz/γ).
 #
 # When 1/γ is not representable, pass 1 tracks the minimum depth instead and
 # pass 2 exponentiates only non-positive relative depth deltas. Both forms
@@ -452,44 +484,47 @@ end
         any_face = true
     end
 
-    total_weight = zero_weight
-    average_color = zero_color
-    if any_face
-        total_weight, average_color, covered, reference, reference_owner =
-            _soft_accumulate_faces(screen_tris, tiles, face_lo, face_hi, px, py,
-                cx, cy, σ, γ, eps, use_relative_depth, m, background_logit,
-                false, zero_weight, zero_color)
-        if covered && reference_owner != owner
-            m = reference
-            total_weight, average_color, _, _, _ =
-                _soft_accumulate_faces(screen_tris, tiles, face_lo, face_hi,
-                    px, py, cx, cy, σ, γ, eps, use_relative_depth, m,
-                    background_logit, true, zero_weight, zero_color)
-        end
+    any_face || return bg
+    total_weight, coverage_sum, average_color, covering, reference, reference_owner =
+        _soft_accumulate_faces(screen_tris, tiles, face_lo, face_hi, px, py,
+            cx, cy, σ, γ, eps, use_relative_depth, m, background_logit,
+            false, zero_weight, zero_color)
+    if covering > 0 && reference_owner != owner
+        m = reference
+        total_weight, coverage_sum, average_color, _, _, _ =
+            _soft_accumulate_faces(screen_tris, tiles, face_lo, face_hi,
+                px, py, cx, cy, σ, γ, eps, use_relative_depth, m,
+                background_logit, true, zero_weight, zero_color)
     end
+    # The reference face has depth weight 1, so S > 0 whenever C > 0.
+    iszero(_primal_value(total_weight)) && return bg
 
+    # With one covering face, the reference, S / C is identically 1 (value and
+    # derivatives), so the floor is eps itself.
     w_bg = (use_relative_depth ?
         _soft_relative_depth_weight(m, one(m), γ) :
-        exp(background_logit - m)) + eps
+        exp(background_logit - m)) +
+        (covering > 1 ? eps * (total_weight / coverage_sum) : eps)
     denom = total_weight + w_bg
-    return iszero(_primal_value(total_weight)) ? bg :
-        _stable_color_lerp(average_color, bg, w_bg / denom)
+    return _stable_color_lerp(average_color, bg, w_bg / denom)
 end
 
 # Pass 2 (and pass 3) of `_soft_pixel_color`: the coverage- and depth-weighted
-# colour sum against the reference `m`. Also returns whether any candidate has
-# non-zero coverage and the reference (value and face index, 0 for the
-# background) over those candidates. Coverage tests use primal values, so AD
-# scalars take the branches of the Float64 renderer; a zero primal coverage
-# also has zero partials (the sigmoid derivative underflows with it).
+# colour sum against the reference `m` with its total weight S and total
+# coverage C. Also returns the number of candidates with non-zero coverage
+# and the reference (value and face index, 0 for the background) over them.
+# Coverage tests use primal values, so AD scalars take the branches of the
+# Float64 renderer; a zero primal coverage also has zero partials (the sigmoid
+# derivative underflows with it).
 @inline function _soft_accumulate_faces(screen_tris, tiles, face_lo::Int,
                                         face_hi::Int, px::Int, py::Int, cx, cy,
                                         σ, γ, eps, use_relative_depth::Bool, m,
                                         background_logit, skip_uncovered::Bool,
                                         zero_weight, zero_color)
     total_weight = zero_weight
+    coverage_sum = zero_weight
     average_color = zero_color
-    covered = false
+    covering = 0
     reference = background_logit
     reference_owner = 0
     for k in face_lo:face_hi
@@ -508,7 +543,7 @@ end
             # skipped face may overflow, and 0 * Inf is NaN.
             skip_uncovered && continue
         else
-            covered = true
+            covering += 1
             if use_relative_depth
                 tri.depth < reference && (reference = tri.depth; reference_owner = fi)
             else
@@ -523,8 +558,10 @@ end
         average_color = iszero(_primal_value(total_weight)) ? tri.color :
             _stable_color_lerp(average_color, tri.color, w / next_weight)
         total_weight = next_weight
+        coverage_sum += coverage
     end
-    return total_weight, average_color, covered, reference, reference_owner
+    return total_weight, coverage_sum, average_color, covering, reference,
+        reference_owner
 end
 
 # Image model at degeneracy. A triangle whose doubled screen area |A| is below
