@@ -1927,3 +1927,93 @@ function frustum_intersects_sprite(f::Frustum, sprite::Sprite)
                                                              compute_world_matrix(sprite)))
 end
 
+# ========================== Box3 from objects ==========================
+# three.js Box3.setFromObject and Box3.expandByObject (src/math/Box3.js:139-161,
+# 303-385).
+
+"""
+    box3_expand_by_object(box, object; precise=false) -> Box3
+    box3_from_object(object; precise=false) -> Box3
+
+World-axis-aligned box of `object` and all of its descendants, joined with
+`box` (three.js `Box3.expandByObject`; `box3_from_object` starts from the empty
+box, as `Box3.setFromObject` does). Every node is visited, visible or not.
+
+For each node with a geometry, the default bounds its local box placed by the
+world matrix: the geometry's [`compute_bounding_box`](@ref) (which covers its
+morph targets), for an `InstancedMesh` the union of that box under every
+instance matrix (three.js `InstancedMesh.computeBoundingBox`), and for a
+`SkinnedMesh` the box of its posed vertices (`SkinnedMesh.computeBoundingBox`;
+three.js keeps that box from its first use, this uses the current pose). With
+`precise=true` each vertex is placed by the world matrix instead, giving a
+tighter box: a `Mesh` or `SkinnedMesh` uses its posed vertices (current morph
+influences, and skinning; three.js `Mesh.getVertexPosition`), lines and points
+their stored positions, and an `InstancedMesh` keeps the default bounds, as in
+three.js. A `Sprite` is bounded by its unit quad `[-0.5, 0.5]² × {0}`, the
+geometry three.js gives every sprite.
+"""
+function box3_expand_by_object(box::Box3, object::AbstractObject3D; precise::Bool=false)
+    result = _box3_union_object_geometry(box, object, precise)
+    for child in get_children(object)
+        result = box3_expand_by_object(result, child; precise=precise)
+    end
+    return result
+end
+
+@doc (@doc box3_expand_by_object)
+box3_from_object(object::AbstractObject3D; precise::Bool=false) =
+    box3_expand_by_object(Box3(), object; precise=precise)
+
+# three.js Sprite.js:20-37: the shared quad every sprite draws.
+const _SPRITE_QUAD_BOX = Box3(Vec3(-0.5, -0.5, 0.0), Vec3(0.5, 0.5, 0.0))
+
+function _box3_union_object_geometry(box::Box3, object::AbstractObject3D,
+                                     precise::Bool)
+    if object isa Sprite
+        return box3_union(box, box3_apply_matrix4(_SPRITE_QUAD_BOX,
+                                                  compute_world_matrix(object)))
+    end
+    object isa Union{Mesh, SkinnedMesh, InstancedMesh, LineObject, LineSegments,
+                     LineLoop, PointsObject} || return box
+    geometry = object.geometry
+    geometry isa BufferGeometry ||
+        throw(ArgumentError("box3_expand_by_object needs a BufferGeometry on $(nameof(typeof(object)))"))
+    world = compute_world_matrix(object)
+    if precise && !(object isa InstancedMesh)
+        for point in _box3_object_vertices(object, geometry)
+            box = box3_expand_by_point(box, mat4_transform_point(world, point))
+        end
+        return box
+    end
+    local_box = if object isa SkinnedMesh
+        box3_from_points(apply_skinning(object))
+    elseif object isa InstancedMesh
+        _instanced_bounding_box(compute_bounding_box(geometry), object.instance_matrices)
+    else
+        compute_bounding_box(geometry)
+    end
+    return box3_union(box, box3_apply_matrix4(local_box, world))
+end
+
+# The vertices `expandByObject(object, true)` visits: the posed positions of a
+# mesh (`Mesh.getVertexPosition` and `SkinnedMesh.getVertexPosition`), the
+# stored positions of lines and points (`Vector3.fromBufferAttribute`).
+function _box3_object_vertices(object::AbstractObject3D, geometry::BufferGeometry)
+    object isa SkinnedMesh && return apply_skinning(object)
+    _validate_geometry_vertices(geometry, "box3_expand_by_object")
+    if object isa Mesh
+        morphed = _object_morph_positions(object, geometry)
+        morphed === nothing || return morphed
+    end
+    return [get_vertex(geometry, index) for index in 1:geometry.n_vertices]
+end
+
+# three.js InstancedMesh.computeBoundingBox (InstancedMesh.js:115-144): the
+# union of the geometry box placed by each instance matrix.
+function _instanced_bounding_box(box::Box3, matrices::Vector{<:Mat4})
+    result = Box3()
+    for matrix in matrices
+        result = box3_union(result, box3_apply_matrix4(box, matrix))
+    end
+    return result
+end
