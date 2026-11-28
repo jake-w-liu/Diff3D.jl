@@ -1802,6 +1802,10 @@ function _decode_tga(bytes::AbstractVector{UInt8})
     pixel_size in (8, 16, 24, 32) || error("TGA pixel size $pixel_size is not supported")
     use_grey && !(pixel_size in (8, 16)) &&
         error("TGA greyscale images must have 8 or 16-bit pixels, got $pixel_size")
+    # An 8-bit pixel is a palette index or a grey level; TGALoader.js reads it
+    # through the colour map, which true-colour images do not have.
+    !use_grey && !use_pal && pixel_size == 8 &&
+        error("TGA true-colour images must have 16, 24 or 32-bit pixels, got 8")
     offset = 18 + id_length
     offset <= n || error("TGA file is truncated in its image ID")
     palette = UInt8[]

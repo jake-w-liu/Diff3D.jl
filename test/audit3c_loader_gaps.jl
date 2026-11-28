@@ -559,6 +559,13 @@ end
         @test_throws "cannot have a colour map" Diff3D._decode_tga(bad(b -> b[2] = 1))
         @test_throws "image size 0x2 is invalid" Diff3D._decode_tga(bad(b -> b[13] = 0))
         @test_throws "pixel size 12 is not supported" Diff3D._decode_tga(bad(b -> b[17] = 12))
+        # An 8-bit true-colour image has no colour map to index (three.js
+        # TGALoader.js:399-400 reads it through the missing palette and
+        # throws); reading it as B, G, R bytes would run past the pixel data.
+        @test_throws "true-colour images must have 16, 24 or 32-bit pixels" Diff3D._decode_tga(
+            UInt8[0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 2, 0, 8, 32, 1, 2, 3, 4])
+        @test_throws "true-colour images must have 16, 24 or 32-bit pixels" Diff3D._decode_tga(
+            UInt8[0, 0, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 2, 0, 8, 32, 0x83, 9])
         @test_throws "pixel data is truncated" Diff3D._decode_tga(base[1:end - 1])
         rle = _A3C_TGA["rle24_tr"][1]
         @test_throws "run-length data is truncated" Diff3D._decode_tga(rle[1:end - 2])
