@@ -415,6 +415,25 @@ function parse_ies(text::AbstractString)
     return _ies_profile_from_owned(vangles, cand)
 end
 
+# ========================== Per-frame light world matrices ==========================
+# Shading asks for a parented light's world position or direction once per
+# shaded fragment and light, and every request walked the parent chain through
+# `compute_world_matrix`. A render arms the lights it collected (see
+# `_arm_light_world_cache!`), computing each parented light's world matrix once,
+# and disarms them when the frame ends, normally or by an exception. While a
+# light is armed `_light_world_matrix` returns the stored matrix, which is the
+# same `compute_world_matrix` value, so images are bit-identical. The scene
+# must not change while a render reads it (see the concurrency notes in the
+# manual), which is what makes the stored matrix current for the whole frame.
+mutable struct _LightWorldCache
+    # Number of renders in progress that armed this light: a render nested in
+    # another one (multi-view, MSAA) arms and disarms it again.
+    depth::Int
+    matrix::Mat4{Float64}
+end
+
+_LightWorldCache() = _LightWorldCache(0, Mat4{Float64}())
+
 # ========================== AmbientLight ==========================
 
 mutable struct AmbientLight <: AbstractLight
@@ -429,10 +448,13 @@ mutable struct AmbientLight <: AbstractLight
     color::Color3{Float64}
     intensity::Float64
     render_order::Float64  # three.js Object3D.renderOrder
+    _world_cache::_LightWorldCache  # world matrix while a render is in progress
 end
 
-# Field layout before `render_order` was added (three.js default 0).
-AmbientLight(args::Vararg{Any,10}) = AmbientLight(args..., 0.0)
+# Field layouts before `render_order` (three.js default 0) and the
+# per-frame world-matrix cache were added.
+AmbientLight(args::Vararg{Any,10}) = AmbientLight(args..., 0.0, _LightWorldCache())
+AmbientLight(args::Vararg{Any,11}) = AmbientLight(args..., _LightWorldCache())
 
 function AmbientLight(; color=Color3(1.0, 1.0, 1.0), intensity=1.0, name="AmbientLight")
     AmbientLight(Vec3(), Euler(), Vec3(1.0,1.0,1.0),
@@ -530,10 +552,13 @@ mutable struct DirectionalLight <: AbstractLight
     shadow_normal_bias::Float64   # three.js light.shadow.normalBias
     rotation_driven::Bool
     render_order::Float64  # three.js Object3D.renderOrder
+    _world_cache::_LightWorldCache  # world matrix while a render is in progress
 end
 
-# Field layout before `render_order` was added (three.js default 0).
-DirectionalLight(args::Vararg{Any,17}) = DirectionalLight(args..., 0.0)
+# Field layouts before `render_order` (three.js default 0) and the
+# per-frame world-matrix cache were added.
+DirectionalLight(args::Vararg{Any,17}) = DirectionalLight(args..., 0.0, _LightWorldCache())
+DirectionalLight(args::Vararg{Any,18}) = DirectionalLight(args..., _LightWorldCache())
 
 # Positional forms: 14 fields (before rotation_driven existed), 15 (with
 # rotation_driven, before the shadow settings), and 16 (all but rotation_driven).
@@ -595,10 +620,13 @@ mutable struct PointLight <: AbstractLight
     shadow_intensity::Float64     # three.js light.shadow.intensity
     shadow_normal_bias::Float64   # three.js light.shadow.normalBias
     render_order::Float64  # three.js Object3D.renderOrder
+    _world_cache::_LightWorldCache  # world matrix while a render is in progress
 end
 
-# Field layout before `render_order` was added (three.js default 0).
-PointLight(args::Vararg{Any,18}) = PointLight(args..., 0.0)
+# Field layouts before `render_order` (three.js default 0) and the
+# per-frame world-matrix cache were added.
+PointLight(args::Vararg{Any,18}) = PointLight(args..., 0.0, _LightWorldCache())
+PointLight(args::Vararg{Any,19}) = PointLight(args..., _LightWorldCache())
 
 PointLight(args::Vararg{Any,16}) = PointLight(args..., 1.0, 0.0)
 
@@ -662,10 +690,13 @@ mutable struct SpotLight <: AbstractLight
     shadow_normal_bias::Float64   # three.js light.shadow.normalBias
     rotation_driven::Bool
     render_order::Float64  # three.js Object3D.renderOrder
+    _world_cache::_LightWorldCache  # world matrix while a render is in progress
 end
 
-# Field layout before `render_order` was added (three.js default 0).
-SpotLight(args::Vararg{Any,22}) = SpotLight(args..., 0.0)
+# Field layouts before `render_order` (three.js default 0) and the
+# per-frame world-matrix cache were added.
+SpotLight(args::Vararg{Any,22}) = SpotLight(args..., 0.0, _LightWorldCache())
+SpotLight(args::Vararg{Any,23}) = SpotLight(args..., _LightWorldCache())
 
 # Positional forms: 19 fields (before rotation_driven existed), 20 (with
 # rotation_driven, before the shadow settings), and 21 (all but rotation_driven).
@@ -727,10 +758,13 @@ mutable struct HemisphereLight <: AbstractLight
     ground_color::Color3{Float64}  # ground color
     intensity::Float64
     render_order::Float64  # three.js Object3D.renderOrder
+    _world_cache::_LightWorldCache  # world matrix while a render is in progress
 end
 
-# Field layout before `render_order` was added (three.js default 0).
-HemisphereLight(args::Vararg{Any,11}) = HemisphereLight(args..., 0.0)
+# Field layouts before `render_order` (three.js default 0) and the
+# per-frame world-matrix cache were added.
+HemisphereLight(args::Vararg{Any,11}) = HemisphereLight(args..., 0.0, _LightWorldCache())
+HemisphereLight(args::Vararg{Any,12}) = HemisphereLight(args..., _LightWorldCache())
 
 # three.js HemisphereLight.js:50 builds `groundColor` with `new Color(groundColor)`,
 # which is white when the argument is omitted.
@@ -772,10 +806,13 @@ mutable struct RectAreaLight <: AbstractLight
     height::Float64
     target::Vec3{Float64}
     render_order::Float64  # three.js Object3D.renderOrder
+    _world_cache::_LightWorldCache  # world matrix while a render is in progress
 end
 
-# Field layout before `render_order` was added (three.js default 0).
-RectAreaLight(args::Vararg{Any,13}) = RectAreaLight(args..., 0.0)
+# Field layouts before `render_order` (three.js default 0) and the
+# per-frame world-matrix cache were added.
+RectAreaLight(args::Vararg{Any,13}) = RectAreaLight(args..., 0.0, _LightWorldCache())
+RectAreaLight(args::Vararg{Any,14}) = RectAreaLight(args..., _LightWorldCache())
 
 # three.js RectAreaLight.js:38: `constructor( color, intensity, width = 10, height = 10 )`.
 function RectAreaLight(; color=Color3(1.0,1.0,1.0), intensity=1.0, width=10.0, height=10.0,
@@ -846,10 +883,13 @@ mutable struct LightProbe <: AbstractLight
     intensity::Float64
     sh::NTuple{9, Color3{Float64}}   # three.js LightProbe.sh coefficients
     render_order::Float64  # three.js Object3D.renderOrder
+    _world_cache::_LightWorldCache  # world matrix while a render is in progress
 end
 
-# Field layout before `render_order` was added (three.js default 0).
-LightProbe(args::Vararg{Any,11}) = LightProbe(args..., 0.0)
+# Field layouts before `render_order` (three.js default 0) and the
+# per-frame world-matrix cache were added.
+LightProbe(args::Vararg{Any,11}) = LightProbe(args..., 0.0, _LightWorldCache())
+LightProbe(args::Vararg{Any,12}) = LightProbe(args..., _LightWorldCache())
 
 LightProbe(position, rotation, scale, parent, children, visible, name, id, coeffs,
            intensity) =
@@ -1098,12 +1138,66 @@ end
     return nothing
 end
 
+# World matrix of `light`: the one stored for the frame while a render that
+# armed it is in progress, else computed from the parent chain.
+@inline function _light_world_matrix(light::AbstractLight)::Mat4{Float64}
+    cache = getfield(light, :_world_cache)::_LightWorldCache
+    cache.depth > 0 && return cache.matrix
+    return compute_world_matrix(light)::Mat4{Float64}
+end
+
+# Whether `compute_world_matrix(object)` returns without raising: every
+# transform on the parent chain is finite (`_validate_object_transform`).
+function _world_transform_chain_finite(object::AbstractObject3D)
+    node::Union{Nothing, AbstractObject3D} = object
+    while node !== nothing
+        _object_transform_finite(node) || return false
+        node = get_parent(node)
+    end
+    return true
+end
+
+# Arm the parented lights of a frame (see `_LightWorldCache`). A light whose
+# transform chain is not finite stays unarmed, so the error it raises keeps
+# coming from the first shading query, as before.
+function _arm_light_world_cache!(lights::AbstractVector)
+    for light in lights
+        _arm_light_world!(light)
+    end
+    return lights
+end
+
+@inline function _arm_light_world!(light::AbstractLight)
+    get_parent(light) === nothing && return nothing
+    cache = getfield(light, :_world_cache)::_LightWorldCache
+    if cache.depth == 0
+        _world_transform_chain_finite(light) || return nothing
+        cache.matrix = compute_world_matrix(light)::Mat4{Float64}
+    end
+    cache.depth += 1
+    return nothing
+end
+
+# Undo `_arm_light_world_cache!` for the same lights when the frame ends.
+function _disarm_light_world_cache!(lights::AbstractVector)
+    for light in lights
+        _disarm_light_world!(light)
+    end
+    return lights
+end
+
+@inline function _disarm_light_world!(light::AbstractLight)
+    cache = getfield(light, :_world_cache)::_LightWorldCache
+    cache.depth > 0 && (cache.depth -= 1)
+    return nothing
+end
+
 @inline function _light_world_position(
         light::AbstractLight)::Vec3{Float64}
     position = get_position(light)::Vec3{Float64}
     parent = get_parent(light)
     parent === nothing && return position
-    light_world = compute_world_matrix(light)::Mat4{Float64}
+    light_world = _light_world_matrix(light)
     return Vec3(light_world.e[13], light_world.e[14], light_world.e[15])
 end
 
@@ -1115,13 +1209,13 @@ end
        rotation.z == 0.0
         return normalize(direction)
     end
-    light_world = compute_world_matrix(light)::Mat4{Float64}
+    light_world = _light_world_matrix(light)
     return normalize(mat4_transform_direction(light_world, direction))
 end
 
 @inline function _light_emission_direction(light::Union{DirectionalLight,SpotLight})
     if light.rotation_driven
-        return normalize(mat4_transform_direction(compute_world_matrix(light), Vec3(0.0,0.0,-1.0)))
+        return normalize(mat4_transform_direction(_light_world_matrix(light), Vec3(0.0,0.0,-1.0)))
     end
     return _direction_between(_light_world_position(light), light.target)
 end

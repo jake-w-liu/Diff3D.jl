@@ -522,3 +522,111 @@ end
     @test cloned.uniforms == shader.uniforms && cloned.uniforms !== shader.uniforms
     @test cloned.uniforms["weights"] !== shader.uniforms["weights"]
 end
+
+# ---------------------------------------------------------------------------
+# (c) Per-frame world matrices of parented lights; cameras under any node
+# ---------------------------------------------------------------------------
+
+function parented_light_scene(parent)
+    scene = Scene()
+    mesh = Mesh(SphereGeometry(radius=1.0, width_segments=12, height_segments=8),
+                MeshStandardMaterial(color=Color3(0.8, 0.6, 0.4), roughness=0.4))
+    mesh.flat_shading = false
+    add!(scene, mesh)
+    add!(scene, parent)
+    light = PointLight(intensity=20.0)
+    light.position = Vec3(2.0, 2.0, 3.0)
+    add!(parent, light)
+    camera = PerspectiveCamera()
+    camera.position = Vec3(0.0, 0.0, 4.0)
+    return scene, camera, light
+end
+
+@testset "parented lights use one world matrix per frame" begin
+    parent = LOD()
+    parent.rotation = Euler(0.1, 0.0, 0.0)
+    scene, camera, light = parented_light_scene(parent)
+    target = RenderTarget(24, 24)
+    render!(target, scene, camera; shading=:smooth)
+    first_image = copy(target.color)
+    # The cache only lives while a render is in progress.
+    @test light._world_cache.depth == 0
+    # Moving the parent between frames moves the light.
+    parent.position = Vec3(0.0, -3.0, 0.0)
+    render!(target, scene, camera; shading=:smooth)
+    @test target.color != first_image
+    parent.position = Vec3(0.0, 0.0, 0.0)
+    render!(target, scene, camera; shading=:smooth)
+    @test target.color == first_image
+    # The frame's matrix is the one compute_world_matrix gives, so the image
+    # matches the same light computed per query (disarmed renders are the old
+    # path: lights whose transform chain is not finite are never armed).
+    Diff3D._arm_light_world_cache!([light])
+    @test light._world_cache.depth == 1
+    @test Diff3D._light_world_matrix(light) === compute_world_matrix(light)
+    Diff3D._disarm_light_world_cache!([light])
+    @test light._world_cache.depth == 0
+    # An error during the frame still disarms the lights.
+    bad = Mesh(BufferGeometry([0.0, 0.0, 0.0], Float64[], Float64[], [1, 2, 3], 1, 1),
+               MeshBasicMaterial())
+    add!(scene, bad)
+    @test_throws Exception render!(target, scene, camera; shading=:smooth)
+    @test light._world_cache.depth == 0
+    remove!(scene, bad)
+    # A non-finite parent transform still raises from the shading query.
+    parent.position = Vec3(NaN, 0.0, 0.0)
+    @test_throws ArgumentError render!(target, scene, camera; shading=:smooth)
+    @test light._world_cache.depth == 0
+    parent.position = Vec3(0.0, 0.0, 0.0)
+    # Cached, pooled and tiled frames agree.
+    cache = RenderCache()
+    render!(target, scene, camera; shading=:smooth, cache=cache)
+    @test target.color == first_image
+    flat = RenderTarget(24, 24)
+    render!(flat, scene, camera)
+    reference = copy(flat.color)
+    render_pooled!(flat, scene, camera, RenderCache())
+    @test flat.color == reference
+    render_tiled!(flat, scene, camera; tiles=2, cache=[RenderCache(), RenderCache()])
+    @test flat.color == reference
+    @test light._world_cache.depth == 0
+    if Base.JLOptions().opt_level > 0
+        # Before, every shaded fragment walked the LOD parent with a dynamic
+        # compute_world_matrix call that allocated; now the frame computes the
+        # light's world matrix once.
+        render!(target, scene, camera; shading=:smooth, cache=cache)
+        parented = @allocated render!(target, scene, camera; shading=:smooth, cache=cache)
+        root_scene, root_camera, _ = parented_light_scene(Group())
+        root_cache = RenderCache()
+        render!(target, root_scene, root_camera; shading=:smooth, cache=root_cache)
+        rooted = @allocated render!(target, root_scene, root_camera; shading=:smooth,
+                                    cache=root_cache)
+        @test parented <= rooted + 1024
+    end
+end
+
+@testset "light clones get their own world-matrix cache" begin
+    light = SpotLight()
+    copy = Diff3D.clone(light)
+    @test copy._world_cache !== light._world_cache
+    @test copy._world_cache.depth == 0
+end
+
+@testset "view_matrix of a camera under a light, LOD, sprite or line does not allocate" begin
+    for make_parent in (() -> PointLight(), () -> DirectionalLight(), () -> SpotLight(),
+                        () -> LOD(), () -> Sprite(SpriteMaterial()),
+                        () -> LineSegments(BoxGeometry(), LineBasicMaterial()),
+                        () -> LineLoop(BoxGeometry(), LineBasicMaterial()))
+        parent = make_parent()
+        parent.position = Vec3(1.0, 0.0, 0.0)
+        camera = PerspectiveCamera()
+        add!(parent, camera)
+        @test all(isapprox.(view_matrix(camera).e,
+                            (mat4_translation(-1.0, 0.0, 0.0) * view_matrix(PerspectiveCamera())).e;
+                            atol=1e-15))
+        if Base.JLOptions().opt_level > 0
+            view_matrix(camera)
+            @test (@allocated view_matrix(camera)) == 0
+        end
+    end
+end

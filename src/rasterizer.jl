@@ -1675,8 +1675,22 @@ function _viewport_projection(proj::Mat4, width::Int, height::Int,
     return mapping * proj
 end
 
+# The parented lights a frame collects keep their world matrix for that frame
+# (`_arm_light_world_cache!`); disarm them however the frame ends.
 function _render_camera!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
-                         viewport::Union{Nothing,NTuple{4,Int}};
+                         viewport::Union{Nothing,NTuple{4,Int}}; cache=nothing, kwargs...)
+    lights = cache === nothing ? SceneLight[] : cache.lights
+    try
+        return _render_camera_frame!(rt, scene, camera, viewport, lights;
+                                     cache=cache, kwargs...)
+    finally
+        _disarm_light_world_cache!(lights)
+    end
+end
+
+function _render_camera_frame!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
+                         viewport::Union{Nothing,NTuple{4,Int}},
+                         light_buffer::Vector{SceneLight};
                  shading::Symbol=:flat, shadows::Bool=false, shadow_resolution::Int=512,
                  frustum_cull::Bool=true, clipping_planes::AbstractVector{<:Plane}=_NO_PLANES,
                  scissor::Union{Nothing,NTuple{4,Int}}=nothing, scissor_test::Bool=false,
@@ -1735,7 +1749,7 @@ function _render_camera!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
                                                instanced_worlds, scene,
                                                primitive_flags, primitives,
                                                primitive_worlds)
-        lights = _collect_lights_into!(SceneLight[], scene, layer_mask)
+        lights = _collect_lights_into!(light_buffer, scene, layer_mask)
     else
         primitive_flags = cache.primitive_flags
         meshes = _collect_render_drawables_worlds_into!(cache.meshes, cache.mesh_worlds,
@@ -1749,8 +1763,9 @@ function _render_camera!(rt::RenderTarget, scene::Scene, camera::AbstractCamera,
         instanced_worlds = cache.instanced_worlds
         primitives = cache.primitives
         primitive_worlds = cache.primitive_worlds
-        lights = _collect_lights_into!(cache.lights, scene, layer_mask)
+        lights = _collect_lights_into!(light_buffer, scene, layer_mask)
     end
+    _arm_light_world_cache!(lights)
     _filter_object_layers!(meshes, mesh_worlds, layer_mask)
     _filter_object_layers!(instanced, instanced_worlds, layer_mask)
     _filter_object_layers!(primitives, primitive_worlds, layer_mask)

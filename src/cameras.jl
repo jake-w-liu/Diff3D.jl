@@ -147,6 +147,17 @@ end
     node isa InstancedMesh && return f(node)::R
     node isa LineObject && return f(node)::R
     node isa PointsObject && return f(node)::R
+    node isa LineSegments && return f(node)::R
+    node isa LineLoop && return f(node)::R
+    node isa Sprite && return f(node)::R
+    node isa LOD && return f(node)::R
+    node isa AmbientLight && return f(node)::R
+    node isa DirectionalLight && return f(node)::R
+    node isa PointLight && return f(node)::R
+    node isa SpotLight && return f(node)::R
+    node isa HemisphereLight && return f(node)::R
+    node isa RectAreaLight && return f(node)::R
+    node isa LightProbe && return f(node)::R
     return f(node)::R
 end
 

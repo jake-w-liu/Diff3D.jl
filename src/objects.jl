@@ -1661,6 +1661,8 @@ end
 @inline _object_copy_skips_field(::AbstractObject3D, ::Symbol) = false
 @inline _object_copy_skips_field(::LOD, name::Symbol) =
     name === :levels || name === :_camera_levels || name === :_manual_level
+# A light's per-frame world-matrix cache belongs to that light.
+@inline _object_copy_skips_field(::AbstractLight, name::Symbol) = name === :_world_cache
 
 function _copy_object_layers!(dest::AbstractObject3D, source::AbstractObject3D)
     mask = _object_layer_mask(source)
@@ -1742,6 +1744,9 @@ end
 
 _object_clone_shell_value(::AbstractObject3D, name::Symbol, value) =
     _object_copy_value(name, value)
+
+_object_clone_shell_value(::AbstractLight, name::Symbol, value) =
+    name === :_world_cache ? _LightWorldCache() : _object_copy_value(name, value)
 
 function _object_clone_shell_value(::LOD, name::Symbol, value)
     name === :levels && return LODLevel[]

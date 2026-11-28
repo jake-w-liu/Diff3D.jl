@@ -104,6 +104,16 @@ end
     return nothing
 end
 
+# `_validate_object_transform` without raising.
+@inline function _object_transform_finite(obj::AbstractObject3D)
+    position = get_position(obj)
+    rotation = get_rotation(obj)
+    scale = get_scale(obj)
+    return isfinite(position.x) && isfinite(position.y) && isfinite(position.z) &&
+           isfinite(rotation.x) && isfinite(rotation.y) && isfinite(rotation.z) &&
+           isfinite(scale.x) && isfinite(scale.y) && isfinite(scale.z)
+end
+
 function compute_local_matrix(obj::AbstractObject3D)
     _validate_object_transform(obj)
     pos = get_position(obj)
