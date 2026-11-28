@@ -1766,6 +1766,10 @@ RGBELoader(path::String; colorspace::Symbol=:linear, kwargs...) =
     Texture(load_rgbe(path); colorspace=colorspace, kwargs...)
 
 # ========================== TGA (Truevision Targa) ==========================
+# The TGA, PCD and DDS decoders report malformed and unsupported files with
+# an ArgumentError.
+@noinline _decoder_error(msg::AbstractString) = throw(ArgumentError(msg))
+
 # three.js TGALoader (examples/jsm/loaders/TGALoader.js): colour-mapped,
 # true-colour and greyscale images, raw or run-length encoded, 8/16/24/32-bit
 # pixels and all four origins, decoded to RGBA8.
@@ -1775,7 +1779,7 @@ const _TGA_TYPES = (1, 2, 3, 9, 10, 11)
 function _decode_tga(bytes::AbstractVector{UInt8})
     n = length(bytes)
     # TGALoader.js:446 (header is 18 bytes; three.js asks for 19)
-    n >= 19 || error("TGA file is truncated: not enough data to contain the header")
+    n >= 19 || _decoder_error("TGA file is truncated: not enough data to contain the header")
     id_length = Int(bytes[1])
     colormap_type = Int(bytes[2])
     image_type = Int(bytes[3])
@@ -1786,32 +1790,32 @@ function _decode_tga(bytes::AbstractVector{UInt8})
     pixel_size = Int(bytes[17])
     flags = Int(bytes[18])
     # tgaCheckHeader (TGALoader.js:41-100)
-    image_type == 0 && error("TGA file has no image data (image type 0)")
-    image_type in _TGA_TYPES || error("TGA image type $image_type is not supported")
+    image_type == 0 && _decoder_error("TGA file has no image data (image type 0)")
+    image_type in _TGA_TYPES || _decoder_error("TGA image type $image_type is not supported")
     use_pal = image_type in (1, 9)
     use_rle = image_type >= 9
     use_grey = image_type in (3, 11)
     if use_pal
         (colormap_length <= 256 && colormap_size == 24 && colormap_type == 1) ||
-            error("TGA colour-mapped image needs a colour map of at most 256 24-bit entries")
-        pixel_size == 8 || error("TGA colour-mapped image must have 8-bit indices, got $pixel_size")
+            _decoder_error("TGA colour-mapped image needs a colour map of at most 256 24-bit entries")
+        pixel_size == 8 || _decoder_error("TGA colour-mapped image must have 8-bit indices, got $pixel_size")
     else
-        colormap_type == 0 || error("TGA true-colour and greyscale images cannot have a colour map")
+        colormap_type == 0 || _decoder_error("TGA true-colour and greyscale images cannot have a colour map")
     end
-    (width > 0 && height > 0) || error("TGA image size $(width)x$(height) is invalid")
-    pixel_size in (8, 16, 24, 32) || error("TGA pixel size $pixel_size is not supported")
+    (width > 0 && height > 0) || _decoder_error("TGA image size $(width)x$(height) is invalid")
+    pixel_size in (8, 16, 24, 32) || _decoder_error("TGA pixel size $pixel_size is not supported")
     use_grey && !(pixel_size in (8, 16)) &&
-        error("TGA greyscale images must have 8 or 16-bit pixels, got $pixel_size")
+        _decoder_error("TGA greyscale images must have 8 or 16-bit pixels, got $pixel_size")
     # An 8-bit pixel is a palette index or a grey level; TGALoader.js reads it
     # through the colour map, which true-colour images do not have.
     !use_grey && !use_pal && pixel_size == 8 &&
-        error("TGA true-colour images must have 16, 24 or 32-bit pixels, got 8")
+        _decoder_error("TGA true-colour images must have 16, 24 or 32-bit pixels, got 8")
     offset = 18 + id_length
-    offset <= n || error("TGA file is truncated in its image ID")
+    offset <= n || _decoder_error("TGA file is truncated in its image ID")
     palette = UInt8[]
     if use_pal
         stop = offset + 3 * colormap_length
-        stop <= n || error("TGA colour map is truncated")
+        stop <= n || _decoder_error("TGA colour map is truncated")
         palette = bytes[(offset + 1):stop]
         offset = stop
     end
@@ -1821,10 +1825,10 @@ function _decode_tga(bytes::AbstractVector{UInt8})
         # A run-length packet of 1 + psize bytes or more expands to at most
         # 128 pixels, which bounds the image a file of this size can hold.
         width * height <= 128 * (n - offset) ||
-            error("TGA run-length data is truncated: $(width)x$(height) pixels need more than $(n - offset) bytes")
+            _decoder_error("TGA run-length data is truncated: $(width)x$(height) pixels need more than $(n - offset) bytes")
         _tga_unrle(bytes, offset, total, psize)
     else
-        offset + total <= n || error("TGA pixel data is truncated")
+        offset + total <= n || _decoder_error("TGA pixel data is truncated")
         @view bytes[(offset + 1):(offset + total)]
     end
     return _tga_rgba(pixels, width, height, pixel_size, use_grey, use_pal, palette,
@@ -1840,19 +1844,19 @@ function _tga_unrle(bytes::AbstractVector{UInt8}, offset::Int, total::Int, psize
     shift = 0
     p = offset + 1
     @inbounds while shift < total
-        p <= n || error("TGA run-length data is truncated")
+        p <= n || _decoder_error("TGA run-length data is truncated")
         c = Int(bytes[p]); p += 1
         count = (c & 0x7f) + 1
-        shift + count * psize <= total || error("TGA run-length packet runs past the image")
+        shift + count * psize <= total || _decoder_error("TGA run-length packet runs past the image")
         if c & 0x80 != 0
-            p + psize - 1 <= n || error("TGA run-length data is truncated")
+            p + psize - 1 <= n || _decoder_error("TGA run-length data is truncated")
             for k in 0:(count - 1), b in 1:psize
                 out[shift + k * psize + b] = bytes[p + b - 1]
             end
             p += psize
         else
             len = count * psize
-            p + len - 1 <= n || error("TGA run-length data is truncated")
+            p + len - 1 <= n || _decoder_error("TGA run-length data is truncated")
             copyto!(out, shift + 1, bytes, p, len)
             p += len
         end
@@ -1882,7 +1886,7 @@ function _tga_rgba(pixels::AbstractVector{UInt8}, width::Int, height::Int, pixel
             a = pixel_size == 16 ? pixels[q + 1] : 0xff
         elseif use_pal
             k = 3 * Int(pixels[q])
-            k + 3 <= length(palette) || error("TGA colour index $(pixels[q]) is outside the colour map")
+            k + 3 <= length(palette) || _decoder_error("TGA colour index $(pixels[q]) is outside the colour map")
             # tgaGetImageData8bits: palette entries are stored B, G, R.
             r, gr, b, a = palette[k + 3], palette[k + 2], palette[k + 1], 0xff
         elseif pixel_size == 16
@@ -1946,22 +1950,22 @@ function _lzf_decompress(data::AbstractVector{UInt8}, out_len::Int)
         ctrl = Int(data[ip]); ip += 1
         if ctrl < 32
             len = ctrl + 1
-            op + len <= out_len || error("PCD LZF data decompresses past its declared size")
-            ip + len - 1 <= n || error("PCD LZF literal run is truncated")
+            op + len <= out_len || _decoder_error("PCD LZF data decompresses past its declared size")
+            ip + len - 1 <= n || _decoder_error("PCD LZF literal run is truncated")
             copyto!(out, op + 1, data, ip, len)
             ip += len
             op += len
         else
             len = ctrl >> 5
-            ip <= n || error("PCD LZF back reference is truncated")
+            ip <= n || _decoder_error("PCD LZF back reference is truncated")
             if len == 7
                 len += Int(data[ip]); ip += 1
-                ip <= n || error("PCD LZF back reference is truncated")
+                ip <= n || _decoder_error("PCD LZF back reference is truncated")
             end
             ref = op - ((ctrl & 0x1f) << 8) - Int(data[ip]) - 1
             ip += 1
-            op + len + 2 <= out_len || error("PCD LZF data decompresses past its declared size")
-            ref >= 0 || error("PCD LZF back reference points before the start of the data")
+            op + len + 2 <= out_len || _decoder_error("PCD LZF data decompresses past its declared size")
+            ref >= 0 || _decoder_error("PCD LZF back reference points before the start of the data")
             # Overlapping copies repeat bytes, so copy one byte at a time.
             for k in 1:(len + 2)
                 out[op + k] = out[ref + k]
@@ -1969,7 +1973,7 @@ function _lzf_decompress(data::AbstractVector{UInt8}, out_len::Int)
             op += len + 2
         end
     end
-    op == out_len || error("PCD LZF data decompresses to $op bytes, expected $out_len")
+    op == out_len || _decoder_error("PCD LZF data decompresses to $op bytes, expected $out_len")
     return out
 end
 
@@ -2000,14 +2004,14 @@ function _pcd_header(bytes::AbstractVector{UInt8})
         stop = something(findnext(==(UInt8('\n')), bytes, pos), n + 1)
         line = strip(String(bytes[pos:(stop - 1)]))
         pos = stop + 1
-        isvalid(line) || error("PCD header line $(repr(line)) is not valid UTF-8 text")
+        isvalid(line) || _decoder_error("PCD header line $(repr(line)) is not valid UTF-8 text")
         (isempty(line) || startswith(line, "#")) && continue
         parts = split(line)
         key = uppercase(parts[1])
         values = parts[2:end]
         function int(s, what)
             v = tryparse(Int, s)
-            v === nothing && error("PCD $what $(repr(s)) is not an integer")
+            v === nothing && _decoder_error("PCD $what $(repr(s)) is not an integer")
             return v
         end
         if key == "FIELDS"
@@ -2016,43 +2020,48 @@ function _pcd_header(bytes::AbstractVector{UInt8})
             sizes = [int(s, "SIZE") for s in values]
         elseif key == "TYPE"
             all(s -> s in ("F", "I", "U"), values) ||
-                error("PCD TYPE entries must be F, I or U, got $(join(values, ' '))")
+                _decoder_error("PCD TYPE entries must be F, I or U, got $(join(values, ' '))")
             types = [only(s) for s in values]
         elseif key == "COUNT"
             counts = [int(s, "COUNT") for s in values]
         elseif key in ("WIDTH", "HEIGHT", "POINTS")
-            length(values) == 1 || error("PCD $key line must hold one integer")
+            length(values) == 1 || _decoder_error("PCD $key line must hold one integer")
             v = int(values[1], key)
             key == "WIDTH" ? (width = v) : key == "HEIGHT" ? (height = v) : (points = v)
         elseif key == "DATA"
-            length(values) == 1 || error("PCD DATA line must name one data kind")
+            length(values) == 1 || _decoder_error("PCD DATA line must name one data kind")
             data_kind = lowercase(values[1])
         end
     end
-    data_kind === nothing && error("PCD header has no DATA line")
+    data_kind === nothing && _decoder_error("PCD header has no DATA line")
     data_kind in ("ascii", "binary", "binary_compressed") ||
-        error("PCD DATA $(repr(data_kind)) is not supported; expected ascii, binary or binary_compressed")
+        _decoder_error("PCD DATA $(repr(data_kind)) is not supported; expected ascii, binary or binary_compressed")
     nf = length(fields)
-    nf > 0 || error("PCD header has no FIELDS")
+    nf > 0 || _decoder_error("PCD header has no FIELDS")
     isempty(counts) && (counts = ones(Int, nf))
     (length(types) == nf && length(counts) == nf && (data_kind == "ascii" ? length(sizes) in (0, nf) :
                                                      length(sizes) == nf)) ||
-        error("PCD FIELDS, SIZE, TYPE and COUNT must have one entry per field")
+        _decoder_error("PCD FIELDS, SIZE, TYPE and COUNT must have one entry per field")
     isempty(sizes) && (sizes = fill(4, nf))
     for k in 1:nf
         valid = types[k] == 'F' ? sizes[k] in (4, 8) : sizes[k] in (1, 2, 4)
-        valid || error("PCD field $(fields[k]) has unsupported TYPE $(types[k]) SIZE $(sizes[k])")
+        valid || _decoder_error("PCD field $(fields[k]) has unsupported TYPE $(types[k]) SIZE $(sizes[k])")
         # Every element takes at least a byte, so a larger COUNT cannot fit.
-        1 <= counts[k] <= n || error("PCD field $(fields[k]) COUNT $(counts[k]) must be positive and fit in the file")
+        1 <= counts[k] <= n || _decoder_error("PCD field $(fields[k]) COUNT $(counts[k]) must be positive and fit in the file")
     end
     if points === nothing
         (width === nothing || height === nothing) &&
-            error("PCD header needs POINTS or WIDTH and HEIGHT")
-        points = _checked_mul_int(width, height, "PCD WIDTH * HEIGHT")
+            _decoder_error("PCD header needs POINTS or WIDTH and HEIGHT")
+        points = try
+            Base.checked_mul(width, height)
+        catch err
+            err isa OverflowError || rethrow()
+            _decoder_error("PCD WIDTH * HEIGHT overflows")
+        end
     end
-    points >= 0 || error("PCD POINTS must be non-negative")
+    points >= 0 || _decoder_error("PCD POINTS must be non-negative")
     for f in ("x", "y", "z")
-        f in fields || error("PCD file has no $f field")
+        f in fields || _decoder_error("PCD file has no $f field")
     end
     return (; fields, sizes, types, counts, points, data_kind, data_start=pos)
 end
@@ -2067,7 +2076,7 @@ function _decode_pcd(bytes::AbstractVector{UInt8})
     ascii = h.data_kind == "ascii"
     # A packed rgb value is 4 bytes (B, G, R, unused), which binary data reads directly.
     !ascii && haskey(fidx, "rgb") && h.sizes[fidx["rgb"]] != 4 &&
-        error("PCD rgb field must have SIZE 4, got $(h.sizes[fidx["rgb"]])")
+        _decoder_error("PCD rgb field must have SIZE 4, got $(h.sizes[fidx["rgb"]])")
     # Token index (ascii) or byte offset (binary) of each field's first element.
     offsets = zeros(Int, nf)
     for k in 2:nf
@@ -2080,13 +2089,13 @@ function _decode_pcd(bytes::AbstractVector{UInt8})
             tokens = split(line)
             isempty(tokens) && continue
             length(tokens) >= row ||
-                error("PCD ascii point $(length(rows) + 1) has $(length(tokens)) values, expected $row")
+                _decoder_error("PCD ascii point $(length(rows) + 1) has $(length(tokens)) values, expected $row")
             push!(rows, tokens)
         end
         function ascii_value(i, k)
             s = rows[i][offsets[k] + 1]
             v = tryparse(Float64, s)
-            v === nothing && error("PCD ascii value $(repr(s)) is not a number")
+            v === nothing && _decoder_error("PCD ascii value $(repr(s)) is not a number")
             return v
         end
         function ascii_rgb(i, k)
@@ -2095,7 +2104,7 @@ function _decode_pcd(bytes::AbstractVector{UInt8})
             if h.types[k] == 'F'
                 packed = Int64(reinterpret(Int32, Float32(v)))
             else
-                (isinteger(v) && abs(v) <= 2.0^32) || error("PCD ascii rgb value $v is not a packed integer")
+                (isinteger(v) && abs(v) <= 2.0^32) || _decoder_error("PCD ascii rgb value $v is not a packed integer")
                 packed = Int64(v)
             end
             return ((packed >> 16) & 0xff, (packed >> 8) & 0xff, packed & 0xff)
@@ -2106,19 +2115,19 @@ function _decode_pcd(bytes::AbstractVector{UInt8})
     avail = length(bytes) - h.data_start + 1
     data = if h.data_kind == "binary"
         N <= avail ÷ row ||
-            error("PCD binary data is truncated: $N points of $row bytes need more than the $avail bytes present")
+            _decoder_error("PCD binary data is truncated: $N points of $row bytes need more than the $avail bytes present")
         @view bytes[h.data_start:(h.data_start + N * row - 1)]
     else
-        avail >= 8 || error("PCD binary_compressed sizes are truncated")
+        avail >= 8 || _decoder_error("PCD binary_compressed sizes are truncated")
         csize = _rd_le32(bytes, h.data_start)
         dsize = _rd_le32(bytes, h.data_start + 4)
         first = h.data_start + 8
-        csize <= avail - 8 || error("PCD binary_compressed data is truncated")
+        csize <= avail - 8 || _decoder_error("PCD binary_compressed data is truncated")
         (N <= dsize ÷ row && dsize == N * row) ||
-            error("PCD binary_compressed size $dsize does not match $N points of $row bytes")
+            _decoder_error("PCD binary_compressed size $dsize does not match $N points of $row bytes")
         # An LZF back reference expands 3 input bytes to at most 264 output bytes.
         dsize <= 88 * csize ||
-            error("PCD binary_compressed size $dsize exceeds what $csize LZF bytes can hold")
+            _decoder_error("PCD binary_compressed size $dsize exceeds what $csize LZF bytes can hold")
         _lzf_decompress(@view(bytes[first:(first + csize - 1)]), dsize)
     end
     # binary: array of structures; binary_compressed: one array per field
@@ -2160,7 +2169,7 @@ function _pcd_collect(N::Int, fidx::Dict{String,Int}, value::F, rgb_bytes::G) wh
         has("intensity") && (intensity[i] = value(i, fidx["intensity"]))
         if has("label")
             v = value(i, fidx["label"])
-            (isinteger(v) && abs(v) <= 2.0^32) || error("PCD label $v is not an integer")
+            (isinteger(v) && abs(v) <= 2.0^32) || _decoder_error("PCD label $v is not an integer")
             label[i] = Int(v)
         end
     end
@@ -2211,10 +2220,10 @@ end
 
 function _decode_dds(bytes::AbstractVector{UInt8})
     n = length(bytes)
-    n >= 128 || error("DDS file is truncated: the header needs 128 bytes, got $n")
-    _rd_le32(bytes, 1) == _DDS_MAGIC || error("not a DDS file (bad magic number)")
+    n >= 128 || _decoder_error("DDS file is truncated: the header needs 128 bytes, got $n")
+    _rd_le32(bytes, 1) == _DDS_MAGIC || _decoder_error("not a DDS file (bad magic number)")
     header_size = _rd_le32(bytes, 5)
-    header_size == 124 || error("DDS header size $header_size is not 124")
+    header_size == 124 || _decoder_error("DDS header size $header_size is not 124")
     height = _rd_le32(bytes, 13)
     width = _rd_le32(bytes, 17)
     pf_flags = _rd_le32(bytes, 81)
@@ -2226,14 +2235,14 @@ function _decode_dds(bytes::AbstractVector{UInt8})
     if (pf_flags & 0x4) != 0 && fourcc != 0          # DDPF_FOURCC
         name = _dds_fourcc_string(fourcc)
         fourcc == 0x30315844 &&
-            error("DDS DX10 extended headers are not supported; only uncompressed B8G8R8A8 and B8G8R8 DDS images are supported")
+            _decoder_error("DDS DX10 extended headers are not supported; only uncompressed B8G8R8A8 and B8G8R8 DDS images are supported")
         # DXT1, DXT3, DXT5, ETC1 (DDSLoader.js:166-169)
         fourcc in (0x31545844, 0x33545844, 0x35545844, 0x31435445) &&
-            error("DDS $name data is block-compressed; only uncompressed B8G8R8A8 and B8G8R8 DDS images are supported")
-        error("DDS FourCC $name is not supported; only uncompressed B8G8R8A8 and B8G8R8 DDS images are supported")
+            _decoder_error("DDS $name data is block-compressed; only uncompressed B8G8R8A8 and B8G8R8 DDS images are supported")
+        _decoder_error("DDS FourCC $name is not supported; only uncompressed B8G8R8A8 and B8G8R8 DDS images are supported")
     end
-    (caps2 & 0x200) == 0 || error("DDS cube maps are not supported")
-    (caps2 & 0x200000) == 0 || error("DDS volume textures are not supported")
+    (caps2 & 0x200) == 0 || _decoder_error("DDS cube maps are not supported")
+    (caps2 & 0x200000) == 0 || _decoder_error("DDS volume textures are not supported")
     # DDSLoader.js:246-262 tests the masks with `&`; the byte order it then
     # reads (B, G, R[, A]) holds only for these exact masks.
     channels = if bit_count == 32 && (rmask, gmask, bmask, amask) ==
@@ -2242,13 +2251,13 @@ function _decode_dds(bytes::AbstractVector{UInt8})
     elseif bit_count == 24 && (rmask, gmask, bmask) == (0x00ff0000, 0x0000ff00, 0x000000ff)
         3
     else
-        error("DDS pixel format ($bit_count-bit, masks R=0x$(string(rmask; base=16)) G=0x$(string(gmask; base=16)) B=0x$(string(bmask; base=16)) A=0x$(string(amask; base=16))) is not supported; only B8G8R8A8 and B8G8R8 are")
+        _decoder_error("DDS pixel format ($bit_count-bit, masks R=0x$(string(rmask; base=16)) G=0x$(string(gmask; base=16)) B=0x$(string(bmask; base=16)) A=0x$(string(amask; base=16))) is not supported; only B8G8R8A8 and B8G8R8 are")
     end
-    (width > 0 && height > 0) || error("DDS image size $(width)x$(height) is invalid")
+    (width > 0 && height > 0) || _decoder_error("DDS image size $(width)x$(height) is invalid")
     offset = 128                                      # header_size + magic
     avail = n - offset
     (width <= avail ÷ channels && height <= avail ÷ (width * channels)) ||
-        error("DDS pixel data is truncated: $(width)x$(height)x$channels bytes do not fit in the file")
+        _decoder_error("DDS pixel data is truncated: $(width)x$(height)x$channels bytes do not fit in the file")
     img = Array{Float64}(undef, height, width, 4)
     @inbounds for y in 1:height, x in 1:width
         p = offset + ((y - 1) * width + (x - 1)) * channels

@@ -575,7 +575,7 @@ end
         @test_throws "outside the colour map" Diff3D._decode_tga((b = copy(pal); b[end] = 5; b))
         @test_throws "colour map of at most 256 24-bit entries" Diff3D._decode_tga(
             (b = copy(pal); b[8] = 32; b))
-        # Random corruption: an image or an ErrorException, nothing else.
+        # Random corruption: an image or an ArgumentError, nothing else.
         state = UInt32(7)
         for (_, (bytes, _, _, _)) in _A3C_TGA, trial in 1:150
             f = copy(bytes)
@@ -588,7 +588,7 @@ end
             catch err
                 err
             end
-            @test result isa Array{Float64,3} || result isa ErrorException
+            @test result isa Array{Float64,3} || result isa ArgumentError
             result isa Array && @test size(result, 1) * size(result, 2) <= length(f) * 128
         end
     end
@@ -682,7 +682,7 @@ end
             catch err
                 err
             end
-            @test result isa NamedTuple || result isa ErrorException
+            @test result isa NamedTuple || result isa ArgumentError
         end
     end
 end
@@ -741,7 +741,7 @@ end
             catch err
                 err
             end
-            @test result isa Array{Float64,3} || result isa ErrorException
+            @test result isa Array{Float64,3} || result isa ArgumentError
         end
     end
 end
