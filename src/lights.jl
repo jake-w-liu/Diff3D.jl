@@ -239,21 +239,16 @@ function _ies_trim_bounds(s::String, first::Int, last::Int)
     return first, last
 end
 
+# Case-insensitive search for "TILT=" in the bytes first:last of `s`. The
+# header is compared as code units: manufacturers' files are often Latin-1,
+# and character operations throw on bytes that are not valid UTF-8.
 function _ies_line_contains_tilt(s::String, first::Int, last::Int)
-    pattern = ('T', 'I', 'L', 'T', '=')
-    p = first
-    while p <= last
-        q = p
-        matched = true
-        for expected in pattern
-            if q > last || uppercase(s[q]) != expected
-                matched = false
-                break
-            end
-            q = nextind(s, q)
-        end
-        matched && return true
-        p = nextind(s, p)
+    units = codeunits(s)
+    last = min(last, length(units))
+    @inbounds for p in first:(last - 4)
+        (units[p] & 0xdf) == UInt8('T') && (units[p + 1] & 0xdf) == UInt8('I') &&
+            (units[p + 2] & 0xdf) == UInt8('L') && (units[p + 3] & 0xdf) == UInt8('T') &&
+            units[p + 4] == UInt8('=') && return true
     end
     return false
 end

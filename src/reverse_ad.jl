@@ -467,6 +467,29 @@ Base.min(a::ADVar, b::Real) = (bf = Float64(b); _ad_min_first(a.val, bf) ?
 Base.min(a::Real, b::ADVar) = (af = Float64(a); _ad_min_first(af, b.val) ?
     _ad_constant(min(af, b.val)) : _ad_record(min(af, b.val), (b,), (1.0,)))
 
+# Three-argument hypot. Base's generic method scales by the largest magnitude
+# and returns it when `iszero`; that test must look at the value, because a
+# zero that depends on a differentiated input is not `iszero` (see below) and
+# the division would then be 0/0. At the origin the result keeps the
+# derivative of the largest-magnitude argument, a one-sided derivative.
+function _ad_hypot3(a, b, c)
+    # An infinite argument wins over NaN, as for Float64.
+    (isinf(_primal_value(a)) || isinf(_primal_value(b)) || isinf(_primal_value(c))) &&
+        return _ad_constant(Inf)
+    scale = max(abs(a), abs(b), abs(c))
+    scale_value = _primal_value(scale)
+    (iszero(scale_value) || !isfinite(scale_value)) && return scale + zero(scale_value)
+    x = a / scale
+    y = b / scale
+    z = c / scale
+    return sqrt(x * x + y * y + z * z) * scale
+end
+for (A, B, C) in ((:ADVar, :ADVar, :ADVar), (:ADVar, :ADVar, :Real), (:ADVar, :Real, :ADVar),
+                  (:Real, :ADVar, :ADVar), (:ADVar, :Real, :Real), (:Real, :ADVar, :Real),
+                  (:Real, :Real, :ADVar))
+    @eval Base.hypot(a::$A, b::$B, c::$C) = _ad_hypot3(a, b, c)
+end
+
 # ---- comparisons (decided by the value; no gradient) ----
 Base.:<(a::ADVar, b::ADVar)  = a.val < b.val
 Base.:<=(a::ADVar, b::ADVar) = a.val <= b.val

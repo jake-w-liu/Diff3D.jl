@@ -8669,7 +8669,14 @@ mutable struct _SVGParseState
     active_uses::Vector{Int}
     # clipPath/mask elements whose content is being parsed, likewise.
     active_definitions::Vector{Int}
+    # Number of `use` instantiations so far, bounded by _SVG_MAX_USE_INSTANCES.
+    use_instances::Int
 end
+
+# Every `use` re-parses the element it references, so a chain in which each
+# level uses the previous one twice doubles the work per level. A few hundred
+# bytes can then demand gigabytes; real documents stay far below this count.
+const _SVG_MAX_USE_INSTANCES = 100_000
 
 const _SVG_RENDERED_TAGS = Set(["svg", "g", "defs", "clippath", "mask", "symbol",
                                 "path", "rect", "line", "circle", "ellipse",
@@ -9081,6 +9088,10 @@ function _svg_parse_range!(state::_SVGParseState, first::Int, last::Int,
                         _svg_symbol_viewport(attrs, state.tags[target].attrs, viewport)
                 end
                 if viewport_box !== nothing || target_tag != "symbol"
+                    state.use_instances += 1
+                    state.use_instances <= _SVG_MAX_USE_INSTANCES ||
+                        throw(ArgumentError(
+                            "SVG instantiates more than $(_SVG_MAX_USE_INSTANCES) use elements"))
                     push!(state.active_uses, target)
                     state.viewport = content_viewport
                     try
@@ -9185,7 +9196,7 @@ function _svg_parse(raw::AbstractString; curve_segments::Integer=16,
     state = _SVGParseState(tags, contexts, closers, parents, ids, css_rules,
                            segments, circle_n, root_reference_bbox, viewport,
                            Dict{String,_SVGClipDefinition}(),
-                           Dict{String,_SVGClipDefinition}(), 0, Int[], Int[])
+                           Dict{String,_SVGClipDefinition}(), 0, Int[], Int[], 0)
     paths = _svg_parse_range!(state, 1, length(tags), SVGPath[],
                               _svg_identity_transform(), _SVG_DEFAULT_STYLE,
                               true, :visible)
@@ -9435,38 +9446,52 @@ function _svg_line_geometry(points::Vector{Vec2{Float64}})
     return BufferGeometry(positions, Float64[], Float64[], Int[], length(points), 0)
 end
 
-function _svg_dash_phase(dasharray::Vector{Float64}, phase::Float64)
-    cursor = 0.0
-    for (idx, dash) in enumerate(dasharray)
-        next_cursor = cursor + dash
-        if phase < next_cursor
-            return isodd(idx), next_cursor - phase
-        end
-        cursor = next_cursor
-    end
-    cursor = 0.0
-    for (idx, dash) in enumerate(dasharray)
-        dash > 0.0 && return isodd(idx), dash
-        cursor += dash
-    end
-    return true, Inf
-end
+# One path is cut into at most this many dashes. The count is the path length
+# over the dash period, so a short file can ask for any number of them.
+const _SVG_MAX_DASHES = 200_000
 
+# Visible intervals of a path of length `total` under `dasharray` (odd entries
+# drawn, even entries skipped, repeating). The pattern is walked entry by
+# entry: recomputing the phase from the accumulated distance with `mod` can
+# land a few ulps short of a dash boundary and then never advance.
 function _svg_dash_intervals(total::Float64, dasharray::Vector{Float64},
                              dashoffset::Float64)
     intervals = Tuple{Float64,Float64}[]
     total > 0.0 || return intervals
     isempty(dasharray) && return [(0.0, total)]
     period = sum(dasharray)
-    period > 0.0 || return [(0.0, total)]
-    offset = mod(dashoffset, period)
+    (period > 0.0 && isfinite(period)) || return [(0.0, total)]
+    count = length(dasharray)
+    (total / period) * count <= _SVG_MAX_DASHES ||
+        throw(ArgumentError(
+            "SVG stroke-dasharray cuts one path into more than $(_SVG_MAX_DASHES) dashes"))
+    # Entry holding the start of the path, and what is left of it.
+    phase = mod(dashoffset, period)
+    index = 0
+    remain = 0.0
+    boundary = 0.0
+    for (i, dash) in enumerate(dasharray)
+        boundary += dash
+        if phase < boundary
+            index = i
+            remain = boundary - phase
+            break
+        end
+    end
+    if index == 0
+        # `phase` rounded up to the period: start again at the first entry.
+        index = 1
+        remain = dasharray[1]
+    end
     cursor = 0.0
     while cursor < total
-        visible, remain = _svg_dash_phase(dasharray, mod(cursor + offset, period))
-        step = min(remain, total - cursor)
-        step > 0.0 || break
-        visible && push!(intervals, (cursor, cursor + step))
-        cursor += step
+        stop = min(cursor + remain, total)
+        if stop > cursor
+            isodd(index) && push!(intervals, (cursor, stop))
+            cursor = stop
+        end
+        index = index == count ? 1 : index + 1
+        remain = dasharray[index]
     end
     return intervals
 end
@@ -9969,10 +9994,11 @@ const _B64_LUT = let lut = fill(-1, 256); for (k, ch) in enumerate(_B64_CHARS); 
 
 function base64_decode(s::AbstractString)
     out = UInt8[]; acc = 0; nbits = 0
-    for ch in s
-        ch in ('=', '\n', '\r', ' ') && continue
-        c = Int(ch)
-        c > 255 && continue          # non-ASCII can't be base64; skip (lenient), not OOB
+    # Base64 is ASCII, so code units are enough; iterating characters would
+    # throw on a string that is not valid UTF-8 instead of skipping the junk.
+    for unit in codeunits(s)
+        c = Int(unit)
+        c > 255 && continue          # wider code units can't be base64; skip (lenient)
         v = _B64_LUT[c + 1]
         v < 0 && continue
         acc = (acc << 6) | v; nbits += 6

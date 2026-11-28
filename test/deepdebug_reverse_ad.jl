@@ -1,4 +1,5 @@
-using Test, Diff3D, ForwardDiff, LinearAlgebra
+using Test, Diff3D, ForwardDiff
+using LinearAlgebra: LinearAlgebra, lmul!, mul!
 
 @testset "ADVar zero and one predicates keep dependent values on the tape" begin
     A = [1.0 2.0; 3.0 4.0]
@@ -24,6 +25,19 @@ using Test, Diff3D, ForwardDiff, LinearAlgebra
         z[1] + z[2]
     end
     @test seen == [false, false, false, false]
+    # hypot of three arguments tests its scale by value: at the origin it keeps
+    # a one-sided derivative instead of dividing zero by zero.
+    @test reverse_gradient(z -> hypot(z[1], 0.0, 0.0), [0.0]) == [1.0]
+    @test reverse_gradient(z -> hypot(z[1], z[2], z[3]), [3.0, -4.0, 12.0]) ≈
+          [3.0, -4.0, 12.0] ./ 13.0 rtol=1e-14
+    @test reverse_gradient(z -> hypot(z[1], z[2], z[3]), [1e200, 2e200, -1e200]) ≈
+          [1.0, 2.0, -1.0] ./ sqrt(6.0) rtol=1e-14
+    @test reverse_gradient(z -> hypot(z[1], 2.0, z[2]) + hypot(1.5, z[1], z[2]), [3.0, -4.0]) ≈
+          ForwardDiff.gradient(z -> hypot(z[1], 2.0, z[2]) + hypot(1.5, z[1], z[2]), [3.0, -4.0]) rtol=1e-14
+    @test hypot(ADVar(Inf), ADVar(1.0), ADVar(NaN)).val == Inf
+    @test isnan(hypot(ADVar(NaN), ADVar(1.0), ADVar(2.0)).val)
+    @test reverse_gradient(z -> Diff3D.norm(Vec3(z[1], z[2], z[3])), [0.0, 0.0, 0.0]) ==
+          [1.0, 0.0, 0.0]
     # Constants keep the value-based answer, inside and outside a gradient pass.
     @test iszero(zero(ADVar)) && isone(one(ADVar))
     @test iszero(ADVar(0.0)) && isone(ADVar(1.0)) && !iszero(ADVar(2.0))
