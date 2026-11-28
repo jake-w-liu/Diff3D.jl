@@ -3023,6 +3023,10 @@ vertices but no faces, lines or points loads as one unnamed point cloud.
 Unlike `OBJLoader`, which draws the vertices of a polyline `l a b c` pairwise,
 a polyline becomes the segments `a-b` and `b-c`, and the faces, lines and points
 of one object become separate children instead of one object of the last kind.
+An object whose faces use several materials becomes one mesh per material,
+where `OBJLoader` builds one mesh with geometry groups and a material array:
+Diff3D's renderers and exporters draw a mesh with a single material (a
+material vector is rejected), so the split is what keeps each material.
 Smoothing groups (`s`) are ignored.
 """
 function load_obj_scene(path::String)
