@@ -5741,8 +5741,76 @@ function BoxHelper(obj::AbstractObject3D; color=Color3(1.0,1.0,0.0))
     LineSegments(_line_geo(_box_edges(box.min, box.max)), LineBasicMaterial(color=color); name="BoxHelper")
 end
 
-"""Frustum wireframe (12 edges) of a camera from its inverse view-projection."""
-function CameraHelper(camera::AbstractCamera; color=Color3(1.0,1.0,1.0))
+# CameraHelper.js setColors defaults: frustum, cone, up, target and cross.
+const _CAMERA_HELPER_FRUSTUM_COLOR = _helper_hex_color(0xffaa00)
+const _CAMERA_HELPER_CONE_COLOR = _helper_hex_color(0xff0000)
+const _CAMERA_HELPER_UP_COLOR = _helper_hex_color(0x00aaff)
+const _CAMERA_HELPER_TARGET_COLOR = _helper_hex_color(0xffffff)
+const _CAMERA_HELPER_CROSS_COLOR = _helper_hex_color(0x333333)
+
+# CameraHelper.js line list: point ids of each segment, in vertex order.
+const _CAMERA_HELPER_LINES = (
+    (:n1, :n2), (:n2, :n4), (:n4, :n3), (:n3, :n1),          # near
+    (:f1, :f2), (:f2, :f4), (:f4, :f3), (:f3, :f1),          # far
+    (:n1, :f1), (:n2, :f2), (:n3, :f3), (:n4, :f4),          # sides
+    (:p, :n1), (:p, :n2), (:p, :n3), (:p, :n4),              # cone
+    (:u1, :u2), (:u2, :u3), (:u3, :u1),                      # up
+    (:c, :t), (:p, :c),                                      # target
+    (:cn1, :cn2), (:cn3, :cn4), (:cf1, :cf2), (:cf3, :cf4))  # cross
+
+# CameraHelper.js update(): normalized device coordinates of each point
+# (near z = -1, far z = 1); `p` is the camera origin.
+function _camera_helper_ndc(id::Symbol)
+    id === :c && return (0.0, 0.0, -1.0)
+    id === :t && return (0.0, 0.0, 1.0)
+    id === :n1 && return (-1.0, -1.0, -1.0)
+    id === :n2 && return (1.0, -1.0, -1.0)
+    id === :n3 && return (-1.0, 1.0, -1.0)
+    id === :n4 && return (1.0, 1.0, -1.0)
+    id === :f1 && return (-1.0, -1.0, 1.0)
+    id === :f2 && return (1.0, -1.0, 1.0)
+    id === :f3 && return (-1.0, 1.0, 1.0)
+    id === :f4 && return (1.0, 1.0, 1.0)
+    id === :u1 && return (0.7, 1.1, -1.0)
+    id === :u2 && return (-0.7, 1.1, -1.0)
+    id === :u3 && return (0.0, 2.0, -1.0)
+    id === :cf1 && return (-1.0, 0.0, 1.0)
+    id === :cf2 && return (1.0, 0.0, 1.0)
+    id === :cf3 && return (0.0, -1.0, 1.0)
+    id === :cf4 && return (0.0, 1.0, 1.0)
+    id === :cn1 && return (-1.0, 0.0, -1.0)
+    id === :cn2 && return (1.0, 0.0, -1.0)
+    id === :cn3 && return (0.0, -1.0, -1.0)
+    return (0.0, 1.0, -1.0)                                  # :cn4
+end
+
+"""
+    CameraHelper(camera; color=Color3(1,1,1), style=:box,
+                 frustum_color=<0xffaa00>, cone_color=<0xff0000>,
+                 up_color=<0x00aaff>, target_color=<0xffffff>,
+                 cross_color=<0x333333>)
+
+Wireframe of a camera's view volume in world space, from its inverse
+view and projection. The default `style=:box` draws Diff3D's 12 frustum
+edges in `color`. `style=:threejs` draws the 25 segments of three.js
+`CameraHelper` in its vertex order: near and far rectangles, side edges, the
+cone from the camera to the near corners, the up triangle, the centre line
+and the near/far crosses, with three.js's per-vertex `:color`s (the `*_color`
+keywords, three.js `setColors`, in the linear working space) multiplied by the
+material `color`.
+"""
+function CameraHelper(camera::AbstractCamera; color=Color3(1.0,1.0,1.0),
+                      style::Symbol=:box,
+                      frustum_color=_CAMERA_HELPER_FRUSTUM_COLOR,
+                      cone_color=_CAMERA_HELPER_CONE_COLOR,
+                      up_color=_CAMERA_HELPER_UP_COLOR,
+                      target_color=_CAMERA_HELPER_TARGET_COLOR,
+                      cross_color=_CAMERA_HELPER_CROSS_COLOR)
+    style === :box || style === :threejs ||
+        throw(ArgumentError("CameraHelper style must be :box or :threejs"))
+    style === :threejs && return _camera_helper_threejs(
+        camera, color, frustum_color, cone_color, up_color, target_color,
+        cross_color)
     inv = mat4_inverse(projection_matrix(camera) * view_matrix(camera))
     corner(x,y,z) = mat4_transform_point(inv, Vec3(x,y,z))
     pos = _box_edge_positions(
@@ -5754,6 +5822,39 @@ function CameraHelper(camera::AbstractCamera; color=Color3(1.0,1.0,1.0))
     all(isfinite, pos) || throw(ArgumentError(
         "CameraHelper requires a camera with a finite, invertible frustum"))
     LineSegments(_line_geo(pos), LineBasicMaterial(color=color); name="CameraHelper")
+end
+
+function _camera_helper_threejs(camera::AbstractCamera, color, frustum_color,
+                                cone_color, up_color, target_color, cross_color)
+    palette = (frustum=_validated_material_color(frustum_color, :frustum_color),
+               cone=_validated_material_color(cone_color, :cone_color),
+               up=_validated_material_color(up_color, :up_color),
+               target=_validated_material_color(target_color, :target_color),
+               cross=_validated_material_color(cross_color, :cross_color))
+    # Vector3.unproject: projection inverse, then the camera's world matrix.
+    inverse_projection = mat4_inverse(projection_matrix(camera))
+    inverse_view = mat4_inverse(view_matrix(camera))
+    point(id) = id === :p ? mat4_transform_point(inverse_view, Vec3(0.0, 0.0, 0.0)) :
+        mat4_transform_point(inverse_view, mat4_transform_point(
+            inverse_projection, Vec3(_camera_helper_ndc(id)...)))
+    n = 2 * length(_CAMERA_HELPER_LINES)
+    pos = Vector{Float64}(undef, 3n)
+    colors = Vector{Float64}(undef, 3n)
+    vi = 1
+    for (k, (a, b)) in enumerate(_CAMERA_HELPER_LINES)
+        # CameraHelper.js setColors: segments 1-12 frustum, 13-16 cone,
+        # 17-19 up, 20 target, 21-25 cross (the `p`-`c` line included).
+        c = k <= 12 ? palette.frustum : k <= 16 ? palette.cone :
+            k <= 19 ? palette.up : k == 20 ? palette.target : palette.cross
+        _write_line_color!(colors, vi, c)
+        _write_line_color!(colors, vi + 1, c)
+        vi = _write_line_segment!(pos, vi, point(a), point(b))
+    end
+    all(isfinite, pos) || throw(ArgumentError(
+        "CameraHelper requires a camera with a finite, invertible frustum"))
+    geo = _line_geo(pos)
+    set_attribute!(geo, :color, colors, 3)
+    return LineSegments(geo, LineBasicMaterial(color=color); name="CameraHelper")
 end
 
 # Translation (column 4) of a 4×4 transform.
@@ -6024,11 +6125,22 @@ SkeletonHelper(mesh::SkinnedMesh; color=nothing,
     SkeletonHelper(mesh.skeleton; color=color, color1=color1, color2=color2)
 
 """
-Square outline lying in `plane` with side length `size`, plus a segment along the
-plane normal from the plane's nearest point to the origin (three.js
-`PlaneHelper`). The plane is `n·x + d = 0`; its representative point is `-d·n`.
+    PlaneHelper(plane::Plane, size=1.0; color=Color3(1,1,0), style=:box)
+
+Square of side `size` lying in `plane` (`n·x + d = 0`, centred on its point
+nearest the origin) in world space. The default `style=:box` draws Diff3D's
+`LineSegments`: the square's outline plus a segment of length `size/2` along
+the normal. `style=:threejs` returns three.js `PlaneHelper`: a `LineObject`
+(line strip) through its eight points, turned like `Object3D.lookAt(normal)`
+(including three.js's perturbation for a normal along ±y), and a child `Mesh` of the
+two filled triangles in `color` with opacity 0.2, transparent and without
+depth writes.
 """
-function PlaneHelper(plane::Plane, size=1.0; color=Color3(1.0, 1.0, 0.0))
+function PlaneHelper(plane::Plane, size=1.0; color=Color3(1.0, 1.0, 0.0),
+                     style::Symbol=:box)
+    style === :box || style === :threejs ||
+        throw(ArgumentError("PlaneHelper style must be :box or :threejs"))
+    style === :threejs && return _plane_helper_threejs(plane, size, color)
     size = _geometry_finite_float(size, "PlaneHelper size")
     normal = plane.normal
     isfinite(normal.x) && isfinite(normal.y) && isfinite(normal.z) &&
@@ -6059,6 +6171,76 @@ function PlaneHelper(plane::Plane, size=1.0; color=Color3(1.0, 1.0, 0.0))
     vi = _write_line_segment!(pos, vi, c4, c1)
     _write_line_segment!(pos, vi, center, center + n * h)
     LineSegments(_line_geo(pos), LineBasicMaterial(color=color); name="PlaneHelper")
+end
+
+# Unit normal and signed distance of `plane` from the origin (the plane is
+# n·x + d = 0, so its point nearest the origin is unit_normal * distance).
+function _plane_helper_frame(plane::Plane, label::String)
+    normal = plane.normal
+    isfinite(normal.x) && isfinite(normal.y) && isfinite(normal.z) &&
+        isfinite(plane.constant) ||
+        throw(ArgumentError("$label plane must be finite"))
+    normal_scale = max(abs(normal.x), abs(normal.y), abs(normal.z))
+    normal_scale > 0.0 ||
+        throw(ArgumentError("$label plane normal must be non-zero"))
+    scaled_normal = normal / normal_scale
+    scaled_length = norm(scaled_normal)
+    n = scaled_normal / scaled_length
+    distance = -(plane.constant / normal_scale) / scaled_length
+    isfinite(distance) ||
+        throw(ArgumentError("$label plane is too far from the origin to represent"))
+    return n, distance
+end
+
+# Triangle-mesh geometry from flat world positions, every vertex with `normal`.
+function _helper_mesh_geo(positions::Vector{Float64}, normal::Vec3)
+    n = length(positions) ÷ 3
+    normals = Vector{Float64}(undef, 3n)
+    for i in 1:n
+        _write_line_vertex!(normals, i, normal.x, normal.y, normal.z)
+    end
+    return BufferGeometry(positions, normals, Float64[], collect(1:n), n, n ÷ 3)
+end
+
+# PlaneHelper.js positions (line strip) and positions2 (mesh triangles).
+const _PLANE_HELPER_LINE = ((1.0, -1.0), (-1.0, 1.0), (-1.0, -1.0), (1.0, 1.0),
+                            (-1.0, 1.0), (-1.0, -1.0), (1.0, -1.0), (1.0, 1.0))
+const _PLANE_HELPER_FILL = ((1.0, 1.0), (-1.0, 1.0), (-1.0, -1.0),
+                            (1.0, 1.0), (-1.0, -1.0), (1.0, -1.0))
+
+function _plane_helper_threejs(plane::Plane, size, color)
+    size = _geometry_finite_float(size, "PlaneHelper size")
+    color = _validated_material_color(color, :color)
+    n, distance = _plane_helper_frame(plane, "PlaneHelper")
+    # PlaneHelper.updateMatrixWorld: scale (size/2, size/2, 1), lookAt(normal)
+    # from the origin (Matrix4.lookAt(normal, origin, +y); its rows are the
+    # helper's x, y and z axes), then translateZ(-constant) along the normal.
+    view = mat4_look_at(n, Vec3(0.0, 0.0, 0.0), Vec3(0.0, 1.0, 0.0))
+    x_axis = Vec3(mat4_get(view, 1, 1), mat4_get(view, 1, 2), mat4_get(view, 1, 3))
+    y_axis = Vec3(mat4_get(view, 2, 1), mat4_get(view, 2, 2), mat4_get(view, 2, 3))
+    z_axis = Vec3(mat4_get(view, 3, 1), mat4_get(view, 3, 2), mat4_get(view, 3, 3))
+    center = z_axis * distance
+    h = size / 2
+    corner((u, v)) = center + x_axis * (u * h) + y_axis * (v * h)
+    line_pos = Vector{Float64}(undef, 3 * length(_PLANE_HELPER_LINE))
+    for (i, uv) in enumerate(_PLANE_HELPER_LINE)
+        p = corner(uv)
+        _write_line_vertex!(line_pos, i, p.x, p.y, p.z)
+    end
+    fill_pos = Vector{Float64}(undef, 3 * length(_PLANE_HELPER_FILL))
+    for (i, uv) in enumerate(_PLANE_HELPER_FILL)
+        p = corner(uv)
+        _write_line_vertex!(fill_pos, i, p.x, p.y, p.z)
+    end
+    all(isfinite, line_pos) ||
+        throw(ArgumentError("PlaneHelper size and plane must give finite points"))
+    helper = LineObject(_line_geo(line_pos), LineBasicMaterial(color=color);
+                        name="PlaneHelper")
+    add!(helper, Mesh(_helper_mesh_geo(fill_pos, z_axis),
+                      MeshBasicMaterial(color=color, opacity=0.2, transparent=true,
+                                        depth_write=false);
+                      name="PlaneHelperMesh"))
+    return helper
 end
 
 """
@@ -6180,4 +6362,134 @@ function ArrowHelper(dir::Vec3=Vec3(0.0, 0.0, 1.0),
     cone.position = Vec3(0.0, len - head / 2, 0.0)
     add!(arrow, cone)
     return arrow
+end
+
+# World matrix and vertex count of a mesh whose per-vertex `label` vectors a
+# helper draws.
+function _vertex_helper_source(object::AbstractObject3D, label::String)
+    hasproperty(object, :geometry) && getproperty(object, :geometry) isa BufferGeometry ||
+        throw(ArgumentError("$label needs an object with a BufferGeometry"))
+    geometry = getproperty(object, :geometry)::BufferGeometry
+    world = compute_world_matrix(object)::Mat4{Float64}
+    return geometry, world
+end
+
+"""
+    VertexNormalsHelper(object, size=1.0; color=Color3(1,0,0))
+
+three.js `VertexNormalsHelper`: one segment per vertex of `object`'s geometry,
+from the world-space vertex along its normal transformed by the normal matrix
+(inverse transpose of the world matrix), normalized and scaled to `size`.
+Built once from the object's current state, in world space.
+"""
+function VertexNormalsHelper(object::AbstractObject3D, size=1.0;
+                             color=_helper_hex_color(0xff0000))
+    size = _geometry_finite_float(size, "VertexNormalsHelper size")
+    color = _validated_material_color(color, :color)
+    geometry, world = _vertex_helper_source(object, "VertexNormalsHelper")
+    n = geometry.n_vertices
+    length(geometry.normals) == 3n ||
+        throw(ArgumentError("VertexNormalsHelper needs a geometry with vertex normals"))
+    # Matrix3.getNormalMatrix: the transposed inverse of the linear part; a
+    # singular matrix inverts to zero, whose normals stay zero.
+    inverse = mat4_inverse(world)
+    pos = Vector{Float64}(undef, _helper_line_position_length(n, "VertexNormalsHelper"))
+    vi = 1
+    for j in 1:n
+        b = 3j - 2
+        p = mat4_transform_point(world, Vec3(geometry.positions[b], geometry.positions[b + 1],
+                                             geometry.positions[b + 2]))
+        nx, ny, nz = geometry.normals[b], geometry.normals[b + 1], geometry.normals[b + 2]
+        normal = Vec3(mat4_get(inverse, 1, 1) * nx + mat4_get(inverse, 2, 1) * ny + mat4_get(inverse, 3, 1) * nz,
+                      mat4_get(inverse, 1, 2) * nx + mat4_get(inverse, 2, 2) * ny + mat4_get(inverse, 3, 2) * nz,
+                      mat4_get(inverse, 1, 3) * nx + mat4_get(inverse, 2, 3) * ny + mat4_get(inverse, 3, 3) * nz)
+        vi = _write_line_segment!(pos, vi, p, normalize(normal) * size + p)
+    end
+    return LineSegments(_line_geo(pos), LineBasicMaterial(color=color);
+                        name="VertexNormalsHelper")
+end
+
+"""
+    VertexTangentsHelper(object, size=1.0; color=Color3(0,1,1))
+
+three.js `VertexTangentsHelper`: one segment per vertex of `object`'s
+geometry, from the world-space vertex along its `:tangent` attribute (see
+[`compute_tangents!`](@ref)) transformed as a direction by the world matrix,
+normalized and scaled to `size`. Built once, in world space.
+"""
+function VertexTangentsHelper(object::AbstractObject3D, size=1.0;
+                              color=_helper_hex_color(0x00ffff))
+    size = _geometry_finite_float(size, "VertexTangentsHelper size")
+    color = _validated_material_color(color, :color)
+    geometry, world = _vertex_helper_source(object, "VertexTangentsHelper")
+    has_attribute(geometry, :tangent) ||
+        throw(ArgumentError("VertexTangentsHelper needs a geometry with a :tangent attribute"))
+    tangent = get_attribute(geometry, :tangent)
+    stride = tangent.item_size
+    n = geometry.n_vertices
+    (stride >= 3 && length(tangent.data) >= stride * n) ||
+        throw(ArgumentError("VertexTangentsHelper needs a tangent per vertex"))
+    pos = Vector{Float64}(undef, _helper_line_position_length(n, "VertexTangentsHelper"))
+    vi = 1
+    for j in 1:n
+        b = 3j - 2
+        p = mat4_transform_point(world, Vec3(geometry.positions[b], geometry.positions[b + 1],
+                                             geometry.positions[b + 2]))
+        t = stride * (j - 1)
+        direction = mat4_transform_direction(world, Vec3(Float64(tangent.data[t + 1]),
+                                                         Float64(tangent.data[t + 2]),
+                                                         Float64(tangent.data[t + 3])))
+        # Vector3.transformDirection normalizes.
+        vi = _write_line_segment!(pos, vi, p, normalize(direction) * size + p)
+    end
+    return LineSegments(_line_geo(pos), LineBasicMaterial(color=color);
+                        name="VertexTangentsHelper")
+end
+
+# RectAreaLightHelper.js positions (line strip) and positions2 (mesh).
+const _RECT_AREA_HELPER_LINE = ((1.0, 1.0), (-1.0, 1.0), (-1.0, -1.0), (1.0, -1.0),
+                                (1.0, 1.0))
+
+"""
+    RectAreaLightHelper(light::RectAreaLight; color=nothing)
+
+three.js `RectAreaLightHelper`: the light's `width`×`height` rectangle as a
+`LineObject` (closed line strip) with a child `Mesh` of its two triangles
+drawn from the back side (the side the light shines toward). Without `color`
+both take `light.color * light.intensity`, scaled down so its largest
+component is at most 1, as three.js does. The rectangle lies in the frame
+Diff3D shades the light with (centred on it, facing its target); for a light
+not aimed straight up or down that is three.js's `lookAt` frame. Built once,
+in world space.
+"""
+function RectAreaLightHelper(light::RectAreaLight; color=nothing)
+    if color === nothing
+        c = light.color * light.intensity
+        largest = max(c.r, c.g, c.b)
+        largest > 1 && (c = c * (1 / largest))
+        color = c
+    end
+    color = _validated_material_color(color, :color)
+    forward, right, up, position = _rect_area_frame(light)
+    # three.js light.lookAt(target): x axis = -right, y axis = up, z = -forward.
+    x_axis = -right
+    sx = 0.5 * light.width
+    sy = 0.5 * light.height
+    corner((u, v)) = position + x_axis * (u * sx) + up * (v * sy)
+    line_pos = Vector{Float64}(undef, 3 * length(_RECT_AREA_HELPER_LINE))
+    for (i, uv) in enumerate(_RECT_AREA_HELPER_LINE)
+        p = corner(uv)
+        _write_line_vertex!(line_pos, i, p.x, p.y, p.z)
+    end
+    fill_pos = Vector{Float64}(undef, 3 * length(_PLANE_HELPER_FILL))
+    for (i, uv) in enumerate(_PLANE_HELPER_FILL)
+        p = corner(uv)
+        _write_line_vertex!(fill_pos, i, p.x, p.y, p.z)
+    end
+    helper = LineObject(_line_geo(line_pos), LineBasicMaterial(color=color);
+                        name="RectAreaLightHelper")
+    add!(helper, Mesh(_helper_mesh_geo(fill_pos, -forward),
+                      MeshBasicMaterial(color=color, side=:back);
+                      name="RectAreaLightHelperMesh"))
+    return helper
 end

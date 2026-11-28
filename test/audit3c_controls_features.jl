@@ -413,3 +413,130 @@ end
     cam.up = Vec3(0.0, 0.0, 1.0)
     @test Diff3D.orbit_polar_angle(oc) ≈ acos(5.5 / r) atol=1e-14
 end
+
+# ---- Helpers ------------------------------------------------------------------
+
+_c3_vertex(geo, i) = (geo.positions[3i + 1], geo.positions[3i + 2], geo.positions[3i + 3])
+
+@testset "CameraHelper style=:threejs matches three.js CameraHelper" begin
+    # CameraHelper.js:44-104 (line list), 175-260 (update/setPoint with
+    # unproject), 120-172 (setColors). three.js stores Float32 attributes, so
+    # positions agree to ~1e-6 and colours to ~1e-7. 0-based vertex indices.
+    cam = PerspectiveCamera(fov=50 * π / 180, aspect=1.5, near=0.5, far=10.0)
+    cam.position = Vec3(1.0, 2.0, 3.0)
+    cam.target = Vec3(0.0, 0.0, 0.0)
+    h = CameraHelper(cam; style=:threejs)
+    @test h isa LineSegments && h.geometry.n_vertices == 50
+    expected = Dict(0 => (0.573995867744918, 1.5356878024826068, 2.8279332779676323),
+        3 => (1.1587428903426578, 1.9297897136925442, 2.3702829962950944),
+        9 => (5.751265853685231, -7.286243698472266, -4.865117441493371),
+        11 => (4.17485830959572, 0.5957940219752897, -9.594340073761904),
+        24 => (1, 2, 3),
+        36 => (0.7875489968018003, 2.126840669297513, 2.362646990405401),
+        37 => (1.0552667687346133, 1.949494810512419, 2.3916383056178594),
+        38 => (0.8663693790437879, 1.7327387580875757, 2.5991081371313633),
+        39 => (-1.6726124191242433, -3.3452248382484875, -5.017837257372731),
+        42 => (0.5345856766239242, 1.7327387580875757, 2.709702704604651),
+        49 => (-2.4608161911689983, 0.5957940219752897, -7.3824485735069985))
+    for (i, e) in expected
+        @test all(abs.(_c3_vertex(h.geometry, i) .- e) .<= 1e-6)
+    end
+    colors = get_attribute(h.geometry, :color).data
+    expected_colors = Dict(0 => (1, 0.4019777774810791, 0), 24 => (1, 0, 0),
+        32 => (0, 0.4019777774810791, 1), 38 => (1, 1, 1),
+        40 => (0.03310476616024971, 0.03310476616024971, 0.03310476616024971),
+        49 => (0.03310476616024971, 0.03310476616024971, 0.03310476616024971))
+    for (i, e) in expected_colors
+        @test all(abs.((colors[3i + 1], colors[3i + 2], colors[3i + 3]) .- e) .<= 1e-7)
+    end
+    o = OrthographicCamera(left=-2.0, right=3.0, top=1.5, bottom=-1.0, near=0.25, far=8.0)
+    o.position = Vec3(-1.0, 0.5, 2.0)
+    o.target = Vec3(1.0, 0.0, -1.0)
+    o.zoom = 1.25
+    ho = CameraHelper(o; style=:threejs)
+    expected_ortho = Dict(0 => (-2.167860326390036, -0.2772309758026452, 1.0476270329870618),
+        11 => (5.570906196922591, 0.639266879769609, -3.3494202010538974),
+        24 => (-1, 0.5, 2),
+        36 => (-0.27517794238651083, 2.6943323634592464, 1.8141547324457634),
+        39 => (3.8306116764709577, -0.35125423331768824, -4.344529695840437),
+        49 => (3.906805608246904, 0.639266879769609, -4.458820593504356))
+    for (i, e) in expected_ortho
+        @test all(abs.(_c3_vertex(ho.geometry, i) .- e) .<= 1e-6)
+    end
+    # The default keeps Diff3D's 12-edge box, and bad styles are rejected.
+    @test CameraHelper(cam).geometry.n_vertices == 24
+    @test !has_attribute(CameraHelper(cam).geometry, :color)
+    @test_throws ArgumentError CameraHelper(cam; style=:cone)
+end
+
+@testset "PlaneHelper style=:threejs matches three.js PlaneHelper" begin
+    # PlaneHelper.js:36-79: Line strip positions, the filled mesh child, and
+    # updateMatrixWorld (scale, lookAt(normal), translateZ(-constant)).
+    n = normalize(Vec3(1.0, 2.0, -2.0))
+    h = PlaneHelper(Plane(n, -1.5), 3; color=Diff3D._helper_hex_color(0x33cc99), style=:threejs)
+    line = [-0.3944271909999153,-0.11803398874989512,-2.5652475842498523,1.3944271909999153,2.118033988749895,0.565247584249853,2.288854381999831,-0.11803398874989512,-1.2236067977499787,-1.288854381999831,2.118033988749895,-0.776393202250021,1.3944271909999153,2.118033988749895,0.565247584249853,2.288854381999831,-0.11803398874989512,-1.2236067977499787,-0.3944271909999153,-0.11803398874989512,-2.5652475842498523,-1.288854381999831,2.118033988749895,-0.776393202250021]
+    mesh = [-1.288854381999831,2.118033988749895,-0.776393202250021,1.3944271909999153,2.118033988749895,0.565247584249853,2.288854381999831,-0.11803398874989512,-1.2236067977499787,-1.288854381999831,2.118033988749895,-0.776393202250021,2.288854381999831,-0.11803398874989512,-1.2236067977499787,-0.3944271909999153,-0.11803398874989512,-2.5652475842498523]
+    @test h isa LineObject
+    @test maximum(abs.(h.geometry.positions .- line)) <= 1e-12
+    child = only(h.children)
+    @test child isa Mesh && maximum(abs.(child.geometry.positions .- mesh)) <= 1e-12
+    @test child.material.opacity == 0.2 && child.material.transparent && !child.material.depth_write
+    c = h.material.color
+    @test all(abs.((c.r, c.g, c.b) .- (0.033104766565152086, 0.6038273388475408, 0.31854677811435356)) .<= 1e-10)
+    # A normal along +y takes three.js's lookAt perturbation (Matrix4.lookAt).
+    up = PlaneHelper(Plane(Vec3(0.0, 1.0, 0.0), 2.0), 2; style=:threejs)
+    @test maximum(abs.(up.geometry.positions .- [1,-2.0000999899995,0.9997999950010001,-1,-1.9998999900005001,-1.000199994999,-1,-2.0000999899995,0.9997999950010001,1,-1.9998999900005001,-1.000199994999,-1,-1.9998999900005001,-1.000199994999,-1,-2.0000999899995,0.9997999950010001,1,-2.0000999899995,0.9997999950010001,1,-1.9998999900005001,-1.000199994999])) <= 1e-12
+    @test PlaneHelper(Plane(n, -1.5), 3) isa LineSegments
+    @test_throws ArgumentError PlaneHelper(Plane(n, -1.5); style=:quad)
+end
+
+@testset "VertexNormalsHelper and VertexTangentsHelper match three.js" begin
+    # VertexNormalsHelper.js:93-131 (normal matrix), VertexTangentsHelper.js:
+    # 84-117 (transformDirection); Float32 buffers in three.js.
+    g = BoxGeometry(width=1.0, height=2.0, depth=3.0)
+    compute_tangents!(g)
+    m = Mesh(g, MeshBasicMaterial())
+    m.position = Vec3(1.0, -1.0, 2.0)
+    m.rotation = Euler(0.3, 0.5, -0.2, :XYZ)
+    m.scale = Vec3(2.0, 1.0, 0.5)
+    hn = Diff3D.VertexNormalsHelper(m, 0.7)
+    ht = Diff3D.VertexTangentsHelper(m, 0.4)
+    @test hn.geometry.n_vertices == 48 && ht.geometry.n_vertices == 48
+    normals = Dict(0 => (2.3940072059631348, -0.28100699186325073, 2.3198325634002686),
+        1 => (2.9960696697235107, -0.3166652023792267, 1.9645169973373413),
+        23 => (2.5160512924194336, 0.3941015601158142, 2.4588780403137207),
+        46 => (-0.39400723576545715, -1.7189929485321045, 1.680167317390442),
+        47 => (-0.7296051383018494, -1.5374525785446167, 1.093296766281128))
+    tangents = Dict(1 => (2.202237129211426, -0.17726965248584747, 1.9844779968261719),
+        23 => (2.7380430698394775, -0.3013831377029419, 2.116795063018799),
+        47 => (-0.738042950630188, -1.698616862297058, 1.8832048177719116))
+    for (i, e) in normals
+        @test all(abs.(_c3_vertex(hn.geometry, i) .- e) .<= 1e-6)
+    end
+    for (i, e) in tangents
+        @test all(abs.(_c3_vertex(ht.geometry, i) .- e) .<= 1e-6)
+    end
+    @test hn.material.color == Color3(1.0, 0.0, 0.0)
+    @test ht.material.color == Color3(0.0, 1.0, 1.0)
+    @test_throws ArgumentError Diff3D.VertexTangentsHelper(Mesh(BoxGeometry(), MeshBasicMaterial()))
+    @test_throws ArgumentError Diff3D.VertexNormalsHelper(Group())
+end
+
+@testset "RectAreaLightHelper matches three.js RectAreaLightHelper" begin
+    # RectAreaLightHelper.js:31-110 for a light at (2, 3, 1) looking at the
+    # origin, 4x2, colour 0xff8800 at intensity 3 (normalized to max 1).
+    light = RectAreaLight(color=Diff3D._helper_hex_color(0xff8800), intensity=3.0,
+                          width=4.0, height=2.0, position=Vec3(2.0, 3.0, 1.0))
+    light.target = Vec3(0.0, 0.0, 0.0)
+    h = Diff3D.RectAreaLightHelper(light)
+    line = [2.1772900253992793,3.5976143046671964,-1.1474229648001506,0.388435643399448,3.597614304667197,2.430285799199514,1.8227099746007205,2.4023856953328036,3.1474229648001506,3.611564356600552,2.402385695332803,-0.43028579919951393,2.1772900253992793,3.5976143046671964,-1.1474229648001506]
+    mesh = [2.1772900253992793,3.5976143046671964,-1.1474229648001506,0.388435643399448,3.597614304667197,2.430285799199514,1.8227099746007205,2.4023856953328036,3.1474229648001506,2.1772900253992793,3.5976143046671964,-1.1474229648001506,1.8227099746007205,2.4023856953328036,3.1474229648001506,3.611564356600552,2.402385695332803,-0.43028579919951393]
+    @test h isa LineObject && maximum(abs.(h.geometry.positions .- line)) <= 1e-12
+    child = only(h.children)
+    @test maximum(abs.(child.geometry.positions .- mesh)) <= 1e-12
+    @test child.material.side === :back
+    c = h.material.color
+    @test all(abs.((c.r, c.g, c.b) .- (1.0, 0.24620132669705552, 0.0)) .<= 1e-10)
+    @test Diff3D.RectAreaLightHelper(light; color=Color3(0.0, 1.0, 0.0)).material.color ==
+          Color3(0.0, 1.0, 0.0)
+end
