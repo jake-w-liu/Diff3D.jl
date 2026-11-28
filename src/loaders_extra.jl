@@ -1704,6 +1704,13 @@ Decode a Radiance RGBE/HDR image with `FORMAT=32-bit_rle_rgbe` into a linear
 H×W×3 floating-point array. Supports both flat scanlines and the standard
 per-channel RLE scanline encoding used by `.hdr` environment maps.
 
+Pixels are converted as Greg Ward's reference `rgbe.c` (`rgbe2float`) does:
+`mantissa * 2^(e - 136)`, i.e. `mantissa / 256 * 2^(e - 128)`, with `e = 0`
+decoding to black. three.js `HDRLoader` (formerly `RGBELoader`,
+HDRLoader.js:358) uses `mantissa / 255 * 2^(e - 128)` instead, so its values
+are 256/255 (about 0.39 %) larger than these, and an `e = 0` pixel there is
+`mantissa / 255 * 2^-128` rather than exactly 0. Multiply by `256 / 255` to
+reproduce three.js values.
 """
 load_rgbe(path::String) = _decode_rgbe(read(path))
 
