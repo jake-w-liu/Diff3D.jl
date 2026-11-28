@@ -647,8 +647,10 @@ end
     camera.position = Vec3(0.0, 0.0, 3.0)
     @sync for task_index in 1:max(4, 2 * Threads.nthreads())
         Threads.@spawn begin
-            target = RenderTarget(4, 4)
-            cache = RenderCache()
+            # `local`: the testset assigns `cache` again below, so a plain
+            # assignment here would make every task share that one variable.
+            local target = RenderTarget(4, 4)
+            local cache = RenderCache()
             for frame in 1:60
                 if isodd(frame + task_index)
                     render!(target, scene, camera; cache=cache, shading=:smooth)
