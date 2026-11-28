@@ -102,3 +102,68 @@ end
         @test_throws ArgumentError load_xyz(p)
     end
 end
+
+const _DDLT_B64 = "AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAA"   # 3 x vec3 float
+_ddlt_doc(; acc="""{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[1,1,0]}""",
+          view="""{"buffer":0,"byteLength":36}""",
+          mesh="""{"primitives":[{"attributes":{"POSITION":0}}]}""", extra="") =
+    """{"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"mesh":0}],
+       "meshes":[$mesh],"accessors":[$acc],"bufferViews":[$view],
+       "buffers":[{"byteLength":36,"uri":"data:application/octet-stream;base64,$_DDLT_B64"}]$extra}"""
+
+function _ddlt_load(text)
+    p = tempname() * ".gltf"
+    write(p, text)
+    return load_gltf_asset(p)
+end
+
+# LH-4: missing schema-required properties raise an ArgumentError naming the
+# object and the property, not a bare KeyError.
+@testset "glTF missing required properties" begin
+    @test _ddlt_load(_ddlt_doc()) isa GLTFAsset
+    cases = [
+        (acc="""{"bufferView":0,"componentType":5126,"count":3}""",) => "accessors[0] is missing required property \"type\"",
+        (acc="""{"bufferView":0,"count":3,"type":"VEC3"}""",) => "accessors[0] is missing required property \"componentType\"",
+        (acc="""{"bufferView":0,"componentType":5126,"type":"VEC3"}""",) => "accessors[0] is missing required property \"count\"",
+        (view="""{"byteLength":36}""",) => "bufferViews[0] is missing required property \"buffer\"",
+        (view="""{"buffer":0}""",) => "bufferViews[0] is missing required property \"byteLength\"",
+        (mesh="{}",) => "meshes[0] is missing required property \"primitives\"",
+        (mesh="""{"primitives":[{}]}""",) => "meshes[0].primitives[0] is missing required property \"attributes\"",
+        (acc="""{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","sparse":{"count":1,"indices":{"bufferView":0}}}""",) =>
+            "accessors[0].sparse is missing required property \"values\"",
+        (acc="""{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","sparse":{"count":1,"indices":{"bufferView":0},"values":{"bufferView":0}}}""",) =>
+            "accessors[0].sparse.indices is missing required property \"componentType\"",
+        (extra=""","animations":[{"channels":[{"target":{"node":0,"path":"translation"},"sampler":0}]}]""",) =>
+            "animations[0] is missing required property \"samplers\"",
+        (extra=""","animations":[{"channels":[{"target":{"node":0},"sampler":0}],"samplers":[{"input":0,"output":0}]}]""",) =>
+            "animations[0] channel target is missing required property \"path\"",
+        (extra=""","animations":[{"channels":[{"target":{"node":0,"path":"translation"},"sampler":0}],"samplers":[{"output":0}]}]""",) =>
+            "animations[0] sampler is missing required property \"input\"",
+    ]
+    for (kw, msg) in cases
+        err = try
+            _ddlt_load(_ddlt_doc(; kw...)); nothing
+        catch e
+            e
+        end
+        @test err isa ArgumentError
+        @test err isa ArgumentError && occursin(msg, err.msg)
+    end
+    cam = """{"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"camera":0}],"cameras":[CAM]}"""
+    @test_throws "cameras[0] is missing required property \"type\"" _ddlt_load(replace(cam, "CAM" => "{}"))
+    @test_throws "cameras[0].perspective is missing required property \"yfov\"" _ddlt_load(
+        replace(cam, "CAM" => """{"type":"perspective","perspective":{"znear":0.1}}"""))
+    @test_throws "cameras[0].orthographic is missing required property \"zfar\"" _ddlt_load(
+        replace(cam, "CAM" => """{"type":"orthographic","orthographic":{"xmag":1,"ymag":1,"znear":0.1}}"""))
+    # A primitive without POSITION is valid glTF ("client implementations
+    # SHOULD skip" it, glTF 2.0 3.7.2.1); three.js GLTFLoader gives it a Mesh
+    # with no vertices. Diff3D skips it and keeps the other primitives.
+    nopos = _ddlt_load(_ddlt_doc(mesh="""{"primitives":[{"attributes":{}},{"attributes":{"POSITION":0}}]}"""))
+    meshes = Any[]
+    traverse(nopos.scene, o -> o isa Mesh && push!(meshes, o))
+    @test length(meshes) == 1 && meshes[1].geometry.n_vertices == 3
+    empty_node = _ddlt_load(_ddlt_doc(mesh="""{"primitives":[{"attributes":{}}]}"""))
+    meshes = Any[]
+    traverse(empty_node.scene, o -> o isa Mesh && push!(meshes, o))
+    @test isempty(meshes) && length(empty_node.scene.children) == 1
+end

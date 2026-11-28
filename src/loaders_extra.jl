@@ -10865,6 +10865,15 @@ function _gltf_checked_index(raw, count::Int, label::String)
     return idx
 end
 
+# A property the glTF 2.0 JSON schema lists as `required`, or an ArgumentError
+# naming the object and the property (instead of a bare KeyError).
+function _gltf_required(obj, key::String, what::AbstractString)
+    obj isa AbstractDict || throw(ArgumentError("glTF $what must be a JSON object"))
+    haskey(obj, key) ||
+        throw(ArgumentError("glTF $what is missing required property \"$key\""))
+    return obj[key]
+end
+
 function _gltf_checked_component_type(raw, label::String)
     return _gltf_checked_integer(raw, "$label componentType")
 end
@@ -10874,11 +10883,14 @@ function _gltf_accessor(gltf, buffers, ai::Int)
     accessors = gltf["accessors"]
     0 <= ai < length(accessors) || error("glTF accessor index $ai out of bounds")
     acc = accessors[ai + 1]
-    count = _gltf_checked_nonnegative_integer(acc["count"], "accessor count")
-    typ = String(acc["type"])
+    what = "accessors[$ai]"
+    count = _gltf_checked_nonnegative_integer(_gltf_required(acc, "count", what),
+                                              "accessor count")
+    typ = String(_gltf_required(acc, "type", what))
     haskey(_GLTF_COMP_SIZE, typ) || error("glTF accessor type $typ")
     ncomp = _GLTF_COMP_SIZE[typ]
-    ctype = _gltf_checked_component_type(acc["componentType"], "accessor")
+    ctype = _gltf_checked_component_type(_gltf_required(acc, "componentType", what),
+                                         "accessor")
     normalized = _gltf_checked_bool(get(acc, "normalized", false), "accessor normalized")
     dense_payload = haskey(acc, "bufferView")
     compbytes = _gltf_component_bytes(ctype)
@@ -10898,15 +10910,18 @@ function _gltf_accessor(gltf, buffers, ai::Int)
     if haskey(acc, "sparse")
         sparse = acc["sparse"]
         sparse isa AbstractDict || error("glTF accessor sparse must be an object")
-        scount = _gltf_checked_nonnegative_integer(sparse["count"], "sparse accessor count")
+        scount = _gltf_checked_nonnegative_integer(
+            _gltf_required(sparse, "count", "$what.sparse"), "sparse accessor count")
         scount <= count || error("glTF sparse accessor count exceeds accessor count")
-        indices_def = sparse["indices"]
-        values_def = sparse["values"]
+        indices_def = _gltf_required(sparse, "indices", "$what.sparse")
+        values_def = _gltf_required(sparse, "values", "$what.sparse")
         indices_def isa AbstractDict ||
             error("glTF sparse accessor indices must be an object")
         values_def isa AbstractDict ||
             error("glTF sparse accessor values must be an object")
-        ictype = _gltf_checked_component_type(indices_def["componentType"], "sparse accessor indices")
+        ictype = _gltf_checked_component_type(
+            _gltf_required(indices_def, "componentType", "$what.sparse.indices"),
+            "sparse accessor indices")
         ictype in (5121, 5123, 5125) ||
             error("glTF sparse accessor indices componentType must be UNSIGNED_BYTE, UNSIGNED_SHORT, or UNSIGNED_INT")
         icompbytes = _gltf_component_bytes(ictype)
@@ -11132,17 +11147,18 @@ function _gltf_sparse_buffer_layout(gltf, buffers, sparse_def::AbstractDict,
                                     label::String; stride::Int=element_size,
                                     alignment::Int=1)::Tuple{AbstractVector{UInt8},Int}
     buffer_views = get(gltf, "bufferViews", Any[])::AbstractVector
-    bv = buffer_views[_gltf_checked_index(sparse_def["bufferView"],
-                                          length(buffer_views),
-                                          "$label bufferView") + 1]::AbstractDict
+    bv_index = _gltf_checked_index(_gltf_required(sparse_def, "bufferView", label),
+                                   length(buffer_views), "$label bufferView")
+    bv = buffer_views[bv_index + 1]::AbstractDict
     haskey(bv, "byteStride") &&
         error("glTF $label bufferView must not define byteStride")
-    buf = buffers[_gltf_checked_index(bv["buffer"], length(buffers),
-                                      "$label buffer") + 1]::AbstractVector{UInt8}
+    buf = buffers[_gltf_checked_index(_gltf_required(bv, "buffer", "bufferViews[$bv_index]"),
+                                      length(buffers), "$label buffer") + 1]::AbstractVector{UInt8}
     view_offset = _gltf_checked_nonnegative_integer(get(bv, "byteOffset", 0.0),
                                                     "$label bufferView byteOffset")
-    view_len = _gltf_checked_nonnegative_integer(bv["byteLength"],
-                                                 "$label bufferView byteLength")
+    view_len = _gltf_checked_nonnegative_integer(
+        _gltf_required(bv, "byteLength", "bufferViews[$bv_index]"),
+        "$label bufferView byteLength")
     view_end = _gltf_checked_byte_end(view_offset, view_len, "$label bufferView")
     view_end <= length(buf) ||
         error("glTF $label bufferView byteLength $view_len at byteOffset " *
@@ -11165,14 +11181,15 @@ function _gltf_accessor_buffer_layout(gltf, buffers, acc, ncomp::Int, ctype::Int
                                       element_stride::Int=element_size,
                                       alignment::Int=1)::Tuple{AbstractVector{UInt8},Int,Int}
     buffer_views = get(gltf, "bufferViews", Any[])::AbstractVector
-    bv = buffer_views[_gltf_checked_index(acc["bufferView"], length(buffer_views),
-                                          "$label bufferView") + 1]::AbstractDict
-    buf = buffers[_gltf_checked_index(bv["buffer"], length(buffers),
-                                      "bufferView buffer") + 1]::AbstractVector{UInt8}
+    bv_index = _gltf_checked_index(acc["bufferView"], length(buffer_views),
+                                   "$label bufferView")
+    bv = buffer_views[bv_index + 1]::AbstractDict
+    buf = buffers[_gltf_checked_index(_gltf_required(bv, "buffer", "bufferViews[$bv_index]"),
+                                      length(buffers), "bufferView buffer") + 1]::AbstractVector{UInt8}
     view_offset::Int = _gltf_checked_nonnegative_integer(get(bv, "byteOffset", 0.0),
                                                          "bufferView byteOffset")
-    view_len::Int = _gltf_checked_nonnegative_integer(bv["byteLength"],
-                                                     "bufferView byteLength")
+    view_len::Int = _gltf_checked_nonnegative_integer(
+        _gltf_required(bv, "byteLength", "bufferViews[$bv_index]"), "bufferView byteLength")
     view_end::Int = _gltf_checked_byte_end(view_offset, view_len, "$label bufferView")
     view_end <= length(buf) ||
         error("glTF $label bufferView byteLength $view_len at byteOffset $view_offset exceeds buffer length $(length(buf))")
@@ -11490,10 +11507,13 @@ function _gltf_buffer_view_bytes(gltf, buffers, buffer_view_index::Int, label::S
     0 <= buffer_view_index < length(buffer_views) ||
         error("$label index $buffer_view_index out of bounds")
     bv = buffer_views[buffer_view_index + 1]
-    buf = buffers[_gltf_checked_index(bv["buffer"], length(buffers), "bufferView buffer") + 1]
+    what = "bufferViews[$buffer_view_index]"
+    buf = buffers[_gltf_checked_index(_gltf_required(bv, "buffer", what), length(buffers),
+                                      "bufferView buffer") + 1]
     offset = _gltf_checked_nonnegative_integer(get(bv, "byteOffset", 0.0),
                                                "bufferView byteOffset")
-    len = _gltf_checked_nonnegative_integer(bv["byteLength"], "bufferView byteLength")
+    len = _gltf_checked_nonnegative_integer(_gltf_required(bv, "byteLength", what),
+                                            "bufferView byteLength")
     view_end = _gltf_checked_byte_end(offset, len, "image bufferView")
     view_end <= length(buf) ||
         error("$label byteLength $len at byteOffset $offset exceeds buffer length $(length(buf))")
@@ -11550,7 +11570,8 @@ function _gltf_texture(gltf, buffers, dir::String, texinfo; colorspace::Symbol=:
                        texture_cache=nothing)
     texinfo === nothing && return nothing
     textures = get(gltf, "textures", Any[])
-    ti = _gltf_checked_index(texinfo["index"], length(textures), "texture")
+    ti = _gltf_checked_index(_gltf_required(texinfo, "index", "textureInfo"),
+                             length(textures), "texture")
     texdef = textures[ti + 1]
     if !haskey(texdef, "source")
         basisu = get(get(texdef, "extensions", Dict{String,Any}()),
@@ -12042,9 +12063,10 @@ function _gltf_primitive_indices(gltf, buffers, accessor_index::Int, nverts::Int
     0 <= accessor_index < length(accessors) ||
         error("glTF primitive indices accessor index $accessor_index out of bounds")
     acc = accessors[accessor_index + 1]::AbstractDict
-    acc["type"] == "SCALAR" ||
+    what = "accessors[$accessor_index]"
+    _gltf_required(acc, "type", what) == "SCALAR" ||
         error("glTF primitive indices accessor must be SCALAR")
-    ctype::Int = _gltf_checked_component_type(acc["componentType"],
+    ctype::Int = _gltf_checked_component_type(_gltf_required(acc, "componentType", what),
                                               "primitive indices accessor")
     ctype in (5121, 5123, 5125) ||
         error("glTF primitive indices componentType must be UNSIGNED_BYTE, UNSIGNED_SHORT, or UNSIGNED_INT")
@@ -12052,7 +12074,7 @@ function _gltf_primitive_indices(gltf, buffers, accessor_index::Int, nverts::Int
                                     "primitive indices accessor normalized")
     !normalized ||
         error("glTF primitive indices accessor normalized must be false")
-    count::Int = _gltf_checked_nonnegative_integer(acc["count"],
+    count::Int = _gltf_checked_nonnegative_integer(_gltf_required(acc, "count", what),
                                                   "primitive indices accessor count")
     _checked_mul_int(count, sizeof(Int), "glTF primitive indices output byte size")
     dense_payload = haskey(acc, "bufferView")
@@ -12068,13 +12090,14 @@ function _gltf_primitive_indices(gltf, buffers, accessor_index::Int, nverts::Int
     sparse_layout = nothing
     if haskey(acc, "sparse")
         sparse = acc["sparse"]::AbstractDict
-        scount::Int = _gltf_checked_nonnegative_integer(sparse["count"],
-                                                       "sparse accessor count")
+        scount::Int = _gltf_checked_nonnegative_integer(
+            _gltf_required(sparse, "count", "$what.sparse"), "sparse accessor count")
         scount <= count || error("glTF sparse accessor count exceeds accessor count")
-        indices_def = sparse["indices"]::AbstractDict
-        values_def = sparse["values"]::AbstractDict
-        ictype::Int = _gltf_checked_component_type(indices_def["componentType"],
-                                                  "sparse accessor indices")
+        indices_def = _gltf_required(sparse, "indices", "$what.sparse")::AbstractDict
+        values_def = _gltf_required(sparse, "values", "$what.sparse")::AbstractDict
+        ictype::Int = _gltf_checked_component_type(
+            _gltf_required(indices_def, "componentType", "$what.sparse.indices"),
+            "sparse accessor indices")
         ictype in (5121, 5123, 5125) ||
             error("glTF sparse accessor indices componentType must be UNSIGNED_BYTE, UNSIGNED_SHORT, or UNSIGNED_INT")
         icompbytes::Int = _gltf_component_bytes(ictype)
@@ -12282,7 +12305,7 @@ function _gltf_instance_colors(gltf, buffers, node, count::Int)
     ext = get(get(node, "extensions", Dict{String,Any}()),
               "EXT_mesh_gpu_instancing", nothing)
     ext === nothing && return nothing
-    attrs = ext["attributes"]
+    attrs = _gltf_required(ext, "attributes", "EXT_mesh_gpu_instancing")
     haskey(attrs, "_COLOR_0") || return nothing
     accessor_index = _gltf_checked_accessor_index(
         gltf, attrs["_COLOR_0"], "EXT_mesh_gpu_instancing _COLOR_0")
@@ -12351,29 +12374,30 @@ end
 
 function _gltf_camera(gltf, camera_idx::Int, name::String)
     camdef = gltf["cameras"][camera_idx + 1]
-    typ = String(camdef["type"])
+    what = "cameras[$camera_idx]"
+    typ = String(_gltf_required(camdef, "type", what))
     cam = if typ == "perspective"
-        p = camdef["perspective"]
+        p = _gltf_required(camdef, "perspective", what)
         far = haskey(p, "zfar") ?
               _gltf_checked_finite_number(p["zfar"], "camera zfar") : Inf
-        PerspectiveCamera(fov=_gltf_checked_finite_number(p["yfov"],
+        PerspectiveCamera(fov=_gltf_checked_finite_number(_gltf_required(p, "yfov", "$what.perspective"),
                                                           "camera yfov"),
                           aspect=_gltf_checked_finite_number(
                               get(p, "aspectRatio", 1.0), "camera aspectRatio"),
-                          near=_gltf_checked_finite_number(p["znear"],
+                          near=_gltf_checked_finite_number(_gltf_required(p, "znear", "$what.perspective"),
                                                            "camera znear"),
                           far=far,
                           name=name)
     elseif typ == "orthographic"
-        o = camdef["orthographic"]
-        xmag = _gltf_checked_finite_number(o["xmag"], "camera xmag")
-        ymag = _gltf_checked_finite_number(o["ymag"], "camera ymag")
+        o = _gltf_required(camdef, "orthographic", what)
+        xmag = _gltf_checked_finite_number(_gltf_required(o, "xmag", "$what.orthographic"), "camera xmag")
+        ymag = _gltf_checked_finite_number(_gltf_required(o, "ymag", "$what.orthographic"), "camera ymag")
         # xmag/ymag are HALF extents (spec: P[0][0] = 1/xmag, P[1][1] = 1/ymag).
         OrthographicCamera(left=-xmag, right=xmag,
                            bottom=-ymag, top=ymag,
-                           near=_gltf_checked_finite_number(o["znear"],
+                           near=_gltf_checked_finite_number(_gltf_required(o, "znear", "$what.orthographic"),
                                                             "camera znear"),
-                           far=_gltf_checked_finite_number(o["zfar"],
+                           far=_gltf_checked_finite_number(_gltf_required(o, "zfar", "$what.orthographic"),
                                                            "camera zfar"),
                            name=name)
     else
@@ -12394,7 +12418,7 @@ end
 function _gltf_node_light(gltf, light_idx::Int, name::String)
     lights = _gltf_punctual_lights(gltf)
     ldef = lights[light_idx + 1]
-    typ = String(ldef["type"])
+    typ = String(_gltf_required(ldef, "type", "KHR_lights_punctual lights[$light_idx]"))
     color = _gltf_color3(get(ldef, "color", [1.0, 1.0, 1.0]), "light color")
     intensity = _gltf_checked_finite_number(get(ldef, "intensity", 1.0),
                                             "light intensity")
@@ -12533,7 +12557,8 @@ function _gltf_validate_attribute_format(gltf, accessor_index::Int,
                                          normalized_types::Tuple)
     accessor = gltf["accessors"][accessor_index + 1]
     component_type = _gltf_checked_component_type(
-        accessor["componentType"], "$name accessor")
+        _gltf_required(accessor, "componentType", "accessors[$accessor_index]"),
+        "$name accessor")
     normalized = _gltf_checked_bool(
         get(accessor, "normalized", false), "$name accessor normalized")
     valid = normalized ? component_type in normalized_types :
@@ -12649,7 +12674,7 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
         0 <= mode <= 6 || error("unsupported glTF primitive mode $mode")
         skin_idx === nothing || mode in (4, 5, 6) ||
             error("glTF primitive mode $mode cannot be loaded as SkinnedMesh")
-        attrs = prim["attributes"]
+        attrs = _gltf_required(prim, "attributes", "mesh primitive")
         position_accessor = _gltf_checked_accessor_index(gltf, attrs["POSITION"],
                                                          "POSITION")
         _gltf_validate_attribute_format(
@@ -12788,7 +12813,7 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
         skin_index = _gltf_checked_zero_based_index(skin_idx, length(skins), "skin")
         skin = skins[skin_index + 1]
         bones = Bone[]
-        for j in skin["joints"]
+        for j in _gltf_required(skin, "joints", "skins[$skin_index]")
             joint_idx = _gltf_checked_node_index(j, node_count, "skin joint")
             bone = node_objects[joint_idx]
             bone isa Bone || error("glTF skin joint node was not loaded as a Bone")
@@ -12865,8 +12890,9 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
             # three.js sizes morphTargetInfluences to the target count, writes
             # mesh.weights over it element by element (GLTFLoader.js:2474-2486),
             # then writes node.weights over that (GLTFLoader.js:4228-4238).
+            primitives = _gltf_required(mesh_def, "primitives", "meshes[$mesh_idx]")
             target_count = maximum(prim -> length(get(prim, "targets", Any[])),
-                                   mesh_def["primitives"]; init=0)
+                                   primitives; init=0)
             mesh_weights = haskey(mesh_def, "weights") ?
                 _gltf_checked_number_vector(mesh_def["weights"], "morph weights") : Float64[]
             node_weights = haskey(node, "weights") ?
@@ -12875,7 +12901,12 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
             copyto!(morph_weights, mesh_weights)
             copyto!(morph_weights, node_weights)
             morph_names = _gltf_target_names(mesh_def)
-            for (prim_slot, prim) in enumerate(mesh_def["primitives"])
+            for (prim_slot, prim) in enumerate(primitives)
+                # glTF 2.0 3.7.2.1: a primitive without POSITION has nothing to
+                # draw, and client implementations SHOULD skip it.
+                haskey(_gltf_required(prim, "attributes",
+                                      "meshes[$mesh_idx].primitives[$(prim_slot - 1)]"),
+                       "POSITION") || continue
                 if instance_matrices !== nothing
                     (isempty(get(prim, "targets", Any[])) && isempty(morph_weights)) ||
                         error("EXT_mesh_gpu_instancing with morph targets is not supported")
@@ -13055,28 +13086,32 @@ function _gltf_animation_clips(gltf, buffers, node_objects)
     # Base.IdSet is unexported before Julia 1.11.
     node_object_set = Base.IdSet{Any}(values(node_objects))
     for (ai, anim) in enumerate(gltf["animations"])
-        samplers = anim["samplers"]
+        what = "animations[$(ai - 1)]"
+        samplers = _gltf_required(anim, "samplers", what)
         channels = get(anim, "channels", Any[])
         tracks = AbstractKeyframeTrack[]
         for ch in channels
-            target = ch["target"]
+            target = _gltf_required(ch, "target", "$what channel")
             node_idx = _gltf_animation_target_node(gltf, target)
             node_idx === nothing && continue
             haskey(node_objects, node_idx) || continue
-            path = String(target["path"])
+            path = String(_gltf_required(target, "path", "$what channel target"))
             path in ("translation", "rotation", "scale", "weights") || continue
             sampler_idx = _gltf_checked_zero_based_index(
-                ch["sampler"], length(samplers), "animation sampler")
+                _gltf_required(ch, "sampler", "$what channel"), length(samplers),
+                "animation sampler")
             sampler = samplers[sampler_idx + 1]
             interpolation = _gltf_animation_interpolation(
                 get(sampler, "interpolation", "LINEAR"))
-            input_accessor = _gltf_checked_accessor_index(gltf, sampler["input"],
+            input_accessor = _gltf_checked_accessor_index(
+                gltf, _gltf_required(sampler, "input", "$what sampler"),
                                                           "animation input")
             _gltf_validate_attribute_format(
                 gltf, input_accessor, "animation input", (5126,), ())
             times, tncomp, tcount = _gltf_accessor(gltf, buffers, input_accessor)
             tncomp == 1 || error("glTF animation input accessor must be SCALAR")
-            output_accessor = _gltf_checked_accessor_index(gltf, sampler["output"],
+            output_accessor = _gltf_checked_accessor_index(
+                gltf, _gltf_required(sampler, "output", "$what sampler"),
                                                            "animation output")
             _gltf_validate_attribute_format(
                 gltf, output_accessor, "animation output", (5126,),
