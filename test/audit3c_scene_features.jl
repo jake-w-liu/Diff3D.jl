@@ -319,8 +319,8 @@ end
         save_webgl_html(path, [WebGLExportCase("a", "A", "", scene)])
         html = read(path, String)
         # The viewer sorts by group order, then renderOrder (WebGLRenderLists.js:1-51).
-        @test occursin("function painterSortStable(a,b){ const order=renderOrderCompare(a,b); if(a.renderProgramId!==b.renderProgramId)", html)
-        @test occursin("function reversePainterSortStable(a,b){ const order=renderOrderCompare(a,b); if(a.renderZ!==b.renderZ)", html)
+        @test occursin("function painterSortStable(a,b){ const order=renderOrderCompare(a,b); if(order!==0) return order; if(a.renderProgramId!==b.renderProgramId)", html)
+        @test occursin("function reversePainterSortStable(a,b){ const order=renderOrderCompare(a,b); if(order!==0) return order; if(a.renderZ!==b.renderZ)", html)
         @test count("function renderOrderCompare(a,b)", html) == 1
         # A non-zero order on a node that is not drawn (here only a group)
         # also selects the render-order sort.
