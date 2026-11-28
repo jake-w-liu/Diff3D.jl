@@ -559,7 +559,8 @@ end
 Restore the saved orbit state (camera position, zoom, and target) and clear
 any damped residual motion. Like three.js `reset()`, it then runs one update:
 the limits are re-applied and, with `auto_rotate`, the camera turns by one
-frame (see `orbit_update!`).
+frame (see `orbit_update!`). A pointer gesture in progress ends, so later
+updates auto-rotate again.
 """
 function orbit_reset!(oc::OrbitControls)
     position = _checked_control_vec3(
@@ -575,9 +576,15 @@ function orbit_reset!(oc::OrbitControls)
     oc.v_zoom = 0.0
     oc.v_pan = Vec3(0.0, 0.0, 0.0)
     # three.js reset() ends with update() (OrbitControls.js:621-633), which
-    # applies the limits and, with auto-rotation, turns the camera one frame.
-    oc.enabled && oc.auto_rotate && return orbit_update!(oc)
-    return _orbit_enforce_limits!(oc)
+    # applies the limits and, with auto-rotation, turns the camera one frame;
+    # that update still sees the old state, and reset() then sets it to NONE.
+    if oc.enabled && oc.auto_rotate
+        orbit_update!(oc)
+    else
+        _orbit_enforce_limits!(oc)
+    end
+    oc.state = :none
+    return oc
 end
 
 # Immediate (non-damped) primitives that always apply their deltas at once.
@@ -1451,6 +1458,9 @@ mutable struct TrackballControls
     pointer_types::Vector{Symbol}
     pointer_down_positions::Vector{NTuple{2, Float64}}
     pointer_positions::Dict{Int, NTuple{2, Float64}}
+    # three.js _zoom0: the camera zoom saved with the reset state; restored
+    # by trackball_reset! for an orthographic camera.
+    zoom0::Float64
 end
 
 const _TRACKBALL_DEFAULT_KEYS = ("KeyA", "KeyS", "KeyD")
@@ -1467,7 +1477,8 @@ TrackballControls(camera::_OrbitCamera, target::Vec3{Float64}, enabled::Bool,
                       :none, :none, true, (0.0, 0.0), (0.0, 0.0), (0.0, 0.0),
                       (0.0, 0.0), (0.0, 0.0), (0.0, 0.0), Vec3(), 0.0, 0.0,
                       0.0, 0.0, 0.0, nothing, Int[], Symbol[],
-                      NTuple{2, Float64}[], Dict{Int, NTuple{2, Float64}}())
+                      NTuple{2, Float64}[], Dict{Int, NTuple{2, Float64}}(),
+                      Float64(camera.zoom))
 
 TrackballControls(camera::PerspectiveCamera, target::Vec3{Float64},
                   enabled::Bool, position0::Vec3{Float64},
@@ -1487,9 +1498,10 @@ TrackballControls(camera::PerspectiveCamera, target::Vec3{Float64},
                       element_height=0.0)
 
 Trackball camera manipulator (three.js `TrackballControls`) for a perspective
-or orthographic camera. `min_distance` and `max_distance` bound the
-camera-to-target distance after every `trackball_rotate!`, `trackball_zoom!`,
-and `trackball_pan!`, like three.js `minDistance`/`maxDistance`.
+or orthographic camera. For a perspective camera `min_distance` and
+`max_distance` bound the camera-to-target distance after every
+`trackball_rotate!`, `trackball_zoom!`, and `trackball_pan!`, like three.js
+`minDistance`/`maxDistance` (which apply to perspective cameras only).
 
 The remaining keywords are the three.js r186 options used by the
 event-driven API ([`trackball_pointer_down!`](@ref),
@@ -1566,17 +1578,25 @@ function _checked_trackball_mouse_buttons(buttons::NamedTuple)
     return (left=buttons.left, middle=buttons.middle, right=buttons.right)
 end
 
-"""Save the current camera position, up vector, and target as the reset state."""
+"""
+Save the current camera position, up vector, and target (and the zoom of an
+orthographic camera) as the reset state.
+"""
 function trackball_save_state!(tc::TrackballControls)
-    _validated_camera_view_vectors(tc.camera, :PerspectiveCamera)
+    _validated_camera_view_vectors(tc.camera, nameof(typeof(tc.camera)))
     _checked_control_vec3(tc.target, "TrackballControls target")
     tc.position0 = tc.camera.position
     tc.target0 = tc.target
     tc.up0 = tc.camera.up
+    tc.zoom0 = tc.camera.zoom
     return tc
 end
 
-"""Restore the saved trackball state."""
+"""
+Restore the saved trackball state (the camera position, up vector and target,
+and the zoom of an orthographic camera) and end any pointer or key gesture, as
+three.js `TrackballControls.reset()` does.
+"""
 function trackball_reset!(tc::TrackballControls)
     position = _checked_control_vec3(
         tc.position0, "TrackballControls saved position")
@@ -1585,18 +1605,28 @@ function trackball_reset!(tc::TrackballControls)
         throw(ArgumentError("TrackballControls saved up must be non-zero"))
     target = _checked_control_vec3(
         tc.target0, "TrackballControls saved target")
+    # TrackballControls.js reset(): object.zoom = _zoom0. A perspective
+    # camera's zoom is left alone, as before orthographic support.
+    tc.camera isa OrthographicCamera &&
+        (tc.camera.zoom = _validated_camera_zoom(tc.zoom0))
     tc.camera.position = position
     tc.camera.up = up
     tc.target = target
     tc.camera.target = target
     _sync_camera_rotation_from_view!(tc.camera)
+    # reset() also sets state and keyState to NONE.
+    tc.state = :none
+    tc.key_state = :none
     return tc
 end
 
 # three.js TrackballControls._checkDistances (TrackballControls.js:738-756):
 # an eye longer than maxDistance, or shorter than minDistance, is rescaled to
 # that length along its direction. A zero eye has no direction and stays zero.
+# three.js checks distances for a perspective camera only (update(),
+# TrackballControls.js:377-395), so an orthographic eye is never limited.
 function _trackball_limited_eye(tc::TrackballControls, eye::Vec3)
+    tc.camera isa OrthographicCamera && return eye
     min_distance, max_distance =
         _checked_orbit_distances(tc.min_distance, tc.max_distance)
     distance = norm(eye)
@@ -1630,7 +1660,7 @@ with it, so the camera can roll over the poles.
 function trackball_rotate!(tc::TrackballControls, dx, dy)
     tc.enabled || return tc
     cam = tc.camera
-    _, _, up = _validated_camera_view_vectors(cam, :PerspectiveCamera)
+    _, _, up = _validated_camera_view_vectors(cam, nameof(typeof(cam)))
     target = _checked_control_vec3(tc.target, "TrackballControls target")
     checked_dx = _checked_control_scalar(dx, "TrackballControls x delta")
     checked_dy = _checked_control_scalar(dy, "TrackballControls y delta")
@@ -1680,7 +1710,7 @@ end
 """Pan the trackball target and camera in the view plane."""
 function trackball_pan!(tc::TrackballControls, dx, dy)
     tc.enabled || return tc
-    _validated_camera_view_vectors(tc.camera, :PerspectiveCamera)
+    _validated_camera_view_vectors(tc.camera, nameof(typeof(tc.camera)))
     _checked_control_vec3(tc.target, "TrackballControls target")
     checked_dx = _checked_control_scalar(dx, "TrackballControls pan x delta")
     checked_dy = _checked_control_scalar(dy, "TrackballControls pan y delta")

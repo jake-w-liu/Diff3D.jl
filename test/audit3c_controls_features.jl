@@ -842,3 +842,58 @@ const _C3_TB_CASES = [
     trackball_zoom!(tco, 0.5)
     @test ortho.zoom == 3.0
 end
+
+@testset "Controls reset ends a gesture; orthographic Trackball ignores distances" begin
+    # Oracle: three.js r186 OrbitControls with autoRotate (speed 5): update(),
+    # saveState(), right-button pointerdown (pan), reset(), update(). reset()
+    # sets state NONE (OrbitControls.js:621-633), so the update auto-rotates.
+    cam = PerspectiveCamera(fov=50 * π / 180, aspect=1.5, near=0.1, far=100.0)
+    cam.position = Vec3(3.0, 4.0, 5.0); cam.target = Vec3(0.5, 0.0, -0.5)
+    oc = OrbitControls(cam, Vec3(0.5, 0.0, -0.5); auto_rotate=true, auto_rotate_speed=5,
+                       element_left=10, element_top=20, element_width=800, element_height=600)
+    orbit_update!(oc); orbit_save_state!(oc)
+    Diff3D.orbit_pointer_down!(oc, 300, 300; button=2)
+    @test oc.state === :pan
+    orbit_reset!(oc)
+    @test oc.state === :none
+    @test _c3_close(cam.position, (2.9519088624193714, 4.0, 5.021606915598876))
+    orbit_update!(oc)
+    @test _c3_close(cam.position, (2.903631002485919, 4.0, 5.04279333945336))
+
+    # Oracle: three.js r186 TrackballControls, orthographic camera with zoom
+    # 1.5: update(), wheel 900, two updates, rotate drag and update, reset()
+    # (restores _zoom0 and sets state NONE, TrackballControls.js:423-445),
+    # then a pointer move (ignored) and two updates (inertia only).
+    ortho = OrthographicCamera(left=-4.0, right=4.0, top=3.0, bottom=-3.0, near=0.1, far=100.0)
+    ortho.zoom = 1.5; ortho.position = Vec3(1.0, 2.0, 5.0); ortho.target = Vec3(0.0, 0.0, 0.0)
+    tc = TrackballControls(ortho, Vec3(0.5, 0.0, -0.5); element_left=10, element_top=20,
+                           element_width=800, element_height=600)
+    Diff3D.trackball_update!(tc); trackball_save_state!(tc)
+    Diff3D.trackball_wheel!(tc, 900); Diff3D.trackball_update!(tc); Diff3D.trackball_update!(tc)
+    @test isapprox(ortho.zoom, 0.9713012847078325; atol=1e-12)
+    Diff3D.trackball_pointer_down!(tc, 400, 300); Diff3D.trackball_pointer_move!(tc, 450, 280)
+    Diff3D.trackball_update!(tc)
+    trackball_reset!(tc)
+    @test ortho.zoom == 1.5 && ortho.position == Vec3(1.0, 2.0, 5.0)
+    @test tc.state === :none && tc.key_state === :none
+    Diff3D.trackball_pointer_move!(tc, 500, 250)
+    Diff3D.trackball_update!(tc); Diff3D.trackball_update!(tc)
+    @test _c3_close(ortho.position, (-0.23671533849649118, 1.5085332447234183, 5.128639085923722))
+    @test _c3_close(ortho.up, (-0.07322173752649327, 0.9941581964506945, 0.07929727349350417))
+    @test isapprox(ortho.zoom, 1.1865959857412491; atol=1e-12)
+
+    # three.js minDistance/maxDistance apply to perspective cameras only
+    # (TrackballControls.js:377-395), so the programmatic calls leave an
+    # orthographic camera's distance alone.
+    ortho2 = OrthographicCamera(left=-4.0, right=4.0, top=3.0, bottom=-3.0, near=0.1, far=100.0)
+    ortho2.position = Vec3(0.0, 0.0, 5.0); ortho2.target = Vec3(0.0, 0.0, 0.0)
+    tc2 = TrackballControls(ortho2; min_distance=6.0, max_distance=7.0)
+    trackball_rotate!(tc2, 0.3, 0.2)
+    @test isapprox(norm(ortho2.position - tc2.target), 5.0; atol=1e-12)
+    trackball_pan!(tc2, 0.5, -0.25)
+    @test isapprox(norm(ortho2.position - tc2.target), 5.0; atol=1e-12)
+    persp = PerspectiveCamera(); persp.position = Vec3(0.0, 0.0, 5.0); persp.target = Vec3(0.0, 0.0, 0.0)
+    tc3 = TrackballControls(persp; min_distance=6.0, max_distance=7.0)
+    trackball_rotate!(tc3, 0.3, 0.2)
+    @test isapprox(norm(persp.position - tc3.target), 6.0; atol=1e-12)
+end
