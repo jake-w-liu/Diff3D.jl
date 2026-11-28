@@ -64,11 +64,15 @@ end
     # quotient 10), so the branch the primal uses is the one to its right.
     h = 1e-7
     @test (rem(1.0, 0.1 + h) - rem(1.0, 0.1)) / h ≈ -9.0 rtol=1e-6
-    # sign is piecewise constant: zero derivative everywhere, including at 0
-    # (ForwardDiff agrees). Base's generic sign returns x itself at zero.
+    # sign is piecewise constant: zero derivative everywhere, including at 0.
+    # Base's generic sign returns x itself at zero. ForwardDiff 1.x has the
+    # same rule; ForwardDiff 0.10 differentiates the generic method and
+    # reports slope 1 at zero, so it is compared away from zero only.
     for x in (-2.0, -0.0, 0.0, 3.0)
         @test reverse_gradient(v -> sign(v[1]) + 2v[1], [x]) == [2.0]
-        @test ForwardDiff.gradient(v -> sign(v[1]) + 2v[1], [x]) == [2.0]
+        if !iszero(x) || pkgversion(ForwardDiff) >= v"1"
+            @test ForwardDiff.gradient(v -> sign(v[1]) + 2v[1], [x]) == [2.0]
+        end
     end
 end
 

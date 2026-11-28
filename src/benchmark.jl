@@ -59,7 +59,7 @@ function scene_triangle_count(scene::AbstractObject3D)
 end
 
 """
-    build_instanced_scene(n_instances; segments)
+    build_instanced_scene(n_instances; width_segments=16, height_segments=8)
 
 A scene of `n_instances` spheres laid out on a 3-D grid via a single
 `InstancedMesh` (bounded memory: one geometry, `n_instances` transforms).
