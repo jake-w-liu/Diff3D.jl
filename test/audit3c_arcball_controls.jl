@@ -892,6 +892,7 @@ end
                  :arcball_set_gizmos_visible!, :arcball_activate_gizmos!,
                  :arcball_dispose_grid!, :arcball_resize!)
         @test isdefined(Diff3D, name)
-        @test Base.Docs.hasdoc(Diff3D, name)
+        # Base.Docs.hasdoc needs Julia 1.11; the docs table works on 1.10.
+        @test haskey(Base.Docs.meta(Diff3D), Base.Docs.Binding(Diff3D, name))
     end
 end
