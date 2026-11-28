@@ -12693,12 +12693,16 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
     end
 
     function build_primitive(prim, skin_idx=nothing, morph_weights=Float64[],
-                             morph_names=String[]; preserve_nontriangle_morphs::Bool=false)
+                             morph_names=String[]; preserve_nontriangle_morphs::Bool=false,
+                             what::String="mesh primitive")
         mode = _gltf_checked_integer(get(prim, "mode", 4), "primitive mode")
         0 <= mode <= 6 || error("unsupported glTF primitive mode $mode")
         skin_idx === nothing || mode in (4, 5, 6) ||
             error("glTF primitive mode $mode cannot be loaded as SkinnedMesh")
-        attrs = _gltf_required(prim, "attributes", "mesh primitive")
+        attrs = _gltf_required(prim, "attributes", what)
+        # glTF 2.0 3.7.2.1: a primitive without POSITION has nothing to draw,
+        # and client implementations SHOULD skip it (the caller does).
+        haskey(attrs, "POSITION") || return nothing
         position_accessor = _gltf_checked_accessor_index(gltf, attrs["POSITION"],
                                                          "POSITION")
         _gltf_validate_attribute_format(
@@ -12941,18 +12945,16 @@ function _gltf_build_scene(gltf, buffers; return_nodes::Bool=false, dir::String=
             copyto!(morph_weights, node_weights)
             morph_names = _gltf_target_names(mesh_def)
             for (prim_slot, prim) in enumerate(primitives)
-                # glTF 2.0 3.7.2.1: a primitive without POSITION has nothing to
-                # draw, and client implementations SHOULD skip it.
-                haskey(_gltf_required(prim, "attributes",
-                                      "meshes[$mesh_idx].primitives[$(prim_slot - 1)]"),
-                       "POSITION") || continue
                 if instance_matrices !== nothing
                     (isempty(get(prim, "targets", Any[])) && isempty(morph_weights)) ||
                         error("EXT_mesh_gpu_instancing with morph targets is not supported")
                 end
                 mesh_obj = build_primitive(
                     prim, get(node, "skin", nothing), morph_weights, morph_names;
-                    preserve_nontriangle_morphs=(node_idx in morph_animated_nodes))
+                    preserve_nontriangle_morphs=(node_idx in morph_animated_nodes),
+                    what="meshes[$mesh_idx].primitives[$(prim_slot - 1)]")
+                # A primitive without POSITION is skipped (build_primitive).
+                mesh_obj === nothing && continue
                 if instance_matrices === nothing
                     add!(obj, mesh_obj)
                 else
