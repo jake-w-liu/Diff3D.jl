@@ -1718,16 +1718,17 @@ function TubeGeometry(path::Curve{Vec3{Float64}}; tubular_segments::Integer=64,
 end
 
 """
-    ShapeGeometry(shape::Shape; curve_segments=12)
+    ShapeGeometry(shape::Shape; curve_segments=12, triangulation=:ear_clip)
 
 Flat triangulated [`Shape`](@ref) with its holes, sampled by
 [`extract_points`](@ref) with `curve_segments` divisions per curve (three.js
 `ShapeGeometry(shapes, curveSegments)`), then built as
 `ShapeGeometry(points; holes)`.
 """
-function ShapeGeometry(shape::Shape; curve_segments::Integer=12)
+function ShapeGeometry(shape::Shape; curve_segments::Integer=12,
+                       triangulation::Symbol=:ear_clip)
     points = extract_points(shape, _geometry_positive_int(curve_segments, "ShapeGeometry curve_segments"))
-    return ShapeGeometry(points.shape; holes=points.holes)
+    return ShapeGeometry(points.shape; holes=points.holes, triangulation=triangulation)
 end
 
 """
@@ -3039,6 +3040,653 @@ end
 
 end # module ParametricFunctions
 
+# ========================== Earcut ==========================
+# Port of mapbox/earcut 3.0.2 as vendored by three.js r186
+# (src/extras/lib/earcut.js). Nodes live in parallel arrays; node id 0 plays
+# the role of JavaScript `null`. Every predicate keeps earcut's operation order
+# and tie-breaking so the triangles are identical to three.js's for the same
+# Float64 input. `i` is the 0-based vertex index, as in earcut.
+
+mutable struct _Earcut
+    i::Vector{Int}
+    x::Vector{Float64}
+    y::Vector{Float64}
+    prev::Vector{Int}
+    next::Vector{Int}
+    z::Vector{Int32}
+    prevz::Vector{Int}
+    nextz::Vector{Int}
+    steiner::Vector{Bool}
+    triangles::Vector{Int}
+end
+
+function _Earcut(capacity::Int)
+    e = _Earcut(Int[], Float64[], Float64[], Int[], Int[], Int32[], Int[], Int[],
+                Bool[], Int[])
+    for field in (e.i, e.x, e.y, e.prev, e.next, e.z, e.prevz, e.nextz, e.steiner)
+        sizehint!(field, capacity)
+    end
+    return e
+end
+
+# createNode (earcut.js:653-664)
+function _ec_create!(e::_Earcut, i::Int, x::Float64, y::Float64)
+    push!(e.i, i); push!(e.x, x); push!(e.y, y)
+    push!(e.prev, 0); push!(e.next, 0); push!(e.z, Int32(0))
+    push!(e.prevz, 0); push!(e.nextz, 0); push!(e.steiner, false)
+    return length(e.i)
+end
+
+# insertNode (earcut.js:628-642)
+function _ec_insert!(e::_Earcut, i::Int, x::Float64, y::Float64, last::Int)
+    p = _ec_create!(e, i, x, y)
+    @inbounds if last == 0
+        e.prev[p] = p
+        e.next[p] = p
+    else
+        e.next[p] = e.next[last]
+        e.prev[p] = last
+        e.prev[e.next[last]] = p
+        e.next[last] = p
+    end
+    return p
+end
+
+# removeNode (earcut.js:644-651). Like earcut, the removed node keeps its links.
+@inline function _ec_remove!(e::_Earcut, p::Int)
+    @inbounds begin
+        e.prev[e.next[p]] = e.prev[p]
+        e.next[e.prev[p]] = e.next[p]
+        e.prevz[p] != 0 && (e.nextz[e.prevz[p]] = e.nextz[p])
+        e.nextz[p] != 0 && (e.prevz[e.nextz[p]] = e.prevz[p])
+    end
+    return nothing
+end
+
+@inline _ec_equals(e::_Earcut, a::Int, b::Int) =
+    @inbounds e.x[a] == e.x[b] && e.y[a] == e.y[b]
+
+# area (earcut.js:521-524): signed area of a triangle, negative counterclockwise.
+@inline function _ec_area(e::_Earcut, p::Int, q::Int, r::Int)
+    @inbounds return (e.y[q] - e.y[p]) * (e.x[r] - e.x[q]) -
+                     (e.x[q] - e.x[p]) * (e.y[r] - e.y[q])
+end
+
+# JavaScript truthiness of a number.
+@inline _ec_truthy(v::Float64) = !(iszero(v) || isnan(v))
+
+@inline _ec_sign(v::Float64) = v > 0 ? 1 : v < 0 ? -1 : 0
+
+# pointInTriangle (earcut.js:500-505)
+@inline function _ec_point_in_triangle(ax::Float64, ay::Float64, bx::Float64, by::Float64,
+                                       cx::Float64, cy::Float64, px::Float64, py::Float64)
+    return (cx - px) * (ay - py) >= (ax - px) * (cy - py) &&
+           (ax - px) * (by - py) >= (bx - px) * (ay - py) &&
+           (bx - px) * (cy - py) >= (cx - px) * (by - py)
+end
+
+# pointInTriangleExceptFirst (earcut.js:507-510)
+@inline _ec_point_in_triangle_except_first(ax, ay, bx, by, cx, cy, px, py) =
+    !(ax == px && ay == py) && _ec_point_in_triangle(ax, ay, bx, by, cx, cy, px, py)
+
+# signedArea (earcut.js:701-708) over the flat coordinates `data[start+1:end]`
+# (0-based `start`/`stop` offsets as in earcut).
+function _ec_signed_area(data::Vector{Float64}, start::Int, stop::Int, dim::Int)
+    sum = 0.0
+    j = stop - dim
+    i = start
+    @inbounds while i < stop
+        sum += (data[j + 1] - data[i + 1]) * (data[i + 2] + data[j + 2])
+        j = i
+        i += dim
+    end
+    return sum
+end
+
+# linkedList (earcut.js:46-62)
+function _ec_linked_list!(e::_Earcut, data::Vector{Float64}, start::Int, stop::Int,
+                          dim::Int, clockwise::Bool)
+    last = 0
+    if clockwise == (_ec_signed_area(data, start, stop, dim) > 0)
+        i = start
+        @inbounds while i < stop
+            last = _ec_insert!(e, i ÷ dim, data[i + 1], data[i + 2], last)
+            i += dim
+        end
+    else
+        i = stop - dim
+        @inbounds while i >= start
+            last = _ec_insert!(e, i ÷ dim, data[i + 1], data[i + 2], last)
+            i -= dim
+        end
+    end
+    if last != 0 && _ec_equals(e, last, e.next[last])
+        _ec_remove!(e, last)
+        last = e.next[last]
+    end
+    return last
+end
+
+# filterPoints (earcut.js:65-87)
+function _ec_filter_points!(e::_Earcut, start::Int, stop::Int=0)
+    start == 0 && return start
+    stop == 0 && (stop = start)
+    p = start
+    while true
+        again = false
+        if !e.steiner[p] && (_ec_equals(e, p, e.next[p]) ||
+                             _ec_area(e, e.prev[p], p, e.next[p]) == 0)
+            _ec_remove!(e, p)
+            p = stop = e.prev[p]
+            p == e.next[p] && break
+            again = true
+        else
+            p = e.next[p]
+        end
+        (again || p != stop) || break
+    end
+    return stop
+end
+
+struct _EcHash
+    min_x::Float64
+    min_y::Float64
+    inv_size::Float64
+end
+
+# earcutLinked (earcut.js:90-136)
+function _ec_earcut_linked!(e::_Earcut, ear::Int, h::_EcHash, pass::Int)
+    ear == 0 && return nothing
+    hashed = _ec_truthy(h.inv_size)
+    pass == 0 && hashed && _ec_index_curve!(e, ear, h)
+    stop = ear
+    while e.prev[ear] != e.next[ear]
+        prev = e.prev[ear]
+        next = e.next[ear]
+        if hashed ? _ec_is_ear_hashed(e, ear, h) : _ec_is_ear(e, ear)
+            push!(e.triangles, e.i[prev], e.i[ear], e.i[next])
+            _ec_remove!(e, ear)
+            # Skipping the next vertex leads to fewer sliver triangles.
+            ear = e.next[next]
+            stop = e.next[next]
+            continue
+        end
+        ear = next
+        if ear == stop
+            if pass == 0
+                _ec_earcut_linked!(e, _ec_filter_points!(e, ear), h, 1)
+            elseif pass == 1
+                ear = _ec_cure_local_intersections!(e, _ec_filter_points!(e, ear))
+                _ec_earcut_linked!(e, ear, h, 2)
+            elseif pass == 2
+                _ec_split_earcut!(e, ear, h)
+            end
+            break
+        end
+    end
+    return nothing
+end
+
+# isEar (earcut.js:139-164)
+function _ec_is_ear(e::_Earcut, ear::Int)
+    a = e.prev[ear]; b = ear; c = e.next[ear]
+    _ec_area(e, a, b, c) >= 0 && return false
+    @inbounds begin
+        ax = e.x[a]; bx = e.x[b]; cx = e.x[c]
+        ay = e.y[a]; by = e.y[b]; cy = e.y[c]
+    end
+    x0 = min(ax, bx, cx); y0 = min(ay, by, cy)
+    x1 = max(ax, bx, cx); y1 = max(ay, by, cy)
+    p = e.next[c]
+    @inbounds while p != a
+        px = e.x[p]; py = e.y[p]
+        if px >= x0 && px <= x1 && py >= y0 && py <= y1 &&
+           _ec_point_in_triangle_except_first(ax, ay, bx, by, cx, cy, px, py) &&
+           _ec_area(e, e.prev[p], p, e.next[p]) >= 0
+            return false
+        end
+        p = e.next[p]
+    end
+    return true
+end
+
+@inline function _ec_blocks(e::_Earcut, p::Int, a::Int, c::Int, ax, ay, bx, by, cx, cy,
+                            x0, y0, x1, y1)
+    @inbounds begin
+        px = e.x[p]; py = e.y[p]
+        return px >= x0 && px <= x1 && py >= y0 && py <= y1 && p != a && p != c &&
+               _ec_point_in_triangle_except_first(ax, ay, bx, by, cx, cy, px, py) &&
+               _ec_area(e, e.prev[p], p, e.next[p]) >= 0
+    end
+end
+
+# isEarHashed (earcut.js:166-213)
+function _ec_is_ear_hashed(e::_Earcut, ear::Int, h::_EcHash)
+    a = e.prev[ear]; b = ear; c = e.next[ear]
+    _ec_area(e, a, b, c) >= 0 && return false
+    @inbounds begin
+        ax = e.x[a]; bx = e.x[b]; cx = e.x[c]
+        ay = e.y[a]; by = e.y[b]; cy = e.y[c]
+    end
+    x0 = min(ax, bx, cx); y0 = min(ay, by, cy)
+    x1 = max(ax, bx, cx); y1 = max(ay, by, cy)
+    min_z = _ec_z_order(x0, y0, h)
+    max_z = _ec_z_order(x1, y1, h)
+    p = e.prevz[ear]
+    n = e.nextz[ear]
+    @inbounds while p != 0 && e.z[p] >= min_z && n != 0 && e.z[n] <= max_z
+        _ec_blocks(e, p, a, c, ax, ay, bx, by, cx, cy, x0, y0, x1, y1) && return false
+        p = e.prevz[p]
+        _ec_blocks(e, n, a, c, ax, ay, bx, by, cx, cy, x0, y0, x1, y1) && return false
+        n = e.nextz[n]
+    end
+    @inbounds while p != 0 && e.z[p] >= min_z
+        _ec_blocks(e, p, a, c, ax, ay, bx, by, cx, cy, x0, y0, x1, y1) && return false
+        p = e.prevz[p]
+    end
+    @inbounds while n != 0 && e.z[n] <= max_z
+        _ec_blocks(e, n, a, c, ax, ay, bx, by, cx, cy, x0, y0, x1, y1) && return false
+        n = e.nextz[n]
+    end
+    return true
+end
+
+# cureLocalIntersections (earcut.js:216-236)
+function _ec_cure_local_intersections!(e::_Earcut, start::Int)
+    p = start
+    while true
+        a = e.prev[p]
+        b = e.next[e.next[p]]
+        if !_ec_equals(e, a, b) && _ec_intersects(e, a, p, e.next[p], b) &&
+           _ec_locally_inside(e, a, b) && _ec_locally_inside(e, b, a)
+            push!(e.triangles, e.i[a], e.i[p], e.i[b])
+            _ec_remove!(e, p)
+            _ec_remove!(e, e.next[p])
+            p = start = b
+        end
+        p = e.next[p]
+        p != start || break
+    end
+    return _ec_filter_points!(e, p)
+end
+
+# splitEarcut (earcut.js:239-264)
+function _ec_split_earcut!(e::_Earcut, start::Int, h::_EcHash)
+    a = start
+    while true
+        b = e.next[e.next[a]]
+        while b != e.prev[a]
+            if e.i[a] != e.i[b] && _ec_is_valid_diagonal(e, a, b)
+                c = _ec_split_polygon!(e, a, b)
+                a = _ec_filter_points!(e, a, e.next[a])
+                c = _ec_filter_points!(e, c, e.next[c])
+                _ec_earcut_linked!(e, a, h, 0)
+                _ec_earcut_linked!(e, c, h, 0)
+                return nothing
+            end
+            b = e.next[b]
+        end
+        a = e.next[a]
+        a != start || break
+    end
+    return nothing
+end
+
+# compareXYSlope (earcut.js:286-299). A NaN result counts as equal, as in
+# Array.prototype.sort.
+function _ec_compare_xy_slope(e::_Earcut, a::Int, b::Int)
+    result = e.x[a] - e.x[b]
+    if result == 0
+        result = e.y[a] - e.y[b]
+        if result == 0
+            a_slope = (e.y[e.next[a]] - e.y[a]) / (e.x[e.next[a]] - e.x[a])
+            b_slope = (e.y[e.next[b]] - e.y[b]) / (e.x[e.next[b]] - e.x[b])
+            result = a_slope - b_slope
+        end
+    end
+    return isnan(result) ? 0.0 : result
+end
+
+# eliminateHoles (earcut.js:267-284). `hole_starts` are 0-based vertex indices.
+function _ec_eliminate_holes!(e::_Earcut, data::Vector{Float64}, hole_starts::Vector{Int},
+                              outer::Int, dim::Int)
+    queue = Vector{Int}(undef, length(hole_starts))
+    len = length(hole_starts)
+    for k in 1:len
+        start = hole_starts[k] * dim
+        stop = k < len ? hole_starts[k + 1] * dim : length(data)
+        list = _ec_linked_list!(e, data, start, stop, dim, false)
+        list == 0 && throw(ArgumentError("earcut hole $k has no vertices"))
+        list == e.next[list] && (e.steiner[list] = true)
+        queue[k] = _ec_get_leftmost(e, list)
+    end
+    # Array.prototype.sort is stable.
+    sort!(queue; alg=MergeSort, lt=(a, b) -> _ec_compare_xy_slope(e, a, b) < 0)
+    for hole in queue
+        outer = _ec_eliminate_hole!(e, hole, outer)
+    end
+    return outer
+end
+
+# eliminateHole (earcut.js:302-313)
+function _ec_eliminate_hole!(e::_Earcut, hole::Int, outer::Int)
+    bridge = _ec_find_hole_bridge(e, hole, outer)
+    bridge == 0 && return outer
+    bridge_reverse = _ec_split_polygon!(e, bridge, hole)
+    _ec_filter_points!(e, bridge_reverse, e.next[bridge_reverse])
+    return _ec_filter_points!(e, bridge, e.next[bridge])
+end
+
+# findHoleBridge: David Eberly's bridge search (earcut.js:316-372).
+function _ec_find_hole_bridge(e::_Earcut, hole::Int, outer::Int)
+    p = outer
+    hx = e.x[hole]
+    hy = e.y[hole]
+    qx = -Inf
+    m = 0
+    _ec_equals(e, hole, p) && return p
+    while true
+        pn = e.next[p]
+        _ec_equals(e, hole, pn) && return pn
+        if hy <= e.y[p] && hy >= e.y[pn] && e.y[pn] != e.y[p]
+            x = e.x[p] + (hy - e.y[p]) * (e.x[pn] - e.x[p]) / (e.y[pn] - e.y[p])
+            if x <= hx && x > qx
+                qx = x
+                m = e.x[p] < e.x[pn] ? p : pn
+                x == hx && return m
+            end
+        end
+        p = pn
+        p != outer || break
+    end
+    m == 0 && return 0
+    stop = m
+    mx = e.x[m]
+    my = e.y[m]
+    tan_min = Inf
+    p = m
+    while true
+        px = e.x[p]; py = e.y[p]
+        if hx >= px && px >= mx && hx != px &&
+           _ec_point_in_triangle(hy < my ? hx : qx, hy, mx, my, hy < my ? qx : hx, hy, px, py)
+            tan = abs(hy - py) / (hx - px)
+            if _ec_locally_inside(e, p, hole) &&
+               (tan < tan_min || (tan == tan_min &&
+                                  (px > e.x[m] || (px == e.x[m] && _ec_sector_contains_sector(e, m, p)))))
+                m = p
+                tan_min = tan
+            end
+        end
+        p = e.next[p]
+        p != stop || break
+    end
+    return m
+end
+
+# sectorContainsSector (earcut.js:375-377)
+_ec_sector_contains_sector(e::_Earcut, m::Int, p::Int) =
+    _ec_area(e, e.prev[m], m, e.prev[p]) < 0 && _ec_area(e, e.next[p], m, e.next[m]) < 0
+
+# indexCurve (earcut.js:380-394)
+function _ec_index_curve!(e::_Earcut, start::Int, h::_EcHash)
+    p = start
+    @inbounds while true
+        e.z[p] == 0 && (e.z[p] = _ec_z_order(e.x[p], e.y[p], h))
+        e.prevz[p] = e.prev[p]
+        e.nextz[p] = e.next[p]
+        p = e.next[p]
+        p != start || break
+    end
+    e.nextz[e.prevz[p]] = 0
+    e.prevz[p] = 0
+    _ec_sort_linked!(e, p)
+    return nothing
+end
+
+# sortLinked: Simon Tatham's linked-list merge sort (earcut.js:397-448).
+function _ec_sort_linked!(e::_Earcut, list::Int)
+    in_size = 1
+    @inbounds while true
+        p = list
+        list = 0
+        tail = 0
+        num_merges = 0
+        while p != 0
+            num_merges += 1
+            q = p
+            p_size = 0
+            for _ in 1:in_size
+                p_size += 1
+                q = e.nextz[q]
+                q == 0 && break
+            end
+            q_size = in_size
+            while p_size > 0 || (q_size > 0 && q != 0)
+                if p_size != 0 && (q_size == 0 || q == 0 || e.z[p] <= e.z[q])
+                    node = p
+                    p = e.nextz[p]
+                    p_size -= 1
+                else
+                    node = q
+                    q = e.nextz[q]
+                    q_size -= 1
+                end
+                if tail != 0
+                    e.nextz[tail] = node
+                else
+                    list = node
+                end
+                e.prevz[node] = tail
+                tail = node
+            end
+            p = q
+        end
+        e.nextz[tail] = 0
+        in_size *= 2
+        num_merges > 1 || break
+    end
+    return list
+end
+
+# ECMAScript ToInt32, the `| 0` in zOrder.
+@inline function _ec_to_int32(v::Float64)
+    isfinite(v) || return Int32(0)
+    m = rem(trunc(v), 4294967296.0)
+    m < 0 && (m += 4294967296.0)
+    return reinterpret(Int32, UInt32(m))
+end
+
+# zOrder (earcut.js:451-467): 32-bit integer arithmetic as in JavaScript.
+@inline function _ec_z_order(x::Float64, y::Float64, h::_EcHash)
+    xi = _ec_to_int32((x - h.min_x) * h.inv_size)
+    yi = _ec_to_int32((y - h.min_y) * h.inv_size)
+    xi = (xi | (xi << 8)) & Int32(0x00FF00FF)
+    xi = (xi | (xi << 4)) & Int32(0x0F0F0F0F)
+    xi = (xi | (xi << 2)) & Int32(0x33333333)
+    xi = (xi | (xi << 1)) & Int32(0x55555555)
+    yi = (yi | (yi << 8)) & Int32(0x00FF00FF)
+    yi = (yi | (yi << 4)) & Int32(0x0F0F0F0F)
+    yi = (yi | (yi << 2)) & Int32(0x33333333)
+    yi = (yi | (yi << 1)) & Int32(0x55555555)
+    return xi | (yi << 1)
+end
+
+# getLeftmost (earcut.js:470-479)
+function _ec_get_leftmost(e::_Earcut, start::Int)
+    p = start
+    leftmost = start
+    while true
+        (e.x[p] < e.x[leftmost] || (e.x[p] == e.x[leftmost] && e.y[p] < e.y[leftmost])) &&
+            (leftmost = p)
+        p = e.next[p]
+        p != start || break
+    end
+    return leftmost
+end
+
+# isValidDiagonal (earcut.js:513-518)
+function _ec_is_valid_diagonal(e::_Earcut, a::Int, b::Int)
+    return e.i[e.next[a]] != e.i[b] && e.i[e.prev[a]] != e.i[b] &&
+           !_ec_intersects_polygon(e, a, b) &&
+           ((_ec_locally_inside(e, a, b) && _ec_locally_inside(e, b, a) &&
+             _ec_middle_inside(e, a, b) &&
+             (_ec_truthy(_ec_area(e, e.prev[a], a, e.prev[b])) ||
+              _ec_truthy(_ec_area(e, a, e.prev[b], b)))) ||
+            (_ec_equals(e, a, b) && _ec_area(e, e.prev[a], a, e.next[a]) > 0 &&
+             _ec_area(e, e.prev[b], b, e.next[b]) > 0))
+end
+
+# onSegment (earcut.js:546-549)
+@inline _ec_on_segment(e::_Earcut, p::Int, q::Int, r::Int) =
+    e.x[q] <= max(e.x[p], e.x[r]) && e.x[q] >= min(e.x[p], e.x[r]) &&
+    e.y[q] <= max(e.y[p], e.y[r]) && e.y[q] >= min(e.y[p], e.y[r])
+
+# intersects (earcut.js:532-544)
+function _ec_intersects(e::_Earcut, p1::Int, q1::Int, p2::Int, q2::Int)
+    o1 = _ec_sign(_ec_area(e, p1, q1, p2))
+    o2 = _ec_sign(_ec_area(e, p1, q1, q2))
+    o3 = _ec_sign(_ec_area(e, p2, q2, p1))
+    o4 = _ec_sign(_ec_area(e, p2, q2, q1))
+    o1 != o2 && o3 != o4 && return true
+    o1 == 0 && _ec_on_segment(e, p1, p2, q1) && return true
+    o2 == 0 && _ec_on_segment(e, p1, q2, q1) && return true
+    o3 == 0 && _ec_on_segment(e, p2, p1, q2) && return true
+    o4 == 0 && _ec_on_segment(e, p2, q1, q2) && return true
+    return false
+end
+
+# intersectsPolygon (earcut.js:556-565)
+function _ec_intersects_polygon(e::_Earcut, a::Int, b::Int)
+    p = a
+    ia = e.i[a]; ib = e.i[b]
+    while true
+        pn = e.next[p]
+        if e.i[p] != ia && e.i[pn] != ia && e.i[p] != ib && e.i[pn] != ib &&
+           _ec_intersects(e, p, pn, a, b)
+            return true
+        end
+        p = pn
+        p != a || break
+    end
+    return false
+end
+
+# locallyInside (earcut.js:568-572)
+function _ec_locally_inside(e::_Earcut, a::Int, b::Int)
+    return _ec_area(e, e.prev[a], a, e.next[a]) < 0 ?
+           _ec_area(e, a, b, e.next[a]) >= 0 && _ec_area(e, a, e.prev[a], b) >= 0 :
+           _ec_area(e, a, b, e.prev[a]) < 0 || _ec_area(e, a, e.next[a], b) < 0
+end
+
+# middleInside (earcut.js:575-588)
+function _ec_middle_inside(e::_Earcut, a::Int, b::Int)
+    p = a
+    inside = false
+    px = (e.x[a] + e.x[b]) / 2
+    py = (e.y[a] + e.y[b]) / 2
+    while true
+        pn = e.next[p]
+        if ((e.y[p] > py) != (e.y[pn] > py)) && e.y[pn] != e.y[p] &&
+           (px < (e.x[pn] - e.x[p]) * (py - e.y[p]) / (e.y[pn] - e.y[p]) + e.x[p])
+            inside = !inside
+        end
+        p = pn
+        p != a || break
+    end
+    return inside
+end
+
+# splitPolygon (earcut.js:592-613)
+function _ec_split_polygon!(e::_Earcut, a::Int, b::Int)
+    a2 = _ec_create!(e, e.i[a], e.x[a], e.y[a])
+    b2 = _ec_create!(e, e.i[b], e.x[b], e.y[b])
+    an = e.next[a]
+    bp = e.prev[b]
+    e.next[a] = b
+    e.prev[b] = a
+    e.next[a2] = an
+    e.prev[an] = a2
+    e.next[b2] = a2
+    e.prev[a2] = b2
+    e.next[bp] = b2
+    e.prev[b2] = bp
+    return b2
+end
+
+# earcut (earcut.js:5-43) on flat coordinates with 0-based hole start vertices.
+# Returns 0-based vertex indices, three per triangle.
+function _earcut(data::Vector{Float64}, hole_starts::Vector{Int}, dim::Int)
+    has_holes = !isempty(hole_starts)
+    outer_len = has_holes ? hole_starts[1] * dim : length(data)
+    e = _Earcut(length(data) ÷ dim + 4 * length(hole_starts) + 8)
+    outer = _ec_linked_list!(e, data, 0, outer_len, dim, true)
+    (outer == 0 || e.next[outer] == e.prev[outer]) && return e.triangles
+    sizehint!(e.triangles, 3 * (length(data) ÷ dim + 2 * length(hole_starts)))
+    has_holes && (outer = _ec_eliminate_holes!(e, data, hole_starts, outer, dim))
+    min_x = 0.0
+    min_y = 0.0
+    inv_size = 0.0
+    # Larger inputs use the z-order curve hash; its box covers the outer ring only.
+    if length(data) > 80 * dim
+        min_x = data[1]
+        min_y = data[2]
+        max_x = min_x
+        max_y = min_y
+        i = dim
+        @inbounds while i < outer_len
+            x = data[i + 1]; y = data[i + 2]
+            x < min_x && (min_x = x)
+            y < min_y && (min_y = y)
+            x > max_x && (max_x = x)
+            y > max_y && (max_y = y)
+            i += dim
+        end
+        inv_size = max(max_x - min_x, max_y - min_y)
+        inv_size = inv_size != 0 ? 32767 / inv_size : 0.0
+    end
+    _ec_earcut_linked!(e, outer, _EcHash(min_x, min_y, inv_size), 0)
+    return e.triangles
+end
+
+"""
+    earcut_triangulate(data, hole_indices=Int[]; dim=2) -> Vector{Int}
+
+Triangulate a polygon with holes by the Earcut algorithm, as three.js
+`Earcut.triangulate(data, holeIndices, dim)` (mapbox/earcut 3.0.2,
+src/extras/lib/earcut.js) does. `data` holds the flat vertex coordinates
+`[x1, y1, x2, y2, ...]` (`dim` numbers per vertex; only the first two are
+used): the outer ring first, then each hole. `hole_indices` are the one-based
+vertex indices at which the holes start. Returns one-based vertex indices,
+three per triangle, identical to three.js's triangles (shifted by one) for the
+same input. Rings may have either winding; degenerate, collinear and
+self-touching input is triangulated as Earcut does, and input whose outer ring
+has fewer than three distinct points returns no triangles.
+"""
+function earcut_triangulate(data::AbstractVector{<:Real}, hole_indices::AbstractVector{<:Integer}=Int[];
+                            dim::Integer=2)
+    d = _geometry_int(dim, "earcut_triangulate dim")
+    d >= 2 || throw(ArgumentError("earcut_triangulate dim must be at least 2"))
+    rem(length(data), d) == 0 ||
+        throw(ArgumentError("earcut_triangulate data length must be a multiple of dim"))
+    coords = Vector{Float64}(undef, length(data))
+    for (k, value) in enumerate(data)
+        coords[k] = _geometry_finite_float(value, "earcut_triangulate data")
+    end
+    nverts = length(coords) ÷ d
+    starts = Vector{Int}(undef, length(hole_indices))
+    previous = 0
+    for (k, index) in enumerate(hole_indices)
+        start = _geometry_int(index, "earcut_triangulate hole index") - 1
+        previous < start <= nverts - 1 ||
+            throw(ArgumentError("earcut_triangulate hole indices must increase within 2:$nverts"))
+        starts[k] = start
+        previous = start
+    end
+    triangles = _earcut(coords, starts, d)
+    triangles .+= 1
+    return triangles
+end
+
 # ========================== Shape / Extrude ==========================
 # A Shape is a simple polygon in the xy-plane (Vector{Vec2}). ShapeGeometry
 # fills it; ExtrudeGeometry sweeps it to depth along +z, or along a sampled 3D
@@ -3747,14 +4395,27 @@ function _extrude_path_geometry(shape_in::AbstractVector{<:Vec2},
 end
 
 """
-    ShapeGeometry(shape; holes=Vector{Vec2{Float64}}[])
+    ShapeGeometry(shape; holes=Vector{Vec2{Float64}}[], triangulation=:ear_clip)
 
 Filled planar polygon at z = 0 with +z normals and world-space `(x, y)` UVs
 (three.js `ShapeGeometry`). `holes` are polygons cut out of `shape`; they must
 lie inside it without touching it or each other. Either winding is accepted for
 the outline and the holes.
+
+`triangulation=:ear_clip` (the default) triangulates with Diff3D's ear clipper:
+the outline is stored counterclockwise, near-duplicate points are merged and
+self-intersecting input is an error. `triangulation=:earcut` builds the
+geometry exactly as three.js r186 `ShapeGeometry` does, with its Earcut port
+(see [`earcut_triangulate`](@ref)): the outline is stored clockwise and holes
+counterclockwise, exactly repeated consecutive points and a closing point equal
+to the first are dropped, and the vertices, UVs and triangles equal three.js's.
+Degenerate, touching or self-intersecting input is then triangulated as Earcut
+does, which may give no triangles at all.
 """
-function ShapeGeometry(shape::Vector{<:Vec2}; holes=Vector{Vec2{Float64}}[])
+function ShapeGeometry(shape::Vector{<:Vec2}; holes=Vector{Vec2{Float64}}[],
+                       triangulation::Symbol=:ear_clip)
+    _shape_triangulation(triangulation, "ShapeGeometry") === :earcut &&
+        return _shape_geometry_earcut(shape, holes)
     outer = _extrude_clean_shape(shape)   # normalize to CCW (+z normal)
     hole_loops = _shape_clean_holes(holes)
     points, _ = _extrude_loops(outer, hole_loops)
@@ -3836,7 +4497,8 @@ end
     ExtrudeGeometry(shape; depth=1.0, holes=Vector{Vec2{Float64}}[], steps=1,
                     bevel_enabled=false, bevel_thickness=0.2,
                     bevel_size=bevel_thickness - 0.1, bevel_offset=0.0,
-                    bevel_segments=3, extrude_path=nothing)
+                    bevel_segments=3, extrude_path=nothing,
+                    triangulation=:ear_clip)
 
 Extrude the planar polygon `shape`, minus optional `holes`, along +z from
 `z = 0` to `depth` in `steps` slices (three.js `ExtrudeGeometry`). With
@@ -3848,11 +4510,34 @@ world `(x, y)` UVs and side walls three.js `WorldUVGenerator` UVs. With
 path extrusion, bevels are not applied there and every path point is a step.
 
 Unlike three.js, `bevel_enabled` defaults to `false`.
+
+`triangulation=:earcut` builds the geometry exactly as three.js r186
+`ExtrudeGeometry` does, triangulating the caps with its Earcut port
+([`earcut_triangulate`](@ref)): an unindexed triangle list (`indices` is
+`1:n`) in three.js's vertex order, `WorldUVGenerator` UVs and the flat normals
+of `computeVertexNormals`, with three.js's handling of degenerate input (see
+[`ShapeGeometry`](@ref)). three.js's two draw groups are not added. In that
+mode `extrude_path` must be a 3D [`Curve`](@ref), sampled as three.js does by
+`get_spaced_points(extrude_path, steps)` with [`compute_frenet_frames`](@ref)
+(closed only for a closed [`CatmullRomCurve`](@ref)); both caps are kept and
+bevels are disabled.
 """
 function ExtrudeGeometry(shape::Vector{<:Vec2}; depth=1.0, extrude_path=nothing,
                          holes=Vector{Vec2{Float64}}[], steps=1,
                          bevel_enabled::Bool=false, bevel_thickness=0.2,
-                         bevel_size=nothing, bevel_offset=0.0, bevel_segments=3)
+                         bevel_size=nothing, bevel_offset=0.0, bevel_segments=3,
+                         triangulation::Symbol=:ear_clip)
+    if _shape_triangulation(triangulation, "ExtrudeGeometry") === :earcut
+        extrude_path === nothing || extrude_path isa Curve{Vec3{Float64}} ||
+            throw(ArgumentError("ExtrudeGeometry with triangulation=:earcut needs " *
+                                "extrude_path to be a 3D Curve, as in three.js"))
+        opt = _extrude_threejs_options(depth, steps, bevel_enabled, bevel_thickness,
+                                       bevel_size, bevel_offset, bevel_segments)
+        outer = _earcut_path_points(shape, "ExtrudeGeometry shape points")
+        hole_loops = Vector{Vec2{Float64}}[_earcut_path_points(h, "ExtrudeGeometry hole points")
+                                           for h in holes]
+        return _extrude_threejs_geometry(((outer, hole_loops),), opt, extrude_path)
+    end
     extrude_path !== nothing && return _extrude_path_geometry(shape, extrude_path, holes)
     depth = _geometry_finite_float(depth, "ExtrudeGeometry depth")
     steps = _geometry_positive_int(steps, "ExtrudeGeometry steps")
@@ -3967,6 +4652,444 @@ function ExtrudeGeometry(shape::Vector{<:Vec2}; depth=1.0, extrude_path=nothing,
         end
     end
     BufferGeometry(positions, normals, uvs, indices, n_verts, n_faces)
+end
+
+# ---- three.js r186 construction with Earcut (`triangulation=:earcut`) ----
+
+const _SHAPE_TRIANGULATIONS = (:ear_clip, :earcut)
+
+function _shape_triangulation(value::Symbol, label::String)
+    value in _SHAPE_TRIANGULATIONS ||
+        throw(ArgumentError("$label triangulation must be :ear_clip or :earcut"))
+    return value
+end
+
+# The points three.js samples from `new Shape(points)` / `new Path(points)`:
+# Path.setFromPoints builds line curves and CurvePath.getPoints drops exactly
+# repeated consecutive points (CurvePath.js:197-201); one point makes no curve.
+function _earcut_path_points(points::AbstractVector{<:Vec2}, label::String)
+    out = Vec2{Float64}[]
+    length(points) >= 2 || return out
+    sizehint!(out, length(points))
+    for p in points
+        q = Vec2{Float64}(_geometry_finite_float(p.x, label), _geometry_finite_float(p.y, label))
+        (!isempty(out) && out[end] == q) && continue
+        push!(out, q)
+    end
+    return out
+end
+
+# ShapeUtils.area / isClockWise (ShapeUtils.js:16-43).
+function _shape_utils_area(contour::Vector{Vec2{Float64}})
+    n = length(contour)
+    a = 0.0
+    p = n
+    @inbounds for q in 1:n
+        a += contour[p].x * contour[q].y - contour[q].x * contour[p].y
+        p = q
+    end
+    return a * 0.5
+end
+_shape_utils_is_clockwise(points::Vector{Vec2{Float64}}) = _shape_utils_area(points) < 0
+
+# ShapeUtils.triangulateShape (ShapeUtils.js:52-93): drops a closing point
+# equal to the first from `contour` and each hole IN PLACE, as three.js does,
+# then returns Earcut's 0-based vertex indices, three per triangle.
+function _shape_utils_triangulate!(contour::Vector{Vec2{Float64}},
+                                   holes::Vector{Vector{Vec2{Float64}}})
+    _shape_remove_dup_end!(contour)
+    foreach(_shape_remove_dup_end!, holes)
+    total = length(contour) + sum(length, holes; init=0)
+    data = Vector{Float64}(undef, 2total)
+    k = 0
+    for loop in (contour, holes...)
+        @inbounds for p in loop
+            data[k + 1] = p.x
+            data[k + 2] = p.y
+            k += 2
+        end
+    end
+    starts = Vector{Int}(undef, length(holes))
+    hole_start = length(contour)
+    for (h, hole) in enumerate(holes)
+        isempty(hole) && throw(ArgumentError("shape hole $h has no points"))
+        starts[h] = hole_start
+        hole_start += length(hole)
+    end
+    return _earcut(data, starts, 2)
+end
+
+function _shape_remove_dup_end!(points::Vector{Vec2{Float64}})
+    l = length(points)
+    (l > 2 && points[l] == points[1]) && pop!(points)
+    return points
+end
+
+# three.js ShapeGeometry addShape (ShapeGeometry.js:85-140) for one shape.
+function _shape_geometry_earcut(shape::AbstractVector{<:Vec2}, holes_in)
+    outer = _earcut_path_points(shape, "ShapeGeometry shape points")
+    holes = Vector{Vec2{Float64}}[_earcut_path_points(h, "ShapeGeometry hole points")
+                                  for h in holes_in]
+    _shape_utils_is_clockwise(outer) || reverse!(outer)
+    for hole in holes
+        _shape_utils_is_clockwise(hole) && reverse!(hole)
+    end
+    faces = _shape_utils_triangulate!(outer, holes)
+    np = length(outer) + sum(length, holes; init=0)
+    n_faces = length(faces) ÷ 3
+    position_len, uv_len, index_len =
+        _geometry_mesh_buffer_lengths(np, n_faces, "ShapeGeometry")
+    positions = Vector{Float64}(undef, position_len)
+    normals = Vector{Float64}(undef, position_len)
+    uvs = Vector{Float64}(undef, uv_len)
+    i = 0
+    for loop in (outer, holes...)
+        @inbounds for pt in loop
+            i += 1
+            positions[3i - 2] = pt.x
+            positions[3i - 1] = pt.y
+            positions[3i] = 0.0
+            normals[3i - 2] = 0.0
+            normals[3i - 1] = 0.0
+            normals[3i] = 1.0
+            uvs[2i - 1] = pt.x
+            uvs[2i] = pt.y
+        end
+    end
+    indices = faces
+    indices .+= 1
+    return BufferGeometry(positions, normals, uvs, indices, np, n_faces)
+end
+
+# ExtrudeGeometry.js mergeOverlappingPoints (lines 214-252), in place. The
+# wrap-around step compares the first point with the last kept one.
+function _extrude_merge_overlapping!(points::Vector{Vec2{Float64}})
+    isempty(points) && return points
+    threshold = 1e-10
+    threshold_sq = threshold * threshold
+    prev = points[1]
+    i = 1
+    while i <= length(points)
+        current_index = i % length(points)
+        current = points[current_index + 1]
+        dx = current.x - prev.x
+        dy = current.y - prev.y
+        dist_sq = dx * dx + dy * dy
+        scaling = max(abs(current.x), abs(current.y), abs(prev.x), abs(prev.y))
+        if dist_sq <= threshold_sq * scaling * scaling
+            deleteat!(points, current_index + 1)
+            continue
+        end
+        prev = current
+        i += 1
+    end
+    return points
+end
+
+# ExtrudeGeometry.js getBevelVec (lines 291-399) in three.js's own orientation
+# (outer contour clockwise). Returns the translation for `pt`.
+function _extrude_threejs_bevel_vec(pt::Vec2{Float64}, prev::Vec2{Float64}, next::Vec2{Float64})
+    v_prev_x = pt.x - prev.x
+    v_prev_y = pt.y - prev.y
+    v_next_x = next.x - pt.x
+    v_next_y = next.y - pt.y
+    v_prev_lensq = v_prev_x * v_prev_x + v_prev_y * v_prev_y
+    collinear0 = v_prev_x * v_next_y - v_prev_y * v_next_x
+    if abs(collinear0) > eps(Float64)
+        v_prev_len = sqrt(v_prev_lensq)
+        v_next_len = sqrt(v_next_x * v_next_x + v_next_y * v_next_y)
+        prev_shift_x = prev.x - v_prev_y / v_prev_len
+        prev_shift_y = prev.y + v_prev_x / v_prev_len
+        next_shift_x = next.x - v_next_y / v_next_len
+        next_shift_y = next.y + v_next_x / v_next_len
+        sf = ((next_shift_x - prev_shift_x) * v_next_y -
+              (next_shift_y - prev_shift_y) * v_next_x) /
+             (v_prev_x * v_next_y - v_prev_y * v_next_x)
+        v_trans_x = prev_shift_x + v_prev_x * sf - pt.x
+        v_trans_y = prev_shift_y + v_prev_y * sf - pt.y
+        v_trans_lensq = v_trans_x * v_trans_x + v_trans_y * v_trans_y
+        v_trans_lensq <= 2 && return Vec2(v_trans_x, v_trans_y)
+        shrink_by = sqrt(v_trans_lensq / 2)
+    else
+        direction_eq = if v_prev_x > eps(Float64)
+            v_next_x > eps(Float64)
+        elseif v_prev_x < -eps(Float64)
+            v_next_x < -eps(Float64)
+        else
+            sign(v_prev_y) == sign(v_next_y)
+        end
+        if direction_eq
+            v_trans_x = -v_prev_y
+            v_trans_y = v_prev_x
+            shrink_by = sqrt(v_prev_lensq)
+        else
+            v_trans_x = v_prev_x
+            v_trans_y = v_prev_y
+            shrink_by = sqrt(v_prev_lensq / 2)
+        end
+    end
+    return Vec2(v_trans_x / shrink_by, v_trans_y / shrink_by)
+end
+
+function _extrude_threejs_movements(loop::Vector{Vec2{Float64}})
+    n = length(loop)
+    moves = Vector{Vec2{Float64}}(undef, n)
+    @inbounds for i in 1:n
+        j = i == 1 ? n : i - 1
+        k = i == n ? 1 : i + 1
+        moves[i] = _extrude_threejs_bevel_vec(loop[i], loop[j], loop[k])
+    end
+    return moves
+end
+
+# scalePt2: pt.clone().addScaledVector(vec, size)
+@inline _extrude_scale_pt(pt::Vec2{Float64}, vec::Vec2{Float64}, size::Float64) =
+    Vec2(pt.x + vec.x * size, pt.y + vec.y * size)
+
+# Non-indexed computeVertexNormals (BufferGeometry.js:780-817): each triangle's
+# (C - B) x (A - B), normalized with `length() || 1`.
+function _threejs_flat_normals!(normals::Vector{Float64}, positions::Vector{Float64})
+    @inbounds for t in 0:(length(positions) ÷ 9 - 1)
+        o = 9t
+        ax = positions[o + 1]; ay = positions[o + 2]; az = positions[o + 3]
+        bx = positions[o + 4]; by = positions[o + 5]; bz = positions[o + 6]
+        cx = positions[o + 7]; cy = positions[o + 8]; cz = positions[o + 9]
+        cbx = cx - bx; cby = cy - by; cbz = cz - bz
+        abx = ax - bx; aby = ay - by; abz = az - bz
+        nx = cby * abz - cbz * aby
+        ny = cbz * abx - cbx * abz
+        nz = cbx * aby - cby * abx
+        len = sqrt(nx * nx + ny * ny + nz * nz)
+        inv = 1 / (iszero(len) ? 1.0 : len)
+        nx *= inv; ny *= inv; nz *= inv
+        for v in 0:2
+            normals[o + 3v + 1] = nx
+            normals[o + 3v + 2] = ny
+            normals[o + 3v + 3] = nz
+        end
+    end
+    return normals
+end
+
+@inline function _extrude_add_vertex!(positions::Vector{Float64}, placeholder::Vector{Float64},
+                                      index::Int)
+    @inbounds push!(positions, placeholder[3index + 1], placeholder[3index + 2],
+                    placeholder[3index + 3])
+    return nothing
+end
+
+# ExtrudeGeometry.js f3 with WorldUVGenerator.generateTopUV: the vertices' (x, y).
+function _extrude_f3!(positions::Vector{Float64}, uvs::Vector{Float64},
+                      placeholder::Vector{Float64}, a::Int, b::Int, c::Int)
+    start = length(positions)
+    _extrude_add_vertex!(positions, placeholder, a)
+    _extrude_add_vertex!(positions, placeholder, b)
+    _extrude_add_vertex!(positions, placeholder, c)
+    @inbounds for v in 0:2
+        push!(uvs, positions[start + 3v + 1], positions[start + 3v + 2])
+    end
+    return nothing
+end
+
+# ExtrudeGeometry.js f4 (triangles a-b-d and b-c-d) with
+# WorldUVGenerator.generateSideWallUV on A, the second B, C and D.
+function _extrude_f4!(positions::Vector{Float64}, uvs::Vector{Float64},
+                      placeholder::Vector{Float64}, a::Int, b::Int, c::Int, d::Int)
+    start = length(positions)
+    for index in (a, b, d, b, c, d)
+        _extrude_add_vertex!(positions, placeholder, index)
+    end
+    @inbounds begin
+        ia = start; ib = start + 9; ic = start + 12; id = start + 15
+        use_x = abs(positions[ia + 2] - positions[ib + 2]) <
+                abs(positions[ia + 1] - positions[ib + 1])
+        o = use_x ? 1 : 2
+        ua1 = positions[ia + o]; ua2 = 1 - positions[ia + 3]
+        ub1 = positions[ib + o]; ub2 = 1 - positions[ib + 3]
+        uc1 = positions[ic + o]; uc2 = 1 - positions[ic + 3]
+        ud1 = positions[id + o]; ud2 = 1 - positions[id + 3]
+        push!(uvs, ua1, ua2, ub1, ub2, ud1, ud2, ub1, ub2, uc1, uc2, ud1, ud2)
+    end
+    return nothing
+end
+
+struct _ExtrudeThreeOptions
+    depth::Float64
+    steps::Int
+    bevel_enabled::Bool
+    bevel_thickness::Float64
+    bevel_size::Float64
+    bevel_offset::Float64
+    bevel_segments::Int
+end
+
+# three.js ExtrudeGeometry addShape (ExtrudeGeometry.js:117-760) for one shape
+# given as the points of `shape.extractPoints(curveSegments)`. `path_points` and
+# `frames` are `extrudePath.getSpacedPoints(steps)` and its Frenet frames, or
+# `nothing`. Appends three.js's unindexed positions and UVs.
+function _extrude_threejs_shape!(positions::Vector{Float64}, uvs::Vector{Float64},
+                                 shape_points::Vector{Vec2{Float64}},
+                                 hole_points::Vector{Vector{Vec2{Float64}}},
+                                 opt::_ExtrudeThreeOptions, path_points, frames)
+    steps = opt.steps
+    depth = opt.depth
+    by_path = path_points !== nothing
+    bevel_enabled = opt.bevel_enabled && !by_path
+    bevel_segments = bevel_enabled ? opt.bevel_segments : 0
+    bevel_thickness = bevel_enabled ? opt.bevel_thickness : 0.0
+    bevel_size = bevel_enabled ? opt.bevel_size : 0.0
+    bevel_offset = bevel_enabled ? opt.bevel_offset : 0.0
+
+    contour = copy(shape_points)
+    holes = [copy(h) for h in hole_points]
+    if !_shape_utils_is_clockwise(contour)
+        reverse!(contour)
+        for hole in holes
+            _shape_utils_is_clockwise(hole) && reverse!(hole)
+        end
+    end
+    _extrude_merge_overlapping!(contour)
+    foreach(_extrude_merge_overlapping!, holes)
+    vertices = reduce(vcat, holes; init=copy(contour))
+    vlen = length(vertices)
+
+    contour_moves = _extrude_threejs_movements(contour)
+    hole_moves = [_extrude_threejs_movements(hole) for hole in holes]
+    vertex_moves = reduce(vcat, hole_moves; init=copy(contour_moves))
+
+    layers = steps + 1 + 2bevel_segments
+    placeholder = Float64[]
+    sizehint!(placeholder, 3 * _geometry_checked_mul(vlen, layers, "ExtrudeGeometry vertex count"))
+    faces = if bevel_segments == 0
+        _shape_utils_triangulate!(contour, holes)
+    else
+        contracted = Vec2{Float64}[]
+        expanded = Vector{Vec2{Float64}}[]
+        for b in 0:(bevel_segments - 1)
+            t = b / bevel_segments
+            z = bevel_thickness * cos(t * π / 2)
+            bs = bevel_size * sin(t * π / 2) + bevel_offset
+            for i in eachindex(contour)
+                vert = _extrude_scale_pt(contour[i], contour_moves[i], bs)
+                push!(placeholder, vert.x, vert.y, -z)
+                t == 0 && push!(contracted, vert)
+            end
+            for h in eachindex(holes)
+                one = Vec2{Float64}[]
+                for i in eachindex(holes[h])
+                    vert = _extrude_scale_pt(holes[h][i], hole_moves[h][i], bs)
+                    push!(placeholder, vert.x, vert.y, -z)
+                    t == 0 && push!(one, vert)
+                end
+                t == 0 && push!(expanded, one)
+            end
+        end
+        _shape_utils_triangulate!(contracted, expanded)
+    end
+    bs = bevel_size + bevel_offset
+    for s in 0:steps
+        for i in 1:vlen
+            vert = bevel_enabled ? _extrude_scale_pt(vertices[i], vertex_moves[i], bs) : vertices[i]
+            if by_path
+                n = frames.normals[s + 1]
+                b = frames.binormals[s + 1]
+                p = path_points[s + 1]
+                push!(placeholder, p.x + n.x * vert.x + b.x * vert.y,
+                        p.y + n.y * vert.x + b.y * vert.y,
+                        p.z + n.z * vert.x + b.z * vert.y)
+            else
+                push!(placeholder, vert.x, vert.y, s == 0 ? 0.0 : depth / steps * s)
+            end
+        end
+    end
+    # Top bevel layers. three.js's path branch inside this loop is unreachable:
+    # bevels are disabled for path extrusion, so `bevel_segments` is 0 there.
+    for b in (bevel_segments - 1):-1:0
+        t = b / bevel_segments
+        z = bevel_thickness * cos(t * π / 2)
+        bs_layer = bevel_size * sin(t * π / 2) + bevel_offset
+        for i in eachindex(contour)
+            vert = _extrude_scale_pt(contour[i], contour_moves[i], bs_layer)
+            push!(placeholder, vert.x, vert.y, depth + z)
+        end
+        for h in eachindex(holes), i in eachindex(holes[h])
+            vert = _extrude_scale_pt(holes[h][i], hole_moves[h][i], bs_layer)
+            push!(placeholder, vert.x, vert.y, depth + z)
+        end
+    end
+
+    flen = length(faces) ÷ 3
+    if bevel_enabled
+        offset = 0
+        for f in 0:(flen - 1)
+            _extrude_f3!(positions, uvs, placeholder, faces[3f + 3] + offset, faces[3f + 2] + offset, faces[3f + 1] + offset)
+        end
+        offset = vlen * (steps + 2bevel_segments)
+        for f in 0:(flen - 1)
+            _extrude_f3!(positions, uvs, placeholder, faces[3f + 1] + offset, faces[3f + 2] + offset, faces[3f + 3] + offset)
+        end
+    else
+        for f in 0:(flen - 1)
+            _extrude_f3!(positions, uvs, placeholder, faces[3f + 3], faces[3f + 2], faces[3f + 1])
+        end
+        offset = vlen * steps
+        for f in 0:(flen - 1)
+            _extrude_f3!(positions, uvs, placeholder, faces[3f + 1] + offset, faces[3f + 2] + offset, faces[3f + 3] + offset)
+        end
+    end
+    sl = steps + 2bevel_segments
+    layer_offset = 0
+    for loop in (contour, holes...)
+        len = length(loop)
+        for i in (len - 1):-1:0
+            j = i
+            k = i - 1
+            k < 0 && (k = len - 1)
+            for s in 0:(sl - 1)
+                slen1 = vlen * s
+                slen2 = vlen * (s + 1)
+                _extrude_f4!(positions, uvs, placeholder, layer_offset + j + slen1, layer_offset + k + slen1,
+                    layer_offset + k + slen2, layer_offset + j + slen2)
+            end
+        end
+        layer_offset += len
+    end
+    return nothing
+end
+
+function _extrude_threejs_options(depth, steps, bevel_enabled::Bool, bevel_thickness,
+                                  bevel_size, bevel_offset, bevel_segments)
+    thickness = _geometry_finite_float(bevel_thickness, "ExtrudeGeometry bevel_thickness")
+    return _ExtrudeThreeOptions(
+        _geometry_finite_float(depth, "ExtrudeGeometry depth"),
+        _geometry_positive_int(steps, "ExtrudeGeometry steps"),
+        bevel_enabled, thickness,
+        bevel_size === nothing ? thickness - 0.1 :
+            _geometry_finite_float(bevel_size, "ExtrudeGeometry bevel_size"),
+        _geometry_finite_float(bevel_offset, "ExtrudeGeometry bevel_offset"),
+        _geometry_nonnegative_int(bevel_segments, "ExtrudeGeometry bevel_segments"))
+end
+
+# `extrudePath.getSpacedPoints(steps)` and `computeFrenetFrames(steps, closed)`,
+# closed only for a closed CatmullRomCurve (ExtrudeGeometry.js:148-160).
+function _extrude_curve_samples(path::Curve{Vec3{Float64}}, steps::Int)
+    closed = path isa CatmullRomCurve ? path.closed : false
+    return get_spaced_points(path, steps), compute_frenet_frames(path, steps, closed)
+end
+
+function _extrude_threejs_geometry(shapes, opt::_ExtrudeThreeOptions, extrude_path)
+    path_points, frames = extrude_path === nothing ? (nothing, nothing) :
+                          _extrude_curve_samples(extrude_path, opt.steps)
+    positions = Float64[]
+    uvs = Float64[]
+    for (shape_points, hole_points) in shapes
+        _extrude_threejs_shape!(positions, uvs, shape_points, hole_points, opt,
+                                path_points, frames)
+    end
+    all(isfinite, positions) || _geometry_position_range_error("ExtrudeGeometry")
+    n = length(positions) ÷ 3
+    normals = _threejs_flat_normals!(similar(positions), positions)
+    return BufferGeometry(positions, normals, uvs, collect(1:n), n, n ÷ 3)
 end
 
 # ========================== CapsuleGeometry ==========================

@@ -3721,9 +3721,9 @@ end
 # and createPath): `\n` returns to x = 0 one line height lower, a character
 # without a glyph is drawn with the `?` glyph, and each glyph advances by its
 # `ha`. Characters with neither glyph are skipped. Kerning pairs from the JSON
-# are applied between consecutive drawn glyphs. Calls `emit(loops)` per glyph.
-function _font_layout(emit, font::FontData, text::AbstractString, segments::Int,
-                      scale::Float64)
+# are applied between consecutive drawn glyphs. Calls `emit(glyph, x, y)` per
+# glyph with its pen position.
+function _font_layout(emit, font::FontData, text::AbstractString, scale::Float64)
     cursor_x = 0.0
     cursor_y = 0.0
     previous_key = nothing
@@ -3749,7 +3749,7 @@ function _font_layout(emit, font::FontData, text::AbstractString, segments::Int,
         end
         previous_key !== nothing &&
             (cursor_x += font_kerning(font, previous_key, key) * scale)
-        emit(_font_glyph_loops(glyph, segments, scale, cursor_x, cursor_y))
+        emit(glyph, cursor_x, cursor_y)
         cursor_x += glyph.advance_width * scale
         previous_key = key
     end
@@ -3770,7 +3770,9 @@ function font_text_shapes(font::FontData, text::AbstractString;
     shapes = Vector{Vec2{Float64}}[]
     segments = _font_curve_segments(curve_segments)
     scale = _font_scale(font, size)
-    _font_layout(loops -> append!(shapes, loops), font, text, segments, scale)
+    _font_layout(font, text, scale) do glyph, x, y
+        append!(shapes, _font_glyph_loops(glyph, segments, scale, x, y))
+    end
     return shapes
 end
 
@@ -4126,8 +4128,10 @@ function _font_text_shape_groups(font::FontData, text::AbstractString;
     segments = _font_curve_segments(curve_segments)
     scale = _font_scale(font, size)
     # Each glyph is its own ShapePath in three.js, so loops never group across glyphs.
-    _font_layout(loops -> append!(groups, _font_fill_groups(loops, :nonzero)),
-                 font, text, segments, scale)
+    _font_layout(font, text, scale) do glyph, x, y
+        loops = _font_glyph_loops(glyph, segments, scale, x, y)
+        append!(groups, _font_fill_groups(loops, :nonzero))
+    end
     return groups
 end
 
@@ -4324,10 +4328,50 @@ function _font_beveled_extrude_geometry(outer::Vector{Vec2{Float64}},
                           length(positions) ÷ 3, length(indices) ÷ 3)
 end
 
+# three.js Font.generateShapes (FontLoader.js createPath): one ShapePath per
+# glyph from its outline commands, scaled and offset, sorted by `to_shapes`.
+function _font_glyph_shape_path(glyph::FontGlyph, scale::Float64, xoff::Float64,
+                                yoff::Float64)
+    sp = ShapePath()
+    sx(p) = p.x * scale + xoff
+    sy(p) = p.y * scale + yoff
+    for cmd in glyph.commands
+        pts = cmd.points
+        if cmd.kind === :move
+            move_to!(sp, sx(pts[1]), sy(pts[1]))
+        elseif cmd.kind === :line
+            line_to!(sp, sx(pts[1]), sy(pts[1]))
+        elseif cmd.kind === :quadratic
+            quadratic_curve_to!(sp, sx(pts[1]), sy(pts[1]), sx(pts[2]), sy(pts[2]))
+        elseif cmd.kind === :bezier
+            bezier_curve_to!(sp, sx(pts[1]), sy(pts[1]), sx(pts[2]), sy(pts[2]),
+                             sx(pts[3]), sy(pts[3]))
+        else
+            error("unsupported font command $(cmd.kind)")
+        end
+    end
+    return sp
+end
+
+# three.js `new TextGeometry(text, {font, size, depth, curveSegments, bevel...})`:
+# ExtrudeGeometry of `font.generateShapes(text, size)` with Earcut.
+function _font_text_geometry_earcut(font::FontData, text::AbstractString, scale::Float64,
+                                    segments::Int, opt)
+    shapes = Tuple{Vector{Vec2{Float64}},Vector{Vector{Vec2{Float64}}}}[]
+    _font_layout(font, text, scale) do glyph, x, y
+        for shape in to_shapes(_font_glyph_shape_path(glyph, scale, x, y))
+            points = extract_points(shape, segments)
+            push!(shapes, (points.shape, points.holes))
+        end
+    end
+    return _extrude_threejs_geometry(shapes, opt, nothing)
+end
+
 """
     TextGeometry(font, text; size=1.0, curve_segments=8, depth=0.0,
                  bevel_enabled=false, bevel_size=0.0,
-                 bevel_thickness=bevel_size, bevel_segments=1)
+                 bevel_thickness=bevel_size, bevel_segments=1,
+                 triangulation=:ear_clip)
 
 Build a flat or extruded `BufferGeometry` from loaded typeface JSON outlines.
 Glyph contours are grouped into outer loops and holes by the nonzero rule
@@ -4335,13 +4379,23 @@ before triangulation. With beveling enabled the bevel follows three.js
 `ExtrudeGeometry`: the lids keep the glyph outline at `z = -bevel_thickness`
 and `z = depth + bevel_thickness`, and `bevel_segments` rings per side grow the
 outline by up to `bevel_size` towards the body, which spans `z = 0` to `depth`.
+
+`triangulation=:earcut` builds what three.js r186 `TextGeometry` builds with
+these parameters: `ExtrudeGeometry(font.generateShapes(text, size), {depth,
+curveSegments, bevelEnabled, bevelThickness, bevelSize, bevelSegments})` with
+its Earcut triangulation (see [`ExtrudeGeometry`](@ref)), an unindexed
+triangle list with flat normals, without draw groups. Glyph outlines become
+[`ShapePath`](@ref)s sorted by [`to_shapes`](@ref), and the glyphs are laid
+out as in the default mode. A zero `depth` then yields both lids and zero-area
+side walls, as in three.js.
 """
 function TextGeometry(font::FontData, text::AbstractString;
                       size::Real=1.0, curve_segments::Integer=8,
                       depth::Real=0.0, bevel_enabled::Bool=false,
                       bevel_size::Real=0.0,
                       bevel_thickness::Real=bevel_size,
-                      bevel_segments::Integer=1)
+                      bevel_segments::Integer=1,
+                      triangulation::Symbol=:ear_clip)
     zdepth = Float64(depth)
     isfinite(zdepth) && zdepth >= 0.0 ||
         throw(ArgumentError("depth must be finite and non-negative"))
@@ -4351,6 +4405,12 @@ function TextGeometry(font::FontData, text::AbstractString;
     bthick = Float64(bevel_thickness)
     isfinite(bthick) && bthick >= 0.0 ||
         throw(ArgumentError("bevel_thickness must be finite and non-negative"))
+    if _shape_triangulation(triangulation, "TextGeometry") === :earcut
+        segments = _font_curve_segments(curve_segments)
+        opt = _ExtrudeThreeOptions(zdepth, 1, bevel_enabled, bthick, bsize, 0.0,
+                                   bevel_enabled ? _font_curve_segments(bevel_segments) : 0)
+        return _font_text_geometry_earcut(font, text, _font_scale(font, size), segments, opt)
+    end
     bsegs = bevel_enabled ? _font_curve_segments(bevel_segments) : 1
     geos = BufferGeometry[]
     for group in _font_text_shape_groups(font, text; size=size,
