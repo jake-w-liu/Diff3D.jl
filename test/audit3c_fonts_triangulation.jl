@@ -945,3 +945,197 @@ _tf_morph_error(r, o) = max(maximum(abs.(r.morphed_position_attribute.data .- o.
     @test_throws ArgumentError Diff3D.compute_morphed_attributes(_tf_morph_mesh(bad))
 end
 
+# --- ConvexGeometry: exact quickhull fallback, indexed clean-up and wrapping --
+# A seeded 64-bit LCG (Knuth's MMIX constants), so point sets are the same on
+# every Julia version.
+mutable struct _TfRng
+    state::UInt64
+end
+_tf_next!(r::_TfRng) = (r.state = r.state * 6364136223846793005 + 1442695040888963407; r.state)
+_tf_unif(r::_TfRng) = Float64(_tf_next!(r) >> 11) * 0x1p-53                 # [0, 1)
+_tf_gauss(r::_TfRng) = sqrt(-2 * log(1 - _tf_unif(r))) * cospi(2 * _tf_unif(r))
+_tf_rv(r::_TfRng) = Vec3(_tf_gauss(r), _tf_gauss(r), _tf_gauss(r))
+_tf_unit(r::_TfRng) = (v = _tf_rv(r); v * (1 / norm(v)))
+
+function _tf_hull_metrics(g)
+    volume = 0.0; area = 0.0
+    edges = Dict{NTuple{2,NTuple{3,Float64}},Int}()
+    outward = true
+    for f in 1:g.n_faces
+        c = ntuple(j -> get_vertex(g, g.indices[3f - 3 + j]), 3)
+        n = cross(c[2] - c[1], c[3] - c[1])
+        volume += dot(c[1], cross(c[2], c[3])) / 6
+        area += norm(n) / 2
+        # the emitted normal points along the winding wherever that is reliable
+        norm(n) > 1e-6 * norm(c[2] - c[1]) * norm(c[3] - c[1]) &&
+            dot(n, get_normal(g, g.indices[3f - 2])) <= 0 && (outward = false)
+        for k in 1:3
+            a = c[k]; b = c[mod1(k + 1, 3)]
+            e = ((a.x, a.y, a.z), (b.x, b.y, b.z))
+            edges[e] = get(edges, e, 0) + 1
+        end
+    end
+    closed = all(count == 1 && get(edges, (b, a), 0) == 1 for ((a, b), count) in edges)
+    return volume, area, closed, outward
+end
+
+function _tf_wrap_fails(points)
+    _, normalized, eps = Diff3D._convex_clean_points(points)
+    return Diff3D._convex_wrapped_support_faces(normalized, eps) === nothing &&
+           Diff3D._convex_wrapped_support_faces(normalized, Diff3D._CONVEX_TIGHT_EPS) === nothing
+end
+
+@testset "ConvexGeometry builds the exact hull where gift wrapping cannot close one" begin
+    # Neither tolerance lets gift wrapping certify these, so they reach the
+    # fallback, which used to emit open or overlapping surfaces. Oracle: three.js
+    # ConvexHull (node, Float64 points) and Qhull (scipy) on the same points.
+    near_pair = [Vec3(-0.5921887136573194, 0.7551081655343105, 0.2812902162541347), Vec3(-0.4652066288539763, 0.8129246107258467, 0.350337508335247), Vec3(-0.18672972685044864, 0.4018969504201021, -0.8964434451505454), Vec3(-0.7766925619392556, 0.4314881149090448, -0.45887544161839217), Vec3(-0.11465271517228436, 0.714035765637802, -0.6906574261482032), Vec3(-0.9951700707650033, 0.09055589430225726, 0.03789670514302098), Vec3(-0.05739150845870308, 0.9314560031432954, -0.35929921926599295), Vec3(0.02235378219642151, 0.4279827753684456, -0.9035104052579791), Vec3(0.9850987518142248, -0.004968599380269232, 0.17191789375819685), Vec3(-0.5921887133994796, 0.7551081676309486, 0.2812902141878173), Vec3(-0.4652066295658422, 0.8129246109672774, 0.35033750685376025)]
+    # 1e-13 slab: hull area is twice the planar hull area (Qhull and three.js
+    # agree: 25.98669126838409); the volume is rounding-level for every method.
+    slab = [Vec3(cos(2.4k) * (1 + k / 50), sin(2.4k) * (1 + k / 50), 1e-13 * sin(7k)) for k in 1:60]
+    tilt = let n = Vec3(1.0, 2.0, 2.0) * (1 / 3), u = Vec3(2.0, -1.0, 0.0) * (1 / sqrt(5.0)), v = cross(n, u)
+        [u * (cos(2.4k) * (1 + k / 40)) + v * (sin(2.4k) * (1 + k / 40)) + n * (1e-12 * cos(5k)) for k in 1:50]
+    end
+    for (points, faces, volume, area) in ((near_pair, 18, 0.5463852278169438, 4.315319439437565),
+                                         (slab, 62, nothing, 25.98669126838409),
+                                         (tilt, 56, nothing, 26.48268383480818))
+        @test _tf_wrap_fails(points)
+        g = ConvexGeometry(points)
+        v, a, closed, outward = _tf_hull_metrics(g)
+        @test closed && outward
+        @test g.n_faces == faces
+        @test v > 0
+        volume === nothing ? (@test v < 1e-10) : (@test v ≈ volume rtol=1e-12)
+        @test a ≈ area rtol=1e-12
+    end
+    # Even a 1e-20 slab has a (tiny) exact hull; sets flat to within the
+    # volume threshold (1e-27 of the extent cubed) are still rejected first.
+    g = ConvexGeometry([Vec3(cos(2.4k), sin(2.4k), 1e-20 * sin(7k)) for k in 1:30])
+    @test _tf_hull_metrics(g)[3]
+    @test_throws "four non-coplanar points" ConvexGeometry([Vec3(cos(2.4k), sin(2.4k), 1e-30 * sin(7k)) for k in 1:30])
+    @test_throws "four non-coplanar points" Diff3D._convex_quickhull(
+        [Vec3(0.0, 0, 0), Vec3(1.0, 0, 0), Vec3(0.0, 1, 0), Vec3(1.0, 1, 0), Vec3(0.5, 0.25, 0)])
+end
+
+@testset "ConvexGeometry quickhull is exact on adversarial point sets" begin
+    # Run directly on normalized point sets of every kind (thin and tilted
+    # slabs, near-coplanar clusters, jittered lattices, exactly coplanar cube
+    # faces, needles, spheres): the triangles close up by index with each
+    # edge used once in each direction, no point lies beyond any face by the
+    # exact predicate, and the volume is positive.
+    r = _TfRng(0x5eed)
+    gens = [
+        () -> (t = 10.0^-(3 + Int(_tf_next!(r) % 13)); [Vec3(_tf_gauss(r), _tf_gauss(r), t * _tf_gauss(r)) for _ in 1:40]),
+        () -> (t = 10.0^-(3 + Int(_tf_next!(r) % 13)); n = _tf_unit(r); u = cross(n, _tf_unit(r)); u = u * (1 / norm(u)); w = cross(n, u);
+               [u * _tf_gauss(r) + w * _tf_gauss(r) + n * (t * _tf_gauss(r)) for _ in 1:40]),
+        () -> (t = 10.0^-(6 + Int(_tf_next!(r) % 9)); b = [_tf_unit(r) for _ in 1:8];
+               vcat(b, [p + Vec3(0.0, 0.0, t * _tf_gauss(r)) for p in b for _ in 1:3], [Vec3(_tf_unif(r), _tf_unif(r), 0.0) * t for _ in 1:6])),
+        () -> (t = 10.0^-(9 + Int(_tf_next!(r) % 8));
+               [Vec3(Float64(_tf_next!(r) % 5) + t * _tf_gauss(r), Float64(_tf_next!(r) % 5) + t * _tf_gauss(r), Float64(_tf_next!(r) % 3) + t * _tf_gauss(r)) for _ in 1:40]),
+        () -> [let c = [2 * _tf_unif(r) - 1 for _ in 1:3]; c[1 + _tf_next!(r) % 3] = isodd(_tf_next!(r)) ? 1.0 : -1.0; Vec3(c...) end for _ in 1:60],
+        () -> (t = 10.0^-(3 + Int(_tf_next!(r) % 10));
+               vcat([Vec3(_tf_gauss(r), t * _tf_gauss(r), t * _tf_gauss(r)) for _ in 1:30], [Vec3(0.0, 1.0, 0.0), Vec3(0.0, 0.0, 1.0)])),
+        () -> [_tf_unit(r) for _ in 1:80],
+    ]
+    failures = Dict("open" => 0, "beyond" => 0, "volume" => 0)
+    hulls = 0
+    for round in 1:30, gen in gens
+        _, normalized, eps = Diff3D._convex_clean_points(gen())
+        Diff3D._convex_has_volume(normalized, eps) || continue
+        hull = Diff3D._convex_quickhull(normalized)
+        hulls += 1
+        edges = Dict{Tuple{Int,Int},Int}()
+        volume = 0.0
+        for (t, _) in hull
+            for e in ((t[1], t[2]), (t[2], t[3]), (t[3], t[1]))
+                edges[e] = get(edges, e, 0) + 1
+            end
+            volume += dot(normalized[t[1]], cross(normalized[t[2]], normalized[t[3]])) / 6
+        end
+        all(c == 1 && get(edges, (e[2], e[1]), 0) == 1 for (e, c) in edges) || (failures["open"] += 1)
+        all(Diff3D._qh_orient(normalized[t[1]], normalized[t[2]], normalized[t[3]], p) <= 0
+            for (t, _) in hull for p in normalized) || (failures["beyond"] += 1)
+        volume > 0 || (failures["volume"] += 1)
+    end
+    @test hulls > 150
+    @test failures == Dict("open" => 0, "beyond" => 0, "volume" => 0)
+    # The exact predicate agrees with exact rational arithmetic where the
+    # floating-point determinant cannot decide.
+    a = Vec3(0.1, 0.2, 0.3); b = Vec3(0.4, 0.5, 0.6); c = Vec3(0.7, 0.8, 0.9 + 1e-16)
+    for p in (Vec3(1.0, 1.1, 1.2), Vec3(0.25, 0.35, 0.45), Vec3(-0.3, 0.1, 0.5))
+        q = [Rational{BigInt}(x) for x in (a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z, p.x, p.y, p.z)]
+        u = q[4:6] .- q[1:3]; v = q[7:9] .- q[1:3]; w = q[10:12] .- q[1:3]
+        exact = u[1] * (v[2] * w[3] - v[3] * w[2]) + u[2] * (v[3] * w[1] - v[1] * w[3]) + u[3] * (v[1] * w[2] - v[2] * w[1])
+        @test Diff3D._qh_orient(a, b, c, p) == sign(exact)
+    end
+end
+
+@testset "ConvexGeometry clean-up and wrapping give the full scans' results" begin
+    # The cell-indexed duplicate merge keeps the points that the all-pairs
+    # scan keeps, in the same order.
+    function scan_clean(points)
+        _, _, eps = Diff3D._convex_clean_points(points)       # the merge tolerance
+        xs =[p.x for p in points]; ys = [p.y for p in points]; zs = [p.z for p in points]
+        center = Vec3(Diff3D._geometry_midpoint(minimum(xs), maximum(xs)), Diff3D._geometry_midpoint(minimum(ys), maximum(ys)),
+                      Diff3D._geometry_midpoint(minimum(zs), maximum(zs)))
+        scale = maximum(abs.(vcat(xs .- center.x, ys .- center.y, zs .- center.z)))
+        kept_raw = Vec3{Float64}[]; kept = Vec3{Float64}[]
+        for p in points
+            q = Vec3((p.x - center.x) / scale, (p.y - center.y) / scale, (p.z - center.z) / scale)
+            any(norm(q - k) <= eps for k in kept) && continue
+            push!(kept_raw, p); push!(kept, q)
+        end
+        return kept_raw, kept
+    end
+    r = _TfRng(0xc1ea)
+    for scale in (1.0, 1e-200, 1e200), _ in 1:4
+        base = [_tf_rv(r) * scale for _ in 1:150]
+        # copies at 0.3 to 1.5 eps of the extent, along axes and in random directions
+        near = [p + _tf_unit(r) * (scale * 1e-9 * (0.3 + 1.2 * _tf_unif(r)) * 4) for p in base[1:60]]
+        axis = [p + Vec3(scale * 1e-9 * (k % 3), 0.0, 0.0) * 4 for (k, p) in enumerate(base[61:90])]
+        points = vcat(base, near, axis, base[1:10])
+        raw, normalized, _ = Diff3D._convex_clean_points(points)
+        expected_raw, expected = scan_clean(points)
+        @test raw == expected_raw && normalized == expected
+    end
+
+    # The point tree answers each plane query of gift wrapping as the scan over
+    # all points in index order does: the wrap across an edge, the support
+    # test of a triangle and the coplanar set.
+    function scan_wrap(points, u, v, plane_eps)
+        pv = points[v]; edge = points[u] - pv
+        best = 0; normal = Vec3(0.0, 0.0, 0.0)
+        for idx in eachindex(points)
+            (idx == u || idx == v) && continue
+            candidate = cross(edge, points[idx] - pv)
+            len = norm(candidate)
+            len > plane_eps || continue
+            if best == 0 || dot(normal, points[idx] - pv) > plane_eps
+                best = idx; normal = candidate * (1 / len)
+            end
+        end
+        return best == 0 ? nothing : Diff3D._convex_coplanar(points, v, normal, plane_eps)
+    end
+    sets = [[_tf_unit(r) for _ in 1:400], [_tf_rv(r) for _ in 1:400],
+            vec([Vec3(Float64(x), Float64(y), Float64(z)) for x in 0:5, y in 0:5, z in 0:5]),
+            [let c = [2 * _tf_unif(r) - 1 for _ in 1:3]; c[1 + _tf_next!(r) % 3] = isodd(_tf_next!(r)) ? 1.0 : -1.0; Vec3(c...) end for _ in 1:300]]
+    mismatches = 0
+    for points in sets
+        _, normalized, eps = Diff3D._convex_clean_points(points)
+        tree = Diff3D._convex_point_tree(normalized)
+        n = length(normalized)
+        for plane_eps in (64 * eps, 64 * Diff3D._CONVEX_TIGHT_EPS), _ in 1:150
+            i = 1 + Int(_tf_next!(r) % n); j = 1 + Int(_tf_next!(r) % n); k = 1 + Int(_tf_next!(r) % n)
+            i == j && continue
+            Diff3D._convex_wrap_edge(tree, normalized, i, j, plane_eps) == scan_wrap(normalized, i, j, plane_eps) ||
+                (mismatches += 1)
+            (k == i || k == j) && continue
+            t = Diff3D._convex_tree_triple_normal(tree, normalized, i, j, k, plane_eps)
+            t === Diff3D._convex_triple_normal(normalized, i, j, k, plane_eps) || (mismatches += 1)
+            t === nothing && continue
+            Diff3D._convex_tree_coplanar(tree, normalized, i, t, plane_eps) ==
+                Diff3D._convex_coplanar(normalized, i, t, plane_eps) || (mismatches += 1)
+        end
+    end
+    @test mismatches == 0
+end

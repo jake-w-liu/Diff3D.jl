@@ -163,6 +163,67 @@ end
 # Triangulate the boundary of the convex hull of a 3D point set. Faces are
 # emitted non-indexed so each hull triangle keeps a flat outward normal.
 
+# Below this many points the duplicate merge and the wrapping queries scan
+# instead of building an index, which would cost more than it saves.
+const _CONVEX_TREE_MIN_POINTS = 64
+
+# Keep each point unless it lies within `eps` of an earlier kept point,
+# compacting `raw` and `normalized` together; returns the number kept.
+function _convex_merge_scan!(raw::Vector{Vec3{Float64}}, normalized::Vector{Vec3{Float64}},
+                             eps::Float64)
+    out = 0
+    for read_index in eachindex(raw)
+        p_scaled = normalized[read_index]
+        duplicate = false
+        for existing_index in 1:out
+            if norm(p_scaled - normalized[existing_index]) <= eps
+                duplicate = true
+                break
+            end
+        end
+        if !duplicate
+            out += 1
+            raw[out] = raw[read_index]
+            normalized[out] = p_scaled
+        end
+    end
+    return out
+end
+
+function _convex_merge_cells!(raw::Vector{Vec3{Float64}}, normalized::Vector{Vec3{Float64}},
+                              eps::Float64)
+    cell_size = 2 * eps
+    # Non-finite coordinates never pass the distance test; they share a cell.
+    cell_coordinate(x) = (c = x / cell_size; isfinite(c) ? floor(Int, clamp(c, -0x1p60, 0x1p60)) : 1 << 62)
+    cells = Dict{NTuple{3,Int},Vector{Int}}()
+    out = 0
+    for read_index in eachindex(raw)
+        p_scaled = normalized[read_index]
+        cx = cell_coordinate(p_scaled.x)
+        cy = cell_coordinate(p_scaled.y)
+        cz = cell_coordinate(p_scaled.z)
+        duplicate = false
+        for dx in -1:1, dy in -1:1, dz in -1:1
+            kept = get(cells, (cx + dx, cy + dy, cz + dz), nothing)
+            kept === nothing && continue
+            for existing_index in kept
+                if norm(p_scaled - normalized[existing_index]) <= eps
+                    duplicate = true
+                    break
+                end
+            end
+            duplicate && break
+        end
+        if !duplicate
+            out += 1
+            raw[out] = raw[read_index]
+            normalized[out] = p_scaled
+            push!(get!(Vector{Int}, cells, (cx, cy, cz)), out)
+        end
+    end
+    return out
+end
+
 function _convex_clean_points(points::AbstractVector{<:Vec3})
     raw = Vector{Vec3{Float64}}(undef, length(points))
     for (i, p) in pairs(points)
@@ -198,24 +259,16 @@ function _convex_clean_points(points::AbstractVector{<:Vec3})
                              (point.z - center.z) / scale)
     end
 
-    # Compact the original and normalized points together.
-    out = 0
-    for read_index in eachindex(raw)
-        p = raw[read_index]
-        p_scaled = normalized[read_index]
-        duplicate = false
-        for existing_index in 1:out
-            if norm(p_scaled - normalized[existing_index]) <= eps
-                duplicate = true
-                break
-            end
-        end
-        if !duplicate
-            out += 1
-            raw[out] = p
-            normalized[out] = p_scaled
-        end
-    end
+    # Compact the original and normalized points together, dropping each point
+    # within `eps` of an earlier kept point. Kept points are bucketed in cubic
+    # cells of side 2eps: a kept point within `eps` of p differs from it by at
+    # most about eps per coordinate, so its cell index differs by at most one
+    # (rounding moves a coordinate divided by 2eps by under 1e-7 for |x| <= 1)
+    # and it is among the kept points of the 27 cells around p's cell. The
+    # test itself is unchanged, so the same points survive in the same order.
+    # Small sets compare against every kept point directly.
+    out = length(raw) < _CONVEX_TREE_MIN_POINTS ?
+        _convex_merge_scan!(raw, normalized, eps) : _convex_merge_cells!(raw, normalized, eps)
     resize!(raw, out)
     resize!(normalized, out)
     length(raw) >= 4 ||
@@ -275,8 +328,9 @@ end
 
 # Reference enumeration: every triple whose plane supports the point set, in
 # lexicographic triple order, deduplicated by coplanar point set. O(n^4); the
-# gift-wrapping search below reproduces its faces and order and falls back to
-# this when it cannot certify a closed hull.
+# gift-wrapping search below reproduces its faces and order (the tests compare
+# the two). ConvexGeometry does not run it: where wrapping cannot certify a
+# closed hull, `_convex_quickhull` builds one.
 function _convex_support_faces(points::Vector{Vec3{Float64}}, eps::Float64)
     n = length(points)
     faces = Tuple{Vector{Int},Vec3{Float64}}[]
@@ -296,17 +350,261 @@ function _convex_support_faces(points::Vector{Vec3{Float64}}, eps::Float64)
     return faces
 end
 
+# ---- Point tree for the gift-wrapping search ----
+# A static kd-tree over the points that answers the three plane queries of
+# gift wrapping with the results of a full scan in index order: the first
+# point after a given index beyond a plane, whether any point lies beyond a
+# plane, and the points within the plane tolerance. A node is skipped only
+# when a bound on the plane distance over its points, widened by `margin`,
+# shows that no point in it can pass the test; `margin` is 1e-12 per unit of
+# coordinate magnitude, three orders above the rounding error of either the
+# bound or a point's distance (a few 1e-16 per unit). Every other point is
+# tested with the scan's own expression, so the answers are the scan's, at a
+# cost that grows with the points near the plane, not with n.
+# Each node has two bounds and uses the tighter: its axis-aligned box, and a
+# slab around its centroid c along the direction m of c (the outward normal
+# of a patch of a round hull centred at the origin, as normalized points
+# are): every point is c + h m + q with h in [hmin, hmax] and q orthogonal
+# to m, |q| <= radius. A patch of hull surface near a plane tangent to it is
+# thin along m, so the slab bound skips it where its box would not.
+struct _ConvexPointTree
+    perm::Vector{Int}           # point indices; ascending within each leaf
+    lo::Vector{Vec3{Float64}}   # node bounding boxes
+    hi::Vector{Vec3{Float64}}
+    center::Vector{Vec3{Float64}}
+    axis::Vector{Vec3{Float64}}
+    hmin::Vector{Float64}
+    hmax::Vector{Float64}
+    radius::Vector{Float64}
+    first::Vector{Int}          # node's range of `perm`
+    last::Vector{Int}
+    left::Vector{Int}           # children; 0 for a leaf
+    right::Vector{Int}
+    minidx::Vector{Int}         # smallest and largest point index in the node
+    maxidx::Vector{Int}
+    sorted::Vector{Vector{Int}} # the node's point indices, ascending
+    margin::Float64
+    stack::Vector{Int}
+end
+
+const _CONVEX_TREE_LEAF = 16
+
+@inline _convex_axis_coord(p::Vec3{Float64}, axis::Int) =
+    axis == 1 ? p.x : axis == 2 ? p.y : p.z
+
+function _convex_point_tree(points::Vector{Vec3{Float64}})
+    magnitude = 1.0
+    for p in points
+        magnitude = max(magnitude, abs(p.x), abs(p.y), abs(p.z))
+    end
+    tree = _ConvexPointTree(collect(eachindex(points)), Vec3{Float64}[], Vec3{Float64}[],
+                            Vec3{Float64}[], Vec3{Float64}[], Float64[], Float64[], Float64[],
+                            Int[], Int[], Int[], Int[], Int[], Int[], Vector{Int}[],
+                            1e-12 * magnitude, Int[])
+    isempty(points) || _convex_tree_build!(tree, points, 1, length(points))
+    return tree
+end
+
+# Node over perm[first:last], split at the median of its widest axis. The
+# recursion depth is about log2(n / leaf size).
+function _convex_tree_build!(tree::_ConvexPointTree, points::Vector{Vec3{Float64}},
+                             first::Int, last::Int)
+    perm = tree.perm
+    lo = hi = points[perm[first]]
+    minidx = maxidx = perm[first]
+    for m in (first + 1):last
+        p = points[perm[m]]
+        lo = Vec3(min(lo.x, p.x), min(lo.y, p.y), min(lo.z, p.z))
+        hi = Vec3(max(hi.x, p.x), max(hi.y, p.y), max(hi.z, p.z))
+        minidx = min(minidx, perm[m]); maxidx = max(maxidx, perm[m])
+    end
+    push!(tree.lo, lo); push!(tree.hi, hi)
+    c = Vec3(0.0, 0.0, 0.0)
+    for m in first:last
+        c += points[perm[m]]
+    end
+    c *= 1 / (last - first + 1)
+    len = norm(c)
+    axis = len > 0.0 ? c * (1 / len) : Vec3(0.0, 0.0, 1.0)
+    hmin = Inf; hmax = -Inf; radius = 0.0
+    for m in first:last
+        d = points[perm[m]] - c
+        h = dot(axis, d)
+        hmin = min(hmin, h); hmax = max(hmax, h)
+        radius = max(radius, norm(d - axis * h))
+    end
+    push!(tree.center, c); push!(tree.axis, axis)
+    push!(tree.hmin, hmin); push!(tree.hmax, hmax); push!(tree.radius, radius)
+    push!(tree.first, first); push!(tree.last, last)
+    push!(tree.left, 0); push!(tree.right, 0)
+    push!(tree.minidx, minidx); push!(tree.maxidx, maxidx)
+    push!(tree.sorted, sort!(perm[first:last]))
+    node = length(tree.lo)
+    extent = hi - lo
+    axis = extent.x >= extent.y && extent.x >= extent.z ? 1 : extent.y >= extent.z ? 2 : 3
+    if last - first + 1 > _CONVEX_TREE_LEAF && _convex_axis_coord(extent, axis) > 0.0
+        mid = (first + last) >>> 1
+        # A full sort: partialsort! places the median but does not partition.
+        sort!(view(perm, first:last); by=i -> _convex_axis_coord(points[i], axis))
+        left = _convex_tree_build!(tree, points, first, mid)
+        right = _convex_tree_build!(tree, points, mid + 1, last)
+        tree.left[node] = left
+        tree.right[node] = right
+    else
+        sort!(view(perm, first:last))
+    end
+    return node
+end
+
+# Bounds on dot(normal, p - origin) over node `k`'s points: the tighter of
+# the box and slab bounds on each side.
+@inline function _convex_tree_range(tree::_ConvexPointTree, k::Int, normal::Vec3{Float64},
+                                    origin::Vec3{Float64})
+    lo = tree.lo[k] - origin
+    hi = tree.hi[k] - origin
+    x1 = normal.x * lo.x; x2 = normal.x * hi.x
+    y1 = normal.y * lo.y; y2 = normal.y * hi.y
+    z1 = normal.z * lo.z; z2 = normal.z * hi.z
+    box_lower = min(x1, x2) + min(y1, y2) + min(z1, z2)
+    box_upper = max(x1, x2) + max(y1, y2) + max(z1, z2)
+    axis = tree.axis[k]
+    along = dot(normal, axis)
+    across = norm(normal - axis * along) * tree.radius[k]
+    base = dot(normal, tree.center[k] - origin)
+    a = along * tree.hmin[k]; b = along * tree.hmax[k]
+    return max(box_lower, base + min(a, b) - across), min(box_upper, base + max(a, b) + across)
+end
+
+# Whether some point lies beyond the plane through `origin` by more than
+# `plane_eps` on the side of `normal` (`positive`) or the other side.
+function _convex_tree_side(tree::_ConvexPointTree, points::Vector{Vec3{Float64}},
+                           normal::Vec3{Float64}, origin::Vec3{Float64}, plane_eps::Float64,
+                           positive::Bool)
+    stack = tree.stack
+    empty!(stack)
+    push!(stack, 1)
+    @inbounds while !isempty(stack)
+        k = pop!(stack)
+        lower, upper = _convex_tree_range(tree, k, normal, origin)
+        positive ? (upper + tree.margin <= plane_eps && continue) :
+                   (lower - tree.margin >= -plane_eps && continue)
+        if tree.left[k] == 0
+            for m in tree.first[k]:tree.last[k]
+                side = dot(normal, points[tree.perm[m]] - origin)
+                (positive ? side > plane_eps : side < -plane_eps) && return true
+            end
+        else
+            push!(stack, tree.right[k], tree.left[k])
+        end
+    end
+    return false
+end
+
+# Support-plane test for the triangle (i, j, k), as `_convex_triple_normal`.
+function _convex_tree_triple_normal(tree::_ConvexPointTree, points::Vector{Vec3{Float64}},
+                                    i::Int, j::Int, k::Int, plane_eps::Float64)
+    normal = cross(points[j] - points[i], points[k] - points[i])
+    len = norm(normal)
+    len > plane_eps || return nothing
+    normal = normal * (1 / len)
+    pos = _convex_tree_side(tree, points, normal, points[i], plane_eps, true)
+    pos && _convex_tree_side(tree, points, normal, points[i], plane_eps, false) &&
+        return nothing
+    pos && (normal = -normal)
+    return normal
+end
+
+# The points within `plane_eps` of the plane, ascending, as `_convex_coplanar`.
+function _convex_tree_coplanar(tree::_ConvexPointTree, points::Vector{Vec3{Float64}},
+                               origin::Int, normal::Vec3{Float64}, plane_eps::Float64)
+    coplanar = Int[]
+    stack = tree.stack
+    empty!(stack)
+    push!(stack, 1)
+    po = points[origin]
+    @inbounds while !isempty(stack)
+        k = pop!(stack)
+        lower, upper = _convex_tree_range(tree, k, normal, po)
+        (lower - tree.margin > plane_eps || upper + tree.margin < -plane_eps) && continue
+        if tree.left[k] == 0
+            for m in tree.first[k]:tree.last[k]
+                idx = tree.perm[m]
+                abs(dot(normal, points[idx] - po)) <= plane_eps && push!(coplanar, idx)
+            end
+        else
+            push!(stack, tree.right[k], tree.left[k])
+        end
+    end
+    return sort!(coplanar)
+end
+
+# The first index after `after`, other than u and v, that the scan in
+# `_convex_wrap_edge` would take as its new best point for the current
+# `normal`: off the edge line (by its cross-product test) and beyond the
+# plane by more than `plane_eps`. 0 when there is none. While many points lie
+# beyond the plane (the first planes of a scan), the next few indices in
+# order hold one, so those are tried directly before the tree search, which
+# then starts after them. A node wholly beyond the plane is searched through
+# its ascending index list from `after` on instead of point by point.
+@inline _convex_takes_over(points::Vector{Vec3{Float64}}, idx::Int, u::Int, v::Int,
+                           edge::Vec3{Float64}, pv::Vec3{Float64}, normal::Vec3{Float64},
+                           plane_eps::Float64) =
+    idx != u && idx != v && dot(normal, points[idx] - pv) > plane_eps &&
+        norm(cross(edge, points[idx] - pv)) > plane_eps
+
+function _convex_tree_next_beyond(tree::_ConvexPointTree, points::Vector{Vec3{Float64}},
+                                  u::Int, v::Int, edge::Vec3{Float64}, pv::Vec3{Float64},
+                                  normal::Vec3{Float64}, plane_eps::Float64, after::Int)
+    @inbounds for idx in (after + 1):min(after + 64, length(points))
+        _convex_takes_over(points, idx, u, v, edge, pv, normal, plane_eps) && return idx
+    end
+    after = min(after + 64, length(points))
+    best = typemax(Int)
+    stack = tree.stack
+    empty!(stack)
+    push!(stack, 1)
+    @inbounds while !isempty(stack)
+        k = pop!(stack)
+        (tree.maxidx[k] <= after || tree.minidx[k] >= best) && continue
+        lower, upper = _convex_tree_range(tree, k, normal, pv)
+        upper + tree.margin <= plane_eps && continue
+        if lower - tree.margin > plane_eps || tree.left[k] == 0
+            list = tree.sorted[k]
+            for m in searchsortedfirst(list, after + 1):length(list)
+                idx = list[m]
+                idx >= best && break
+                if _convex_takes_over(points, idx, u, v, edge, pv, normal, plane_eps)
+                    best = idx
+                    break
+                end
+            end
+        else
+            push!(stack, tree.right[k], tree.left[k])
+        end
+    end
+    return best == typemax(Int) ? 0 : best
+end
+
 # The face that the reference enumeration reports for the support plane
 # containing `candidates` (sorted): its first valid triple in lexicographic
 # order, that triple's outward normal and its coplanar set.
-function _convex_canonical_face(points::Vector{Vec3{Float64}}, candidates::Vector{Int},
-                                plane_eps::Float64)
+# Without a tree (small point sets, where building one costs more than it
+# saves) the queries are the scans themselves.
+_convex_tree_triple_normal(::Nothing, points::Vector{Vec3{Float64}}, i::Int, j::Int, k::Int,
+                           plane_eps::Float64) = _convex_triple_normal(points, i, j, k, plane_eps)
+_convex_tree_coplanar(::Nothing, points::Vector{Vec3{Float64}}, origin::Int,
+                      normal::Vec3{Float64}, plane_eps::Float64) =
+    _convex_coplanar(points, origin, normal, plane_eps)
+
+function _convex_canonical_face(tree::Union{Nothing,_ConvexPointTree},
+                                points::Vector{Vec3{Float64}},
+                                candidates::Vector{Int}, plane_eps::Float64)
     m = length(candidates)
     @inbounds for a in 1:(m - 2), b in (a + 1):(m - 1), c in (b + 1):m
         i = candidates[a]; j = candidates[b]; k = candidates[c]
-        normal = _convex_triple_normal(points, i, j, k, plane_eps)
+        normal = _convex_tree_triple_normal(tree, points, i, j, k, plane_eps)
         normal === nothing && continue
-        return (i, j, k), _convex_coplanar(points, i, normal, plane_eps), normal
+        return (i, j, k), _convex_tree_coplanar(tree, points, i, normal, plane_eps), normal
     end
     return nothing
 end
@@ -315,7 +613,38 @@ end
 # face's outward normal): the neighbouring face lists the edge as v -> u, so
 # its outward normal is cross(u - v, w - v) for the point w that leaves every
 # point behind the plane. Returns the support plane's points (sorted).
-function _convex_wrap_edge(points::Vector{Vec3{Float64}}, u::Int, v::Int,
+# This is a scan over the points in index order: the first point off the edge
+# line becomes the best point, and every later point beyond the best point's
+# plane by more than `plane_eps` replaces it. The tree finds each replacement
+# directly.
+function _convex_wrap_edge(tree::_ConvexPointTree, points::Vector{Vec3{Float64}},
+                           u::Int, v::Int, plane_eps::Float64)
+    pu = points[u]
+    pv = points[v]
+    edge = pu - pv
+    best = 0
+    normal = Vec3(0.0, 0.0, 0.0)
+    @inbounds for idx in eachindex(points)
+        (idx == u || idx == v) && continue
+        candidate = cross(edge, points[idx] - pv)
+        len = norm(candidate)
+        len > plane_eps || continue
+        best = idx
+        normal = candidate * (1 / len)
+        break
+    end
+    best == 0 && return nothing
+    while true
+        next = _convex_tree_next_beyond(tree, points, u, v, edge, pv, normal, plane_eps, best)
+        next == 0 && break
+        best = next
+        candidate = cross(edge, points[best] - pv)
+        normal = candidate * (1 / norm(candidate))
+    end
+    return _convex_tree_coplanar(tree, points, v, normal, plane_eps)
+end
+
+function _convex_wrap_edge(::Nothing, points::Vector{Vec3{Float64}}, u::Int, v::Int,
                            plane_eps::Float64)
     pu = points[u]
     pv = points[v]
@@ -338,9 +667,10 @@ end
 
 function _convex_add_wrapped_face!(faces, seen::Set{Vector{Int}},
                                    edges::Set{Tuple{Int,Int}}, open_edges::Vector{Tuple{Int,Int}},
-                                   points::Vector{Vec3{Float64}}, candidates::Vector{Int},
-                                   eps::Float64, plane_eps::Float64)
-    canonical = _convex_canonical_face(points, candidates, plane_eps)
+                                   tree::Union{Nothing,_ConvexPointTree},
+                                   points::Vector{Vec3{Float64}},
+                                   candidates::Vector{Int}, eps::Float64, plane_eps::Float64)
+    canonical = _convex_canonical_face(tree, points, candidates, plane_eps)
     canonical === nothing && return false
     triple, coplanar, normal = canonical
     coplanar in seen && return true
@@ -391,15 +721,16 @@ function _convex_wrapped_support_faces(points::Vector{Vec3{Float64}}, eps::Float
         end
     end
     b == 0 && return nothing
-    faces = Tuple{NTuple{3,Int},Vector{Int},Vec3{Float64},Vector{Int}}[]
+    tree = n < _CONVEX_TREE_MIN_POINTS ? nothing : _convex_point_tree(points)
+    faces =Tuple{NTuple{3,Int},Vector{Int},Vec3{Float64},Vector{Int}}[]
     seen = Set{Vector{Int}}()
     edges = Set{Tuple{Int,Int}}()
     open_edges = Tuple{Int,Int}[]
     started = false
     for (u, v) in ((a, b), (b, a))
-        candidates = _convex_wrap_edge(points, u, v, plane_eps)
+        candidates = _convex_wrap_edge(tree, points, u, v, plane_eps)
         candidates === nothing && continue
-        _convex_add_wrapped_face!(faces, seen, edges, open_edges, points,
+        _convex_add_wrapped_face!(faces, seen, edges, open_edges, tree, points,
                                   candidates, eps, plane_eps) || return nothing
         started = !isempty(faces)
         started && break
@@ -408,10 +739,10 @@ function _convex_wrapped_support_faces(points::Vector{Vec3{Float64}}, eps::Float
     while !isempty(open_edges)
         u, v = pop!(open_edges)
         (v, u) in edges && continue
-        candidates = _convex_wrap_edge(points, u, v, plane_eps)
+        candidates = _convex_wrap_edge(tree, points, u, v, plane_eps)
         candidates === nothing && return nothing
         before = length(faces)
-        _convex_add_wrapped_face!(faces, seen, edges, open_edges, points,
+        _convex_add_wrapped_face!(faces, seen, edges, open_edges, tree, points,
                                   candidates, eps, plane_eps) || return nothing
         # The neighbour must be new and must close the edge it was found from.
         length(faces) > before && (v, u) in edges || return nothing
@@ -505,6 +836,341 @@ function _convex_face_hull(points::Vector{Vec3{Float64}}, face_indices::Vector{I
     return hull
 end
 
+# ---- Quickhull (three.js examples/jsm/math/ConvexHull.js) ----
+# The last resort when gift wrapping cannot certify a closed polygon-faced
+# hull. It follows three.js ConvexHull (initial tetrahedron from the axis
+# extremes, one outside set per face, farthest point first, horizon search
+# across face edges, a cone of new faces), but decides every "is this point
+# beyond this face" question with an exact orientation predicate instead of
+# a floating-point distance tolerance. Inputs reach it exactly when they are
+# degenerate within rounding (thin slabs, near-coplanar clusters), where a
+# tolerance test misjudges slivers and builds folded surfaces. With exact
+# signs, each point's visible region is a disc bounded by one simple horizon
+# cycle, no new face is degenerate (an eye point on a horizon edge's line
+# would lie in the plane of the visible face on that edge), and the result
+# is the exact convex hull of the points: closed, convex and wound outward.
+# Faces are flat arrays: face f has corners fv[3f-2:3f], edge k runs from
+# corner k to corner k+1 (mod 3), and fn[3f-3+k] is the face across edge k.
+mutable struct _ConvexQuickhull
+    points::Vector{Vec3{Float64}}
+    fv::Vector{Int}
+    fn::Vector{Int}
+    normal::Vector{Vec3{Float64}}
+    alive::Vector{Bool}
+    outside::Vector{Vector{Int}}
+    stamp::Vector{Int}
+end
+
+# Float64 `x` as the integer x * 2^-e (e at most the exponent of its last bit).
+@inline function _qh_scaled_integer(x::Float64, e::Int)
+    num, pow, den = Base.decompose(x)
+    value = BigInt(num) << (pow - e)
+    return den < 0 ? -value : value
+end
+
+# Exact sign of det[b - a, c - a, p - a] (positive when p lies on the side
+# that the right-handed normal of (a, b, c) points to). Every Float64 is an
+# integer multiple of 2^e for the smallest exponent e among the inputs, so the
+# determinant is evaluated exactly in BigInt arithmetic.
+function _qh_orient_exact(a::Vec3{Float64}, b::Vec3{Float64}, c::Vec3{Float64},
+                          p::Vec3{Float64})
+    coords = (a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z, p.x, p.y, p.z)
+    e = typemax(Int)
+    for x in coords
+        x == 0.0 || (e = min(e, Base.decompose(x)[2]))
+    end
+    e == typemax(Int) && return 0
+    ax, ay, az, bx, by, bz, cx, cy, cz, px, py, pz = map(x -> _qh_scaled_integer(x, e), coords)
+    ux = bx - ax; uy = by - ay; uz = bz - az
+    vx = cx - ax; vy = cy - ay; vz = cz - az
+    wx = px - ax; wy = py - ay; wz = pz - az
+    return Int(sign(ux * (vy * wz - vz * wy) + uy * (vz * wx - vx * wz) + uz * (vx * wy - vy * wx)))
+end
+
+# Sign of det[b - a, c - a, p - a]. The floating-point value decides when it
+# clears Shewchuk's orient3d error bound (7 + 56u) u * permanent, u = 2^-53
+# ("Adaptive Precision Floating-Point Arithmetic and Fast Robust Geometric
+# Predicates", 1997), plus floatmin to cover underflow in the products;
+# otherwise the exact evaluation decides.
+function _qh_orient(a::Vec3{Float64}, b::Vec3{Float64}, c::Vec3{Float64}, p::Vec3{Float64})
+    ux = b.x - a.x; uy = b.y - a.y; uz = b.z - a.z
+    vx = c.x - a.x; vy = c.y - a.y; vz = c.z - a.z
+    wx = p.x - a.x; wy = p.y - a.y; wz = p.z - a.z
+    t1 = vy * wz; t2 = vz * wy; t3 = vz * wx; t4 = vx * wz; t5 = vx * wy; t6 = vy * wx
+    det = ux * (t1 - t2) + uy * (t3 - t4) + uz * (t5 - t6)
+    permanent = abs(ux) * (abs(t1) + abs(t2)) + abs(uy) * (abs(t3) + abs(t4)) +
+                abs(uz) * (abs(t5) + abs(t6))
+    bound = (7.0 + 56.0 * eps(Float64) / 2) * (eps(Float64) / 2) * permanent + floatmin(Float64)
+    det > bound && return 1
+    det < -bound && return -1
+    return _qh_orient_exact(a, b, c, p)
+end
+
+@inline _qh_orient(h::_ConvexQuickhull, f::Int, p::Int) =
+    _qh_orient(h.points[h.fv[3f - 2]], h.points[h.fv[3f - 1]], h.points[h.fv[3f]], h.points[p])
+
+# Floating-point distance of point `p` beyond face `f`; it only ranks points
+# that the exact predicate already placed outside (three.js's farthest-first).
+@inline _qh_distance(h::_ConvexQuickhull, f::Int, p::Int) =
+    dot(h.normal[f], h.points[p] - h.points[h.fv[3f - 2]])
+
+function _qh_add_face!(h::_ConvexQuickhull, a::Int, b::Int, c::Int)
+    pa = h.points[a]
+    n = cross(h.points[b] - pa, h.points[c] - pa)
+    len = norm(n)
+    push!(h.fv, a, b, c)
+    push!(h.fn, 0, 0, 0)
+    push!(h.normal, len > 0.0 ? n * (1 / len) : Vec3(0.0, 0.0, 0.0))
+    push!(h.alive, true)
+    push!(h.outside, Int[])
+    push!(h.stamp, 0)
+    return length(h.alive)
+end
+
+# The edge of face `f` that runs from `u` to `v`.
+function _qh_edge(h::_ConvexQuickhull, f::Int, u::Int, v::Int)
+    @inbounds for k in 1:3
+        h.fv[3f - 3 + k] == u && h.fv[3f - 3 + mod1(k + 1, 3)] == v && return k
+    end
+    error("ConvexGeometry quickhull lost the edge ($u, $v)")
+end
+
+# Assign point `p` to the face of `faces` that it lies beyond (exactly) and
+# farthest from; a point beyond none of them is inside the hull and dropped.
+function _qh_assign!(h::_ConvexQuickhull, faces, p::Int, pending::Vector{Int})
+    best = 0
+    best_distance = -Inf
+    for f in faces
+        _qh_orient(h, f, p) > 0 || continue
+        d = _qh_distance(h, f, p)
+        if best == 0 || d > best_distance
+            best_distance = d
+            best = f
+        end
+    end
+    if best != 0
+        isempty(h.outside[best]) && push!(pending, best)
+        push!(h.outside[best], p)
+    end
+    return nothing
+end
+
+@inline _qh_coord(p::Vec3{Float64}, j::Int) = j == 1 ? p.x : j == 2 ? p.y : p.z
+
+# computeInitialHull: the extreme pair along the widest axis, the point
+# farthest from their segment and the point farthest from that plane, each
+# confirmed by the exact predicate.
+function _qh_initial!(h::_ConvexQuickhull, pending::Vector{Int})
+    pts = h.points
+    n = length(pts)
+    flat() = throw(ArgumentError("ConvexGeometry needs at least four non-coplanar points"))
+    lo = [1, 1, 1]; hi = [1, 1, 1]
+    for i in 2:n, j in 1:3
+        _qh_coord(pts[i], j) < _qh_coord(pts[lo[j]], j) && (lo[j] = i)
+        _qh_coord(pts[i], j) > _qh_coord(pts[hi[j]], j) && (hi[j] = i)
+    end
+    axis = 1
+    for j in 2:3
+        _qh_coord(pts[hi[j]], j) - _qh_coord(pts[lo[j]], j) >
+            _qh_coord(pts[hi[axis]], axis) - _qh_coord(pts[lo[axis]], axis) && (axis = j)
+    end
+    v0 = lo[axis]; v1 = hi[axis]
+    pts[v0] == pts[v1] && flat()
+    a = pts[v0]; d = pts[v1] - a
+    dd = dot(d, d)
+    order = Int[]
+    distances = Float64[]
+    for i in 1:n
+        (i == v0 || i == v1) && continue
+        t = clamp(dot(pts[i] - a, d) / dd, 0.0, 1.0)
+        q = pts[i] - (a + d * t)
+        push!(order, i); push!(distances, dot(q, q))
+    end
+    order = order[sortperm(distances; rev=true)]
+    # The farthest point from the segment that, with some fourth point, spans
+    # a tetrahedron; v0, v1 and v2 are collinear exactly when every fourth
+    # point is coplanar with them.
+    for v2 in order
+        plane = cross(pts[v1] - pts[v0], pts[v2] - pts[v0])
+        v3 = 0; best = -1.0
+        for i in 1:n
+            (i == v0 || i == v1 || i == v2) && continue
+            dist = abs(dot(plane, pts[i] - pts[v0]))
+            dist > best && _qh_orient(pts[v0], pts[v1], pts[v2], pts[i]) != 0 &&
+                (best = dist; v3 = i)
+        end
+        v3 == 0 && continue
+        corners = (v0, v1, v2, v3)
+        for r in 1:4
+            x, y, z = (corners[mod1(r + 1, 4)], corners[mod1(r + 2, 4)], corners[mod1(r + 3, 4)])
+            # The remaining corner must lie behind the face.
+            _qh_orient(pts[x], pts[y], pts[z], pts[corners[r]]) > 0 && ((y, z) = (z, y))
+            _qh_add_face!(h, x, y, z)
+        end
+        for f in 1:4, k in 1:3
+            u = h.fv[3f - 3 + k]; v = h.fv[3f - 3 + mod1(k + 1, 3)]
+            for g in 1:4, m in 1:3
+                g != f && h.fv[3g - 3 + m] == v && h.fv[3g - 3 + mod1(m + 1, 3)] == u &&
+                    (h.fn[3f - 3 + k] = g)
+            end
+        end
+        for i in 1:n
+            i in corners || _qh_assign!(h, 1:4, i, pending)
+        end
+        return nothing
+    end
+    flat()
+end
+
+# computeHorizon without mutation: the faces that `eye` lies beyond, reached
+# across edges from `start` depth first as in three.js, and the horizon edges
+# (face, edge) whose opposite face it does not lie beyond.
+function _qh_horizon!(h::_ConvexQuickhull, eye::Int, start::Int, iteration::Int,
+                      visible::Vector{Int}, horizon::Vector{Tuple{Int,Int}},
+                      stack::Vector{Tuple{Int,Int,Int}})
+    empty!(visible); empty!(horizon); empty!(stack)
+    h.stamp[start] = iteration
+    push!(visible, start)
+    push!(stack, (start, 0, 0))
+    while !isempty(stack)
+        f, entry, done = stack[end]
+        # The start face scans all three edges; a face entered across edge
+        # `entry` scans the two others, beginning after it.
+        if done == (entry == 0 ? 3 : 2)
+            pop!(stack)
+            continue
+        end
+        stack[end] = (f, entry, done + 1)
+        k = mod1(entry + 1 + done, 3)
+        g = h.fn[3f - 3 + k]
+        h.stamp[g] == iteration && continue
+        if _qh_orient(h, g, eye) > 0
+            h.stamp[g] = iteration
+            push!(visible, g)
+            u = h.fv[3f - 3 + k]; v = h.fv[3f - 3 + mod1(k + 1, 3)]
+            push!(stack, (g, _qh_edge(h, g, v, u), 0))
+        else
+            push!(horizon, (f, k))
+        end
+    end
+    return nothing
+end
+
+# Order the horizon edges into one cycle (each edge's head is the next edge's
+# tail). Exact visibility makes it one simple cycle; anything else is a bug.
+function _qh_order_horizon!(h::_ConvexQuickhull, horizon::Vector{Tuple{Int,Int}},
+                            ordered::Vector{Tuple{Int,Int}}, by_tail::Dict{Int,Int})
+    empty!(ordered); empty!(by_tail)
+    broken() = error("ConvexGeometry quickhull horizon is not one simple cycle")
+    length(horizon) >= 3 || broken()
+    for (i, (f, k)) in enumerate(horizon)
+        tail = h.fv[3f - 3 + k]
+        haskey(by_tail, tail) && broken()
+        by_tail[tail] = i
+    end
+    i = 1
+    for _ in 1:length(horizon)
+        f, k = horizon[i]
+        push!(ordered, (f, k))
+        i = get(by_tail, h.fv[3f - 3 + mod1(k + 1, 3)], 0)
+        i == 0 && broken()
+    end
+    i == 1 || broken()
+    return nothing
+end
+
+# Outward unit normal for face `f`: its own when the triangle is far from
+# degenerate (sine of its corner angle above 1e-8, so rounding moves the
+# direction by well under 1e-7), else that of the nearest such face across
+# edges, so slivers shade with their surroundings.
+function _qh_face_normal(h::_ConvexQuickhull, f::Int, queue::Vector{Int}, seen::Dict{Int,Bool})
+    reliable(g) = begin
+        pa = h.points[h.fv[3g - 2]]
+        u = h.points[h.fv[3g - 1]] - pa; v = h.points[h.fv[3g]] - pa
+        norm(cross(u, v)) > 1e-8 * norm(u) * norm(v)
+    end
+    reliable(f) && return h.normal[f]
+    empty!(queue); empty!(seen)
+    push!(queue, f); seen[f] = true
+    head = 1
+    while head <= length(queue)
+        g = queue[head]; head += 1
+        for k in 1:3
+            m = h.fn[3g - 3 + k]
+            haskey(seen, m) && continue
+            reliable(m) && return h.normal[m]
+            seen[m] = true
+            push!(queue, m)
+        end
+    end
+    return h.normal[f]
+end
+
+# Hull triangles of `points` (normalized, pairwise distinct, not coplanar) as
+# (corner indices, outward unit normal), outward-wound.
+function _convex_quickhull(points::Vector{Vec3{Float64}})
+    h = _ConvexQuickhull(points, Int[], Int[], Vec3{Float64}[], Bool[], Vector{Int}[], Int[])
+    pending = Int[]
+    _qh_initial!(h, pending)
+    visible = Int[]; horizon = Tuple{Int,Int}[]; ordered = Tuple{Int,Int}[]
+    stack = Tuple{Int,Int,Int}[]; by_tail = Dict{Int,Int}()
+    unassigned = Int[]; new_faces = Int[]
+    iteration = 0
+    # Each pass adds one outside point to the hull for good, so the loop runs
+    # at most once per point.
+    while !isempty(pending)
+        face = pending[end]
+        if !h.alive[face] || isempty(h.outside[face])
+            pop!(pending)
+            continue
+        end
+        # nextVertexToAdd: the farthest point beyond the face.
+        list = h.outside[face]
+        best = 1
+        best_distance = _qh_distance(h, face, list[1])
+        for j in 2:length(list)
+            d = _qh_distance(h, face, list[j])
+            d > best_distance && (best = j; best_distance = d)
+        end
+        eye = list[best]
+        deleteat!(list, best)
+        iteration += 1
+        _qh_horizon!(h, eye, face, iteration, visible, horizon, stack)
+        _qh_order_horizon!(h, horizon, ordered, by_tail)
+        empty!(unassigned)
+        for f in visible
+            h.alive[f] = false
+            append!(unassigned, h.outside[f])
+            empty!(h.outside[f])
+        end
+        empty!(new_faces)
+        for (f, k) in ordered
+            tail = h.fv[3f - 3 + k]; head = h.fv[3f - 3 + mod1(k + 1, 3)]
+            g = _qh_add_face!(h, eye, tail, head)
+            opposite = h.fn[3f - 3 + k]
+            h.fn[3g - 1] = opposite
+            h.fn[3opposite - 3 + _qh_edge(h, opposite, head, tail)] = g
+            push!(new_faces, g)
+        end
+        m = length(new_faces)
+        for i in 1:m
+            g = new_faces[i]
+            h.fn[3g - 2] = new_faces[mod1(i - 1, m)]
+            h.fn[3g] = new_faces[mod1(i + 1, m)]
+        end
+        for p in unassigned
+            _qh_assign!(h, new_faces, p, pending)
+        end
+    end
+    faces = Tuple{Vector{Int},Vec3{Float64}}[]
+    queue = Int[]; seen = Dict{Int,Bool}()
+    for f in eachindex(h.alive)
+        h.alive[f] || continue
+        push!(faces, ([h.fv[3f - 2], h.fv[3f - 1], h.fv[3f]], _qh_face_normal(h, f, queue, seen)))
+    end
+    return faces
+end
+
 # Rounding-level tolerance in the normalized coordinates (|x| <= 1): 64x this
 # stays well above the rounding error of a plane-distance evaluation (a few
 # 1e-16), comparable to three.js ConvexHull's 3 * EPSILON * (|x| + |y| + |z|).
@@ -514,7 +1180,17 @@ const _CONVEX_TIGHT_EPS = 1e-15
     ConvexGeometry(points)
 
 Build a flat-shaded triangle `BufferGeometry` for the convex hull of a
-non-coplanar 3D point set.
+non-coplanar 3D point set. Points closer together than `1e-9` times the
+point set's half extent are merged first, keeping the earlier point.
+
+Coplanar hull points merge into polygon faces, fan-triangulated, when a
+gift-wrapping search certifies that those faces close up. Otherwise (point
+sets degenerate within about `1e-9` of their extent, such as very thin slabs)
+the faces are the triangles of the quickhull algorithm of three.js
+`ConvexHull`, run with exact orientation predicates: the exact convex hull of
+the merged points, always closed, convex and wound outward. Unlike three.js,
+it keeps hull points that lie within rounding of a face, so near-coplanar
+inputs can have more (thin) triangles than three.js `ConvexGeometry`.
 """
 function ConvexGeometry(points::AbstractVector{<:Vec3})
     clean, normalized, eps = _convex_clean_points(points)
@@ -523,21 +1199,14 @@ function ConvexGeometry(points::AbstractVector{<:Vec3})
     # Gift wrapping certifies a closed hull surface. Points within the `eps`
     # plane tolerance of one another's faces can make those tolerant face sets
     # inconsistent; resolving them at rounding-level tolerance instead (as
-    # three.js ConvexHull does) splits them into separate facets. The
-    # exhaustive enumeration is the last resort.
+    # three.js ConvexHull does) splits them into separate facets. Where both
+    # fail, quickhull with exact predicates builds the exact hull.
     wrapped = _convex_wrapped_support_faces(normalized, eps)
     wrapped === nothing &&
         (wrapped = _convex_wrapped_support_faces(normalized, _CONVEX_TIGHT_EPS))
     hulls = Tuple{Vector{Int},Vec3{Float64}}[]
     if wrapped === nothing
-        support_faces = _convex_support_faces(normalized, eps)
-        isempty(support_faces) &&
-            throw(ArgumentError("ConvexGeometry could not find hull support faces"))
-        sizehint!(hulls, length(support_faces))
-        for (face_indices, normal) in support_faces
-            hull = _convex_face_hull(normalized, face_indices, normal, eps)
-            length(hull) >= 3 && push!(hulls, (hull, normal))
-        end
+        hulls = _convex_quickhull(normalized)
     else
         sizehint!(hulls, length(wrapped))
         for (_, normal, hull) in wrapped
