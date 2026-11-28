@@ -41,8 +41,10 @@ order, UVs, normals, and defaults, with these deliberate differences:
 `ExtrudeGeometry` defaults to `bevel_enabled=false` (three.js enables a bevel by
 default); extrusion along a polyline `extrude_path` keeps smooth shared side
 normals and per-ring UVs rather than three.js's flat faces and world-space UVs;
-`ShapeGeometry` and `ExtrudeGeometry` triangulate with Diff3D's ear clipper
-rather than Earcut, so triangle and vertex order differ; generators do not add
+`ShapeGeometry`, `ExtrudeGeometry` and `TextGeometry` triangulate with Diff3D's
+ear clipper by default, so triangle and vertex order differ from three.js
+(`triangulation=:earcut` selects a port of three.js Earcut that reproduces
+them); generators do not add
 three.js's per-part draw groups, because the renderers draw a mesh with one
 material; `CylinderGeometry` caps share one center vertex instead of one per
 segment; and where three.js returns NaN or a collapsed shape from overflow or
@@ -135,13 +137,20 @@ three.js r186 on purpose:
   `(0, 1, 0)` (three.js: the origin).
 - Raycasting: point and line thresholds, and a point hit's `distance_to_ray`,
   are measured in world space. Sphere tests treat a negative radius as empty.
-- Animation: one `AnimationMixer` drives one clip and uses a single
-  `time_scale`. `Clock()` starts at construction. Keyframe times must be finite
+- Animation: an `AnimationMixer` drives one clip and uses a single
+  `time_scale`; `AnimationActionMixer` plays several actions at once with
+  weights, fades, cross-fades, warps and additive clips, as the three.js mixer
+  does. `Clock()` starts at construction. Keyframe times must be finite
   and strictly increasing. A morph-name track on a parent resolves the name on
   each driven mesh.
 - Helpers are built once from the object's state at construction. `CameraHelper`
-  and `PlaneHelper` draw Diff3D's own line sets, and `color=` on a helper draws a
-  single color.
+  and `PlaneHelper` draw Diff3D's own line sets unless `style=:threejs` is
+  passed, and `color=` on a helper draws a single color.
+- Controls: `ArcballControls` takes its animation time from the caller
+  (`arcball_animation_frame!`), measures fields of view in radians, rejects a
+  camera under a transformed `Scene` and input that would collapse the camera,
+  and keeps the camera still when inertia starts from a zero-length drag
+  (three.js scales and dollies it).
 - Loaders: `load_rgbe` decodes with the reference `rgbe.c` scale
   (`mantissa * 2^(e-136)`), about 0.39% darker than three.js. PLY integer colors
   are normalized by their type maximum, and polygons with more than four
@@ -160,17 +169,14 @@ three.js r186 on purpose:
 
 ## Not implemented
 
-These three.js r186 features have no Diff3D counterpart yet: `renderOrder`;
-`Object3D.clone`/`copy`; blending modes other than normal alpha blending and
-`premultipliedAlpha`; environment maps on the Basic, Lambert and Phong
-materials; bump and displacement maps; `alphaHash`; lines and points as shadow
-casters; simultaneous actions on one mixer (weights, fades, cross-fades, warps,
-additive clips); `FirstPersonControls`, `ArcballControls` and three.js's
-`FlyControls` behavior; `TTFLoader`; and `Color` HSL and CSS-style helpers.
-`save_gltf` writes node hierarchies, mesh, line and point primitives, morph
-targets, untextured materials, and transform and morph-weight animations; it
-raises an error for textures, cameras, lights, skins and instancing. WebGPU,
-TSL node materials, WebXR and audio playback are outside the package's scope.
+These three.js r186 features have no Diff3D counterpart yet: blending modes
+other than normal alpha blending and `premultipliedAlpha`; environment maps on
+the Basic, Lambert and Phong materials; bump and displacement maps;
+`alphaHash`; and lines and points as shadow casters. `save_gltf` and `save_glb`
+write what three.js `GLTFExporter` writes for the scene content Diff3D has and
+raise an `ArgumentError` for the rest (for example a `HemisphereLight`, which
+glTF cannot represent). WebGPU, TSL node materials, WebXR and audio playback
+are outside the package's scope.
 
 ## Numeric and differentiation inputs
 
