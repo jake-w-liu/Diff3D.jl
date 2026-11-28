@@ -13112,6 +13112,8 @@ end
 
 function _gltfx_animation(w::_GLTFExportWriter, clip::AnimationClip)
     isempty(clip.tracks) && _gltfx_error("animation $(repr(clip.name)) has no tracks")
+    clip.blend_mode === :normal ||
+        _gltfx_error("animation $(repr(clip.name)) is additive, which glTF cannot store")
     samplers = Any[]
     channels = Any[]
     for track in clip.tracks

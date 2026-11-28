@@ -181,7 +181,6 @@ const _API_TYPE_DOCS = Dict{Symbol,String}(
     :CubicSplineKeyframeTrack => "Cubic Hermite spline keyframe track.",
     :CubicSplineQuaternionKeyframeTrack => "Cubic spline quaternion keyframe track.",
     :CubicSplineMorphWeightsKeyframeTrack => "Cubic spline morph-weight keyframe track.",
-    :AnimationClip => "Named collection of animation tracks with duration metadata.",
     :GLTFAsset => "Structured result from `load_gltf_asset`/`load_glb_asset` with `scene` and `animations` fields.",
     :WebGLExportCase => "Named scene/camera case exported by `save_webgl_html`.",
 )

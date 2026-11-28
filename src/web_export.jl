@@ -200,6 +200,7 @@ function _validate_webgl_export_case(case::WebGLExportCase)
     _web_output_color_space_id(case.output_color_space)
     _web_validate_case_clipping_planes(case.clipping_planes)
     _web_validate_camera(case.camera)
+    foreach(clip -> _require_normal_blend_clip(clip, "the WebGL export"), case.animations)
     return nothing
 end
 
