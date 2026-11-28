@@ -1831,3 +1831,83 @@ function clone(source::M) where {M<:AbstractMaterial}
                     fieldcount(M))
     return M(values...)
 end
+
+"""
+    box3_from_buffer_attribute(attribute::BufferAttribute) -> Box3
+
+Box of the first three components of every item of `attribute` (three.js
+`Box3.setFromBufferAttribute`). Items with fewer than three components take
+`0` for the missing ones; three.js instead reads the next item's values there
+(`BufferAttribute.getY`/`getZ` index past the item, BufferAttribute.js:487).
+"""
+function box3_from_buffer_attribute(attribute::BufferAttribute)
+    size = attribute.item_size
+    1 <= size || throw(ArgumentError("box3_from_buffer_attribute needs a positive item size"))
+    data = attribute.data
+    rem(length(data), size) == 0 ||
+        throw(ArgumentError("box3_from_buffer_attribute data length is not a multiple of the item size"))
+    box = Box3()
+    for start in 1:size:length(data)
+        z = zero(eltype(data))
+        box = box3_expand_by_point(box, Vec3(data[start],
+                                             size >= 2 ? data[start + 1] : z,
+                                             size >= 3 ? data[start + 2] : z))
+    end
+    return box
+end
+
+# three.js Frustum.intersectsSprite (Frustum.js:174-183): a sphere of radius
+# √2/2 (the unit quad's half diagonal) plus the anchor's distance from the
+# quad centre, around the sprite origin.
+const _SPRITE_FRUSTUM_RADIUS = 0.7071067811865476
+
+"""
+    frustum_intersects_object(frustum, object) -> Bool
+
+Whether the bounding sphere of `object`'s geometry, placed by its world matrix,
+reaches into `frustum` (three.js `Frustum.intersectsObject`). For an
+`InstancedMesh` the sphere bounds every instance, as three.js
+`InstancedMesh.computeBoundingSphere` does. The object needs a `geometry`. A
+`SkinnedMesh` raises `ArgumentError`: three.js bounds its posed vertices
+(`SkinnedMesh.computeBoundingSphere`), which this function does not compute.
+"""
+function frustum_intersects_object(f::Frustum, object::AbstractObject3D)
+    object isa SkinnedMesh &&
+        throw(ArgumentError("frustum_intersects_object does not support SkinnedMesh; it needs the posed bounding sphere"))
+    hasproperty(object, :geometry) ||
+        throw(ArgumentError("frustum_intersects_object needs an object with a geometry"))
+    geometry = getproperty(object, :geometry)
+    geometry isa BufferGeometry ||
+        throw(ArgumentError("frustum_intersects_object needs a BufferGeometry"))
+    sphere = compute_bounding_sphere(geometry)
+    world = compute_world_matrix(object)
+    if object isa InstancedMesh
+        sphere = _instanced_bounding_sphere(sphere, object.instance_matrices)
+    end
+    return frustum_intersects_sphere(f, sphere_apply_matrix4(sphere, world))
+end
+
+# InstancedMesh.computeBoundingSphere (InstancedMesh.js:155-180): the union of
+# the geometry sphere transformed by each instance matrix.
+function _instanced_bounding_sphere(sphere::BoundingSphere, matrices::Vector{<:Mat4})
+    result = BoundingSphere(Vec3(0.0, 0.0, 0.0), -1.0)
+    for matrix in matrices
+        result = sphere_union(result, sphere_apply_matrix4(sphere, matrix))
+    end
+    return result
+end
+
+"""
+    frustum_intersects_sprite(frustum, sprite::Sprite) -> Bool
+
+three.js `Frustum.intersectsSprite`: a sphere of radius `√2/2` plus the
+distance of `sprite.center` from `(0.5, 0.5)`, centred on the sprite origin and
+placed by its world matrix.
+"""
+function frustum_intersects_sprite(f::Frustum, sprite::Sprite)
+    center = sprite.center
+    offset = sqrt((0.5 - center.x)^2 + (0.5 - center.y)^2)
+    sphere = BoundingSphere(Vec3(0.0, 0.0, 0.0), _SPRITE_FRUSTUM_RADIUS + offset)
+    return frustum_intersects_sphere(f, sphere_apply_matrix4(sphere,
+                                                             compute_world_matrix(sprite)))
+end

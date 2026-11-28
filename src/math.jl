@@ -2326,13 +2326,22 @@ end
 end
 
 """
-    frustum_from_matrix(m)
+    frustum_from_matrix(m; coordinate_system=:webgl, reversed_depth=false)
 
 Extract the six clip planes (right, left, bottom, top, far, near) from a
 view-projection matrix via the Gribb–Hartmann method (three.js
 `Frustum.setFromProjectionMatrix`). Plane normals point inward.
+
+`coordinate_system` is the clip-space depth range of `m`: `:webgl` for
+`[-1, 1]` (three.js `WebGLCoordinateSystem`, the projection matrices Diff3D
+builds) or `:webgpu` for `[0, 1]` (`WebGPUCoordinateSystem`). With
+`reversed_depth=true` the far plane is `z = 0` and the near plane `z = w`
+in clip space, as three.js derives them for a reversed-depth projection.
 """
-function frustum_from_matrix(m::Mat4)
+function frustum_from_matrix(m::Mat4; coordinate_system::Symbol=:webgl,
+                             reversed_depth::Bool=false)
+    coordinate_system === :webgl || coordinate_system === :webgpu ||
+        throw(ArgumentError("frustum_from_matrix coordinate_system must be :webgl or :webgpu, got $(repr(coordinate_system))"))
     e = m.e
     scale = maximum(abs, e)
     divisor = isfinite(scale) && scale > zero(scale) ? scale : one(scale)
@@ -2356,8 +2365,13 @@ function frustum_from_matrix(m::Mat4)
         _make_plane(me3+me0, me7+me4, me11+me8,  me15+me12),
         _make_plane(me3+me1, me7+me5, me11+me9,  me15+me13),
         _make_plane(me3-me1, me7-me5, me11-me9,  me15-me13),
-        _make_plane(me3-me2, me7-me6, me11-me10, me15-me14),
-        _make_plane(me3+me2, me7+me6, me11+me10, me15+me14),
+        # Far and near (Frustum.js:109-132).
+        reversed_depth ? _make_plane(me2, me6, me10, me14) :
+            _make_plane(me3-me2, me7-me6, me11-me10, me15-me14),
+        reversed_depth ? _make_plane(me3-me2, me7-me6, me11-me10, me15-me14) :
+            coordinate_system === :webgl ?
+            _make_plane(me3+me2, me7+me6, me11+me10, me15+me14) :
+            _make_plane(me2, me6, me10, me14),
     )
     Frustum(planes)
 end
@@ -3278,6 +3292,452 @@ function smootherstep(x, lo, hi)
     x >= hi && return one((x - lo) / one(hi - lo))
     t = (x - lo) / (hi - lo)
     return t * t * t * (t * (t * 6 - 15) + 10)
+end
+
+# ========================== MathUtils ==========================
+# three.js src/math/MathUtils.js. Functions that draw random numbers take a
+# `random` keyword: a zero-argument function returning a Float64 in [0, 1),
+# `rand` by default, where three.js calls Math.random().
+
+"""
+    deg_to_rad(degrees)
+    rad_to_deg(radians)
+
+Convert between degrees and radians with three.js `MathUtils.DEG2RAD` and
+`RAD2DEG` (`MathUtils.degToRad`, `MathUtils.radToDeg`), computed in the
+argument's floating-point type.
+"""
+deg_to_rad(degrees::AbstractFloat) = degrees * (oftype(degrees, π) / 180)
+deg_to_rad(degrees::Real) = degrees * (π / 180)
+@doc (@doc deg_to_rad)
+rad_to_deg(radians::AbstractFloat) = radians * (180 / oftype(radians, π))
+rad_to_deg(radians::Real) = radians * (180 / π)
+
+"""
+    rand_int(low, high; random=rand) -> Int
+
+Random integer in `low:high` (three.js `MathUtils.randInt`:
+`low + floor(random() * (high - low + 1))`).
+"""
+rand_int(low::Integer, high::Integer; random=rand) =
+    Int(low) + floor(Int, random() * (Int(high) - Int(low) + 1))
+
+"""
+    rand_float(low, high; random=rand)
+
+Random float in `[low, high)` (three.js `MathUtils.randFloat`).
+"""
+rand_float(low::Real, high::Real; random=rand) = low + random() * (high - low)
+
+"""
+    rand_float_spread(range; random=rand)
+
+Random float in `(-range/2, range/2]` (three.js `MathUtils.randFloatSpread`:
+`range * (0.5 - random())`).
+"""
+rand_float_spread(range::Real; random=rand) = range * (0.5 - random())
+
+# Mulberry32 state of three.js MathUtils.seededRandom (initial seed 1234567).
+const _SEEDED_RANDOM_STATE = Threads.Atomic{UInt32}(UInt32(1234567))
+
+"""
+    seeded_random([seed]) -> Float64
+
+Deterministic pseudo-random number in [0, 1) from three.js's Mulberry32
+generator (`MathUtils.seededRandom`). Passing an integer `seed` restarts the
+sequence; three.js starts from seed 1234567. The state is shared by the whole
+process, as in three.js, and advanced atomically.
+"""
+function seeded_random(seed::Integer)
+    _SEEDED_RANDOM_STATE[] = seed % UInt32
+    return seeded_random()
+end
+
+function seeded_random()
+    t = Threads.atomic_add!(_SEEDED_RANDOM_STATE, 0x6d2b79f5) + 0x6d2b79f5
+    t = (t ⊻ (t >> 15)) * (t | 0x00000001)
+    t ⊻= t + (t ⊻ (t >> 7)) * (t | 0x0000003d)
+    return Float64(t ⊻ (t >> 14)) / 4294967296.0
+end
+
+const _UUID_HEX = "0123456789abcdef"
+
+"""
+    generate_uuid(; random=rand) -> String
+
+Random RFC 4122 version 4 UUID string in lower case (three.js
+`MathUtils.generateUUID`, which draws four 32-bit words from `random()`).
+"""
+function generate_uuid(; random=rand)
+    words = ntuple(_ -> trunc(Int64, random() * 4294967295.0) % UInt32, 4)
+    d0, d1, d2, d3 = words
+    bytes = (d0 & 0xff, d0 >> 8 & 0xff, d0 >> 16 & 0xff, d0 >> 24 & 0xff,
+             d1 & 0xff, d1 >> 8 & 0xff, (d1 >> 16 & 0x0f) | 0x40, d1 >> 24 & 0xff,
+             (d2 & 0x3f) | 0x80, d2 >> 8 & 0xff, d2 >> 16 & 0xff, d2 >> 24 & 0xff,
+             d3 & 0xff, d3 >> 8 & 0xff, d3 >> 16 & 0xff, d3 >> 24 & 0xff)
+    io = IOBuffer(sizehint=36)
+    for (index, byte) in enumerate(bytes)
+        index in (5, 7, 9, 11) && write(io, '-')
+        write(io, _UUID_HEX[(byte >> 4) + 1], _UUID_HEX[(byte & 0x0f) + 1])
+    end
+    return String(take!(io))
+end
+
+"""
+    is_power_of_two(value) -> Bool
+
+Whether `value` is a positive integer power of two (three.js
+`MathUtils.isPowerOfTwo`, MathUtils.js:288-292, which accepts any
+integer-valued number).
+"""
+is_power_of_two(value::Integer) = value > 0 && (value & (value - 1)) == 0
+is_power_of_two(value::Real) =
+    isfinite(value) && value > 0 && isinteger(value) && significand(Float64(value)) == 1
+
+"""
+    ceil_power_of_two(value)
+    floor_power_of_two(value)
+
+Smallest power of two `>= value` and largest power of two `<= value` for
+positive `value`, as Float64 (three.js `MathUtils.ceilPowerOfTwo` and
+`floorPowerOfTwo`). The exponent is exact: three.js computes it as
+`Math.log(value) / Math.LN2`, which rounds above `k` for some powers of two
+`2^k` (the first is `2^29`), so its `ceilPowerOfTwo(2^29)` is `2^30`.
+"""
+function ceil_power_of_two(value::Real)
+    x = Float64(value)
+    x > 0 || throw(DomainError(value, "ceil_power_of_two needs a positive value"))
+    isfinite(x) || return x
+    return significand(x) == 1 ? x : ldexp(1.0, exponent(x) + 1)
+end
+@doc (@doc ceil_power_of_two)
+function floor_power_of_two(value::Real)
+    x = Float64(value)
+    x > 0 || throw(DomainError(value, "floor_power_of_two needs a positive value"))
+    isfinite(x) || return x
+    return ldexp(1.0, exponent(x))
+end
+
+# ---------------------------- Box3 additions ----------------------------
+# three.js src/math/Box3.js r186.
+
+"""
+    box3_from_points(points) -> Box3
+
+Smallest box containing every point of `points` (three.js
+`Box3.setFromPoints`); an empty collection gives the empty box `Box3()`.
+"""
+function box3_from_points(points)
+    box = Box3()
+    for point in points
+        box = box3_expand_by_point(box, point)
+    end
+    return box
+end
+
+"""
+    box3_from_array(values::AbstractVector) -> Box3
+
+Box of the points stored as consecutive `x, y, z` triples in `values` (three.js
+`Box3.setFromArray`). The length must be a multiple of 3.
+"""
+function box3_from_array(values::AbstractVector{<:Real})
+    rem(length(values), 3) == 0 ||
+        throw(ArgumentError("box3_from_array needs a length that is a multiple of 3"))
+    box = Box3()
+    for index in firstindex(values):3:lastindex(values)
+        box = box3_expand_by_point(box, Vec3(values[index], values[index + 1],
+                                             values[index + 2]))
+    end
+    return box
+end
+
+"""
+    box3_from_center_and_size(center, size) -> Box3
+
+Box centred on `center` with edge lengths `size` (three.js
+`Box3.setFromCenterAndSize`).
+"""
+function box3_from_center_and_size(center::Vec3, size::Vec3)
+    half = size * 0.5
+    return Box3(center - half, center + half)
+end
+
+"""
+    box3_expand_by_vector(box, v) -> Box3
+    box3_expand_by_scalar(box, s) -> Box3
+
+Grow `box` by `v` (per axis) or by `s` on every side (three.js
+`Box3.expandByVector`, `Box3.expandByScalar`). Negative amounts shrink it.
+"""
+box3_expand_by_vector(box::Box3, v::Vec3) = Box3(box.min - v, box.max + v)
+@doc (@doc box3_expand_by_vector)
+box3_expand_by_scalar(box::Box3, s::Real) =
+    Box3(Vec3(box.min.x + (-s), box.min.y + (-s), box.min.z + (-s)),
+         Vec3(box.max.x + s, box.max.y + s, box.max.z + s))
+
+"""
+    box3_translate(box, offset) -> Box3
+
+`box` moved by `offset` (three.js `Box3.translate`).
+"""
+box3_translate(box::Box3, offset::Vec3) = Box3(box.min + offset, box.max + offset)
+
+"""
+    box3_equals(a, b) -> Bool
+
+Whether the corners of `a` and `b` are equal (three.js `Box3.equals`).
+"""
+box3_equals(a::Box3, b::Box3) = a.min == b.min && a.max == b.max
+
+"""
+    box3_contains_box(a, b) -> Bool
+
+Whether `b` lies inside `a`, boundaries included (three.js `Box3.containsBox`).
+"""
+box3_contains_box(a::Box3, b::Box3) =
+    a.min.x <= b.min.x && b.max.x <= a.max.x &&
+    a.min.y <= b.min.y && b.max.y <= a.max.y &&
+    a.min.z <= b.min.z && b.max.z <= a.max.z
+
+"""
+    box3_get_parameter(box, point) -> Vec3
+
+Position of `point` relative to `box` as `(point - min) ./ (max - min)` (three.js
+`Box3.getParameter`); an axis of zero size divides by zero, as in three.js.
+"""
+box3_get_parameter(box::Box3, p::Vec3) =
+    Vec3((p.x - box.min.x) / (box.max.x - box.min.x),
+         (p.y - box.min.y) / (box.max.y - box.min.y),
+         (p.z - box.min.z) / (box.max.z - box.min.z))
+
+# three.js satForAxes (Box3.js:784-808) for one axis.
+@inline function _box_triangle_separated(axis::Vec3, v0::Vec3, v1::Vec3, v2::Vec3,
+                                         extents::Vec3)
+    r = extents.x * abs(axis.x) + extents.y * abs(axis.y) + extents.z * abs(axis.z)
+    p0 = dot(v0, axis)
+    p1 = dot(v1, axis)
+    p2 = dot(v2, axis)
+    return max(-max(p0, p1, p2), min(p0, p1, p2)) > r
+end
+
+"""
+    box3_intersects_triangle(box, triangle) -> Bool
+
+Separating-axis test of `box` against `triangle` (three.js
+`Box3.intersectsTriangle`): the nine edge-cross-axis directions, the three box
+axes and the triangle normal. An empty box intersects nothing.
+"""
+function box3_intersects_triangle(box::Box3, tri::Triangle)
+    box3_is_empty(box) && return false
+    center = (box.min + box.max) * 0.5
+    extents = box.max - center
+    v0 = tri.a - center
+    v1 = tri.b - center
+    v2 = tri.c - center
+    f0 = v1 - v0
+    f1 = v2 - v1
+    f2 = v0 - v2
+    for f in (f0, f1, f2)
+        z = zero(f.x)
+        _box_triangle_separated(Vec3(z, -f.z, f.y), v0, v1, v2, extents) && return false
+    end
+    for f in (f0, f1, f2)
+        z = zero(f.x)
+        _box_triangle_separated(Vec3(f.z, z, -f.x), v0, v1, v2, extents) && return false
+    end
+    for f in (f0, f1, f2)
+        z = zero(f.x)
+        _box_triangle_separated(Vec3(-f.y, f.x, z), v0, v1, v2, extents) && return false
+    end
+    o = one(extents.x)
+    z = zero(extents.x)
+    _box_triangle_separated(Vec3(o, z, z), v0, v1, v2, extents) && return false
+    _box_triangle_separated(Vec3(z, o, z), v0, v1, v2, extents) && return false
+    _box_triangle_separated(Vec3(z, z, o), v0, v1, v2, extents) && return false
+    return !_box_triangle_separated(cross(f0, f1), v0, v1, v2, extents)
+end
+
+"""
+    triangle_intersects_box(triangle, box) -> Bool
+
+Same as [`box3_intersects_triangle`](@ref) (three.js `Triangle.intersectsBox`).
+"""
+triangle_intersects_box(tri::Triangle, box::Box3) = box3_intersects_triangle(box, tri)
+
+"""
+    mat4_rotation_from_euler(euler::Euler) -> Mat4
+
+Pure rotation matrix of `euler` computed entry by entry as three.js
+`Matrix4.makeRotationFromEuler` does (Matrix4.js:338-466), for each of the six
+Tait-Bryan orders.
+"""
+function mat4_rotation_from_euler(euler::Euler)
+    a, b = cos(euler.x), sin(euler.x)
+    c, d = cos(euler.y), sin(euler.y)
+    e, f = cos(euler.z), sin(euler.z)
+    order = euler.order
+    if order === :XYZ
+        ae, af, be, bf = a * e, a * f, b * e, b * f
+        m = (c * e, af + be * d, bf - ae * d,
+             -c * f, ae - bf * d, be + af * d,
+             d, -b * c, a * c)
+    elseif order === :YXZ
+        ce, cf, de, df = c * e, c * f, d * e, d * f
+        m = (ce + df * b, a * f, cf * b - de,
+             de * b - cf, a * e, df + ce * b,
+             a * d, -b, a * c)
+    elseif order === :ZXY
+        ce, cf, de, df = c * e, c * f, d * e, d * f
+        m = (ce - df * b, cf + de * b, -a * d,
+             -a * f, a * e, b,
+             de + cf * b, df - ce * b, a * c)
+    elseif order === :ZYX
+        ae, af, be, bf = a * e, a * f, b * e, b * f
+        m = (c * e, c * f, -d,
+             be * d - af, bf * d + ae, b * c,
+             ae * d + bf, af * d - be, a * c)
+    elseif order === :YZX
+        ac, ad, bc, bd = a * c, a * d, b * c, b * d
+        m = (c * e, f, -d * e,
+             bd - ac * f, a * e, ad * f + bc,
+             bc * f + ad, -b * e, ac - bd * f)
+    elseif order === :XZY
+        ac, ad, bc, bd = a * c, a * d, b * c, b * d
+        m = (c * e, ac * f + bd, bc * f - ad,
+             -f, a * e, b * e,
+             d * e, ad * f - bc, bd * f + ac)
+    else
+        throw(ArgumentError("mat4_rotation_from_euler: unknown Euler order $(repr(order))"))
+    end
+    z = zero(m[1])
+    o = one(m[1])
+    return Mat4((m[1], m[2], m[3], z, m[4], m[5], m[6], z, m[7], m[8], m[9], z,
+                 z, z, z, o))
+end
+
+"""
+    mat4_rotation_from_quaternion(q::Quaternion) -> Mat4
+
+Rotation matrix of `q` (three.js `Matrix4.makeRotationFromQuaternion`, which
+composes a zero translation, `q` and unit scale).
+"""
+function mat4_rotation_from_quaternion(q::Quaternion)
+    z = zero(q.x)
+    o = one(q.x)
+    return mat4_compose(Vec3(z, z, z), q, Vec3(o, o, o))
+end
+
+"""
+    mat4_scale(m::Mat4, v::Vec3) -> Mat4
+
+`m` with its first three columns multiplied by `v.x`, `v.y` and `v.z` (three.js
+`Matrix4.scale`, the product `m * mat4_scaling(v)` without the extra rounding).
+"""
+function mat4_scale(m::Mat4, v::Vec3)
+    e = m.e
+    return Mat4((e[1] * v.x, e[2] * v.x, e[3] * v.x, e[4] * v.x,
+                 e[5] * v.y, e[6] * v.y, e[7] * v.y, e[8] * v.y,
+                 e[9] * v.z, e[10] * v.z, e[11] * v.z, e[12] * v.z,
+                 e[13], e[14], e[15], e[16]))
+end
+
+"""
+    mat4_premultiply(m, a) -> Mat4
+
+`a * m` (three.js `Matrix4.premultiply`; `mat4_multiply(m, a)` is
+`Matrix4.multiply`).
+"""
+mat4_premultiply(m::Mat4, a::Mat4) = mat4_multiply(a, m)
+
+"""
+    quat_random(; random=rand) -> Quaternion{Float64}
+
+Uniformly distributed random unit quaternion (Shoemake's method, three.js
+`Quaternion.random`). `random` is a zero-argument function returning a number in
+[0, 1), called three times in three.js's order.
+"""
+function quat_random(; random=rand)
+    theta1 = 2 * π * random()
+    theta2 = 2 * π * random()
+    x0 = random()
+    r1 = sqrt(1 - x0)
+    r2 = sqrt(x0)
+    return Quaternion(r1 * sin(theta1), r1 * cos(theta1), r2 * sin(theta2),
+                      r2 * cos(theta2))
+end
+
+"""
+    quat_from_proper_euler(a, b, c, order::Symbol) -> Quaternion
+
+Quaternion of the proper Euler angles `a`, `b`, `c` (radians) in the intrinsic
+order `:XYX`, `:YZY`, `:ZXZ`, `:XZX`, `:YXY` or `:ZYZ` (three.js
+`MathUtils.setQuaternionFromProperEuler`, which only warns on another order;
+here it raises `ArgumentError`).
+"""
+function quat_from_proper_euler(a::Real, b::Real, c::Real, order::Symbol)
+    c2 = cos(b / 2)
+    s2 = sin(b / 2)
+    c13 = cos((a + c) / 2)
+    s13 = sin((a + c) / 2)
+    c1_3 = cos((a - c) / 2)
+    s1_3 = sin((a - c) / 2)
+    c3_1 = cos((c - a) / 2)
+    s3_1 = sin((c - a) / 2)
+    order === :XYX && return Quaternion(c2 * s13, s2 * c1_3, s2 * s1_3, c2 * c13)
+    order === :YZY && return Quaternion(s2 * s1_3, c2 * s13, s2 * c1_3, c2 * c13)
+    order === :ZXZ && return Quaternion(s2 * c1_3, s2 * s1_3, c2 * s13, c2 * c13)
+    order === :XZX && return Quaternion(c2 * s13, s2 * s3_1, s2 * c3_1, c2 * c13)
+    order === :YXY && return Quaternion(s2 * c3_1, c2 * s13, s2 * s3_1, c2 * c13)
+    order === :ZYZ && return Quaternion(s2 * s3_1, s2 * c3_1, c2 * s13, c2 * c13)
+    throw(ArgumentError("quat_from_proper_euler: unknown order $(repr(order))"))
+end
+
+# Scale of each integer component type in three.js MathUtils.normalize and
+# denormalize (MathUtils.js:383-470); Float32 values pass through.
+_normalized_scale(::Type{UInt32}) = 4294967295.0
+_normalized_scale(::Type{UInt16}) = 65535.0
+_normalized_scale(::Type{UInt8}) = 255.0
+_normalized_scale(::Type{Int32}) = 2147483647.0
+_normalized_scale(::Type{Int16}) = 32767.0
+_normalized_scale(::Type{Int8}) = 127.0
+_normalized_scale(::Type{T}) where {T} =
+    throw(ArgumentError("normalized component type must be Float32, UInt8/16/32 or Int8/16/32, got $T"))
+
+"""
+    normalize_component(value, T::Type) -> Float64
+    denormalize_component(value, T::Type) -> Float64
+
+Encode a float in `[0, 1]` (unsigned) or `[-1, 1]` (signed) as the integer
+code of component type `T`, rounded half up, or decode a code back to a float
+(three.js `MathUtils.normalize` and `MathUtils.denormalize`, which take the
+type from the typed array). Signed decoding clamps at `-1`. `Float32` values
+pass through unchanged.
+"""
+normalize_component(value::Real, ::Type{Float32}) = Float64(value)
+normalize_component(value::Real, ::Type{T}) where {T} =
+    round(value * _normalized_scale(T), RoundNearestTiesUp)
+@doc (@doc normalize_component)
+denormalize_component(value::Real, ::Type{Float32}) = Float64(value)
+denormalize_component(value::Real, ::Type{T}) where {T<:Unsigned} =
+    value / _normalized_scale(T)
+denormalize_component(value::Real, ::Type{T}) where {T<:Signed} =
+    max(value / _normalized_scale(T), -1.0)
+denormalize_component(value::Real, ::Type{T}) where {T} = _normalized_scale(T)
+
+"""
+    triangle_interpolation(triangle, point, v1, v2, v3)
+
+Value at `point` interpolated from the vertex values `v1`, `v2`, `v3` with the
+barycentric coordinates of `point` in `triangle` (three.js
+`Triangle.getInterpolation`). Returns `nothing` for a degenerate triangle,
+where three.js returns `null`. The values may be numbers or `Vec2`/`Vec3`.
+"""
+function triangle_interpolation(tri::Triangle, p::Vec3, v1, v2, v3)
+    bc = triangle_barycentric(tri, p)
+    # triangle_barycentric's sentinel for a degenerate triangle.
+    iszero(bc.x) && iszero(bc.y) && iszero(bc.z) && return nothing
+    return v1 * bc.x + v2 * bc.y + v3 * bc.z
 end
 
 # ------------------------------ Matrix3 ------------------------------

@@ -732,3 +732,257 @@ end
     @test_throws ArgumentError Diff3D.color_style(Color3(NaN, 0.0, 0.0))
     @test_throws ArgumentError Diff3D.color_hex(Color3(0.0, NaN, 0.0))
 end
+
+# ---------------------------------------------------------------------------
+# (e) Math gaps: Frustum, Box3, Triangle, Matrix4, Quaternion, MathUtils
+# ---------------------------------------------------------------------------
+# Oracle values: node with three.js r186 build/three.module.js; the script is
+# e/e_oracle.mjs in the audit scratch.
+
+oracle_mat4(values...) = Mat4(Float64.(values))
+plane_tuple(plane) = (plane.normal.x, plane.normal.y, plane.normal.z, plane.constant)
+
+@testset "Frustum planes for WebGL, WebGPU and reversed depth" begin
+    # Matrix4.makePerspective(-0.3, 0.4, 0.25, -0.2, 0.5, 40, system, reversed)
+    # and the inverse world matrix of a camera at (1,2,3) looking at the origin.
+    view = oracle_mat4(0.94868329805051410, -0.16903085094570330, 0.26726124191242434, 0.0,
+                       -2.7755575615628920e-17, 0.84515425472851680, 0.53452248382484879, 0.0,
+                       -0.31622776601683794, -0.50709255283711008, 0.80178372573727330, 0.0,
+                       -1.5012955407352220e-16, 3.5108334685767005e-17, -3.7416573867739418, 1.0)
+    proj(e11, e15) = oracle_mat4(1.4285714285714286, 0.0, 0.0, 0.0, 0.0, 2.2222222222222223,
+                                 0.0, 0.0, 0.14285714285714290, 0.11111111111111108, e11,
+                                 -1.0, 0.0, 0.0, e15, 0.0)
+    side_planes = [(-0.90775397171312866, -0.33391354845187282, -0.25393792351541195, 2.3373948391631103),
+                   (0.67598444226572907, -0.27500954910846331, -0.68367739593601518, 1.9250668437592431),
+                   (-0.25619953854067912, 0.58618935892374457, -0.76859861562203757, 1.3896166675593025),
+                   (0.031662928270251543, -0.99497466788533317, 0.094988784810754637, 1.6733200530681507)]
+    cases = [
+        # Frustum.setFromProjectionMatrix (Frustum.js:95-136), WebGL near plane.
+        (:webgl, false, proj(-1.0253164556962024, -1.0126582278481013),
+         (0.26726124191242484, 0.53452248382484968, 0.80178372573727230, 36.258342613226141),
+         (-0.26726124191242434, -0.53452248382484868, -0.80178372573727330, 3.2416573867739413)),
+        # WebGPU: near = row 3 alone (Frustum.js:122-124).
+        (:webgpu, false, proj(-1.0126582278481013, -0.50632911392405067),
+         (0.26726124191242528, 0.53452248382485057, 0.80178372573727152, 36.258342613225871),
+         (-0.26726124191242434, -0.53452248382484879, -0.80178372573727330, 3.2416573867739418)),
+        # Reversed depth: far = row 3, near = row 4 - row 3 (Frustum.js:109-112).
+        (:webgl, true, proj(0.012658227848101266, 0.50632911392405067),
+         (0.26726124191242429, 0.53452248382484868, 0.80178372573727308, 36.258342613226056),
+         (-0.26726124191242429, -0.53452248382484879, -0.80178372573727330, 3.2416573867739413)),
+    ]
+    for (system, reversed, projection, far, near) in cases
+        frustum = frustum_from_matrix(projection * view; coordinate_system=system,
+                                      reversed_depth=reversed)
+        expected = [side_planes; far; near]
+        for (plane, oracle) in zip(frustum.planes, expected)
+            @test all(isapprox.(plane_tuple(plane), oracle; atol=1e-12))
+        end
+        # containsPoint for (0,0,0), (0,0,3.2), (0,0,2.6), (-30,0,-30).
+        @test [frustum_contains_point(frustum, Vec3(p...)) for p in
+               ((0.0, 0.0, 0.0), (0.0, 0.0, 3.2), (0.0, 0.0, 2.6), (-30.0, 0.0, -30.0))] ==
+              [true, false, false, false]
+    end
+    # The default stays the WebGL convention.
+    vp = proj(-1.0253164556962024, -1.0126582278481013) * view
+    @test frustum_from_matrix(vp) == frustum_from_matrix(vp; coordinate_system=:webgl)
+    @test_throws ArgumentError frustum_from_matrix(vp; coordinate_system=:vulkan)
+end
+
+@testset "Frustum intersectsObject and intersectsSprite" begin
+    # Orthographic box x,y in [-1,1] seen from (0,0,-1) (Frustum.js:146-183).
+    frustum = frustum_from_matrix(mat4_orthographic(-1.0, 1.0, -1.0, 1.0, 0.1, 10.0) *
+                                  mat4_inverse(mat4_translation(0.0, 0.0, -1.0)))
+    sprite = Sprite(SpriteMaterial(); center=Vec2(0.0, 0.0))
+    sprite.position = Vec3(1.6, 0.0, -2.0)
+    @test Diff3D.frustum_intersects_sprite(frustum, sprite)
+    sprite.center = Vec2(0.5, 0.5)
+    @test Diff3D.frustum_intersects_sprite(frustum, sprite)
+    sprite.position = Vec3(1.8, 0.0, -2.0)
+    @test !Diff3D.frustum_intersects_sprite(frustum, sprite)
+    box = Mesh(BoxGeometry(), MeshBasicMaterial())
+    box.position = Vec3(1.4, 0.0, -2.0)
+    @test Diff3D.frustum_intersects_object(frustum, box)
+    box.position = Vec3(1.9, 0.0, -2.0)
+    @test !Diff3D.frustum_intersects_object(frustum, box)
+    instances = InstancedMesh(BoxGeometry(), MeshBasicMaterial(), 2)
+    set_instance_matrix!(instances, 1, mat4_translation(5.0, 0.0, 0.0))
+    set_instance_matrix!(instances, 2, mat4_translation(1.2, 0.0, 0.0))
+    instances.position = Vec3(0.0, 0.0, -2.0)
+    @test Diff3D.frustum_intersects_object(frustum, instances)
+    set_instance_matrix!(instances, 2, mat4_translation(7.0, 0.0, 0.0))
+    @test !Diff3D.frustum_intersects_object(frustum, instances)
+    @test_throws ArgumentError Diff3D.frustum_intersects_object(frustum, Group())
+    # three.js bounds a SkinnedMesh by its posed vertices; not supported here.
+    geometry = BoxGeometry()
+    skinned = SkinnedMesh(geometry, MeshBasicMaterial(), Skeleton([Bone()]),
+                          fill((1, 1, 1, 1), geometry.n_vertices),
+                          fill((1.0, 0.0, 0.0, 0.0), geometry.n_vertices))
+    @test_throws ArgumentError Diff3D.frustum_intersects_object(frustum, skinned)
+end
+
+@testset "Box3 constructors, expansion and triangle tests" begin
+    lo_hi(box) = (Tuple([box.min.x, box.min.y, box.min.z]), Tuple([box.max.x, box.max.y, box.max.z]))
+    # Box3.setFromPoints / setFromArray / setFromCenterAndSize (Box3.js:60-140).
+    @test lo_hi(Diff3D.box3_from_points([Vec3(1.0, -2.0, 3.0), Vec3(-4.0, 5.0, 0.5)])) ==
+          ((-4.0, -2.0, 0.5), (1.0, 5.0, 3.0))
+    @test box3_is_empty(Diff3D.box3_from_points(Vec3{Float64}[]))
+    @test lo_hi(Diff3D.box3_from_array([1.0, -2.0, 3.0, -4.0, 5.0, 0.5, 0.0, 0.0, 7.0])) ==
+          ((-4.0, -2.0, 0.5), (1.0, 5.0, 7.0))
+    @test_throws ArgumentError Diff3D.box3_from_array([1.0, 2.0])
+    # Box3.setFromBufferAttribute (Box3.js:86-98); node e/box_attr.mjs.
+    @test lo_hi(Diff3D.box3_from_buffer_attribute(BufferAttribute([1.0, 2.0, 0.5, 4.0, -1.0, 3.0], 3))) ==
+          ((1.0, -1.0, 0.5), (4.0, 2.0, 3.0))
+    # For item size 2 three.js reads z past the item (x and y match node's
+    # [-3, 2] .. [1, 4]; its z is NaN); Diff3D uses z = 0 (documented).
+    @test lo_hi(Diff3D.box3_from_buffer_attribute(BufferAttribute([1.0, 2.0, -3.0, 4.0], 2))) ==
+          ((-3.0, 2.0, 0.0), (1.0, 4.0, 0.0))
+    @test lo_hi(Diff3D.box3_from_center_and_size(Vec3(1.0, 2.0, 3.0), Vec3(0.3, 4.0, 5.0))) ==
+          ((0.84999999999999998, 0.0, 0.5), (1.1499999999999999, 4.0, 5.5))
+    unit = Box3(Vec3(-1.0, -1.0, -1.0), Vec3(1.0, 1.0, 1.0))
+    @test lo_hi(Diff3D.box3_expand_by_scalar(unit, 0.25)) ==
+          ((-1.25, -1.25, -1.25), (1.25, 1.25, 1.25))
+    @test lo_hi(Diff3D.box3_expand_by_vector(unit, Vec3(0.1, 0.2, -0.3))) ==
+          ((-1.1000000000000001, -1.2, -0.69999999999999996),
+           (1.1000000000000001, 1.2, 0.69999999999999996))
+    @test Diff3D.box3_translate(unit, Vec3(1.0, 0.0, -1.0)) ==
+          Box3(Vec3(0.0, -1.0, -2.0), Vec3(2.0, 1.0, 0.0))
+    @test Diff3D.box3_equals(unit, Box3(Vec3(-1.0, -1.0, -1.0), Vec3(1.0, 1.0, 1.0)))
+    @test Diff3D.box3_get_parameter(Box3(Vec3(-1.0, 0.0, 2.0), Vec3(3.0, 0.5, 6.0)),
+                                    Vec3(0.3, 0.2, 5.5)) ==
+          Vec3(0.32500000000000001, 0.40000000000000002, 0.875)
+    @test Diff3D.box3_contains_box(unit, Box3(Vec3(-1.0, 0.0, 0.0), Vec3(1.0, 0.5, 1.0)))
+    @test !Diff3D.box3_contains_box(unit, Box3(Vec3(-1.1, 0.0, 0.0), Vec3(1.0, 0.5, 1.0)))
+    # Box3.intersectsTriangle (Box3.js:526-576) oracle: [false, true, true, false].
+    triangles = [Triangle(Vec3(0.9, 0.9, 2.0), Vec3(2.0, 0.95, 0.0), Vec3(0.95, 2.0, -1.0)),
+                 Triangle(Vec3(0.5, 0.5, 3.0), Vec3(0.5, -0.5, 3.0), Vec3(-0.5, 0.0, 0.5)),
+                 Triangle(Vec3(2.0, 0.0, 0.0), Vec3(0.0, 2.0, 0.0), Vec3(0.0, 0.0, 2.0)),
+                 Triangle(Vec3(1.2, 1.2, 1.2), Vec3(3.0, 0.0, 0.0), Vec3(0.0, 3.0, 0.0))]
+    @test [Diff3D.box3_intersects_triangle(unit, t) for t in triangles] == [false, true, true, false]
+    @test [Diff3D.triangle_intersects_box(t, unit) for t in triangles] == [false, true, true, false]
+    @test !Diff3D.box3_intersects_triangle(Box3(), triangles[3])
+end
+
+@testset "Triangle interpolation" begin
+    # Triangle.getInterpolation (Triangle.js).
+    tri = Triangle(Vec3(0.0, 0.0, 0.0), Vec3(2.0, 0.0, 0.0), Vec3(0.0, 3.0, 0.0))
+    value = Diff3D.triangle_interpolation(tri, Vec3(0.5, 1.0, 0.0), Vec3(1.0, 0.0, 0.0),
+                                          Vec3(0.0, 1.0, 0.0), Vec3(0.0, 0.0, 1.0))
+    @test all(isapprox.((value.x, value.y, value.z),
+                        (0.41666666666666674, 0.25, 0.33333333333333331)))
+    uv = Diff3D.triangle_interpolation(tri, Vec3(0.5, 1.0, 0.0), Vec2(1.0, 2.0),
+                                       Vec2(3.0, 5.0), Vec2(-1.0, 0.0))
+    @test all(isapprox.((uv.x, uv.y), (0.83333333333333348, 2.0833333333333335)))
+    degenerate = Triangle(Vec3(0.0, 0.0, 0.0), Vec3(1.0, 1.0, 1.0), Vec3(2.0, 2.0, 2.0))
+    @test Diff3D.triangle_interpolation(degenerate, Vec3(0.5, 0.5, 0.5), 1.0, 2.0, 3.0) === nothing
+end
+
+@testset "Matrix4 rotation builders and scale" begin
+    angles = (0.3, -1.1, 2.5)
+    oracle = Dict(
+        :XYZ => (-0.36339563671695296, 0.78273929734520420, -0.50523539425362540, -0.27146464334680381, -0.60774225010406213, -0.74629505214160707, -0.89120736006143542, -0.13404681954446868, 0.43333692612370311),
+        :YXZ => (-0.52101511557489255, 0.57174227698774749, -0.63376179913856201, -0.060467622989347131, -0.76536172896200183, -0.64075353327961693, -0.85140291044399152, -0.29552020666133955, 0.43333692612370311),
+        :ZXY => (-0.20577615785901332, 0.48246166370426047, 0.85140291044399152, -0.57174227698774749, -0.76536172896200183, 0.29552020666133955, 0.79420837414475054, -0.42597202595477091, 0.43333692612370311),
+        :ZYX => (-0.36339563671695296, 0.27146464334680381, 0.89120736006143542, -0.36074525663029078, -0.92298120781994153, 0.13404681954446868, 0.85895661766693765, -0.27278679847792187, 0.43333692612370311),
+        :YZX => (-0.36339563671695296, 0.59847214410395644, -0.71398508664165627, -0.52270986252013252, -0.76536172896200183, -0.37549410576529568, -0.77117962294089726, 0.23675412683184260, 0.59095640498164270),
+        :XZY => (-0.36339563671695296, -0.0040297039267918611, 0.93162619794708579, -0.59847214410395644, -0.76536172896200183, -0.23675412683184260, 0.71398508664165627, -0.64358774485423309, 0.27571744726576347))
+    for (order, m) in oracle
+        # Matrix4.makeRotationFromEuler (Matrix4.js:338-466), entry by entry.
+        rotation = Diff3D.mat4_rotation_from_euler(Euler(angles..., order))
+        @test rotation == oracle_mat4(m[1], m[2], m[3], 0.0, m[4], m[5], m[6], 0.0,
+                                      m[7], m[8], m[9], 0.0, 0.0, 0.0, 0.0, 1.0)
+    end
+    @test_throws ArgumentError Diff3D.mat4_rotation_from_euler(Euler(0.0, 0.0, 0.0, :XYX))
+    # makeRotationFromQuaternion = compose(0, q, 1) (Matrix4.js:468-472).
+    q = quat_normalize(Quaternion(0.1, 0.2, 0.3, 0.9))
+    @test all(isapprox.(Diff3D.mat4_rotation_from_quaternion(q).e, oracle_mat4(0.72631578947368425, 0.61052631578947358, -0.31578947368421045, 0.0,
+                      -0.52631578947368407, 0.78947368421052633, 0.31578947368421045, 0.0,
+                      0.44210526315789461, -0.063157894736842080, 0.89473684210526316, 0.0,
+                      0.0, 0.0, 0.0, 1.0).e; atol=1e-15))
+    # Matrix4.scale (Matrix4.js:794-806) scales the first three columns.
+    m = mat4_set_position(Diff3D.mat4_rotation_from_euler(Euler(0.3, -1.1, 2.5, :XYZ)),
+                          Vec3(1.0, 2.0, 3.0))
+    # Element 7 is 0 * -0.5 = -0.0 in three.js too; JSON prints it as 0, so
+    # compare the tuples with ==, which equates the signed zeros.
+    @test Diff3D.mat4_scale(m, Vec3(2.0, -0.5, 3.0)).e ==
+          oracle_mat4(-0.72679127343390593, 1.5654785946904084, -1.0104707885072508, 0.0,
+                      0.13573232167340191, 0.30387112505203107, 0.37314752607080354, 0.0,
+                      -2.6736220801843062, -0.40214045863340603, 1.3000107783711092, 0.0,
+                      1.0, 2.0, 3.0, 1.0).e
+    a = mat4_translation(1.0, 2.0, 3.0)
+    @test Diff3D.mat4_premultiply(m, a) == a * m
+end
+
+@testset "Quaternion random and proper Euler angles" begin
+    # Quaternion.random (Quaternion.js:782-802) with Math.random -> 0.1, 0.7, 0.35.
+    draws = Iterators.Stateful([0.1, 0.7, 0.35])
+    q = Diff3D.quat_random(random=() -> popfirst!(draws))
+    @test (q.x, q.y, q.z, q.w) == (0.47388762046306099, 0.65225035314046242,
+                                   -0.56265262286389084, -0.18281691930558350)
+    # MathUtils.setQuaternionFromProperEuler(q, 0.4, -0.9, 1.7, order).
+    oracle = Dict(:XYX => (0.78106872999954491, -0.34626901463318710, 0.26323522820783213, 0.44803640828869057),
+                  :YZY => (0.26323522820783213, 0.78106872999954491, -0.34626901463318710, 0.44803640828869057),
+                  :ZXZ => (-0.34626901463318710, 0.26323522820783213, 0.78106872999954491, 0.44803640828869057),
+                  :XZX => (0.78106872999954491, -0.26323522820783213, -0.34626901463318710, 0.44803640828869057),
+                  :YXY => (-0.34626901463318710, 0.78106872999954491, -0.26323522820783213, 0.44803640828869057),
+                  :ZYZ => (-0.26323522820783213, -0.34626901463318710, 0.78106872999954491, 0.44803640828869057))
+    for (order, expected) in oracle
+        p = Diff3D.quat_from_proper_euler(0.4, -0.9, 1.7, order)
+        # V8's Math.sin((a - c) / 2) here is 1 ulp from the correctly rounded
+        # value Julia's sin returns (checked against BigFloat), so one
+        # component of each order differs from node by 1 ulp.
+        @test all(isapprox.((p.x, p.y, p.z, p.w), expected; rtol=2eps()))
+    end
+    @test_throws ArgumentError Diff3D.quat_from_proper_euler(0.0, 0.0, 0.0, :XYZ)
+end
+
+@testset "MathUtils random, modulo, power-of-two and normalization helpers" begin
+    # MathUtils.seededRandom (Mulberry32): seededRandom(42), (), (), (7), ().
+    @test Diff3D.seeded_random(42) == 0.60110375192016363
+    @test Diff3D.seeded_random() == 0.44829055899754167
+    @test Diff3D.seeded_random() == 0.85246579349040985
+    @test Diff3D.seeded_random(7) == 0.011704753153026104
+    @test Diff3D.seeded_random() == 0.061958257574588060
+    @test Diff3D.euclidean_modulo(-0.7, 1) == 0.30000000000000004
+    @test Diff3D.euclidean_modulo(5.5, -2) == -0.5
+    @test Diff3D.euclidean_modulo(-3, 3) == 0 && Diff3D.euclidean_modulo(7, 3) == 1
+    @test Diff3D.deg_to_rad(30.0) == 0.52359877559829882
+    @test Diff3D.rad_to_deg(1.0) == 57.295779513082323
+    @test Diff3D.is_power_of_two(64) && !Diff3D.is_power_of_two(0) &&
+          !Diff3D.is_power_of_two(12)
+    @test Diff3D.ceil_power_of_two(65) == 128 && Diff3D.ceil_power_of_two(0.3) == 0.5 &&
+          Diff3D.ceil_power_of_two(64) == 64
+    @test Diff3D.floor_power_of_two(65) == 64 && Diff3D.floor_power_of_two(0.3) == 0.25
+    # MathUtils.js:290: integer-valued numbers count, fractions do not
+    # (node: isPowerOfTwo(4.0) true, (2**60) true, (0.5) false, (6) false).
+    @test Diff3D.is_power_of_two(4.0) && Diff3D.is_power_of_two(2.0^60) &&
+          !Diff3D.is_power_of_two(0.5) && !Diff3D.is_power_of_two(6.0)
+    # MathUtils.js:302 gives ceilPowerOfTwo(2**29) = 2**30 through
+    # Math.log(v) / Math.LN2; Diff3D's exponent is exact (documented).
+    @test Diff3D.ceil_power_of_two(2.0^29) == 2.0^29
+    @test Diff3D.floor_power_of_two(1000) == 512 && Diff3D.ceil_power_of_two(1000) == 1024
+    @test Diff3D.ceil_power_of_two(3e-320) == ldexp(1.0, -1061) &&
+          Diff3D.floor_power_of_two(nextfloat(0.0)) == nextfloat(0.0)
+    @test_throws DomainError Diff3D.ceil_power_of_two(0.0)
+    # randInt(-3,4), randInt(-3,4), randFloat(2,5), randFloatSpread(4) with
+    # Math.random -> 0.2, 0.9999, 0.5, 0.0.
+    draws = Iterators.Stateful([0.2, 0.9999, 0.5, 0.0])
+    random = () -> popfirst!(draws)
+    @test Diff3D.rand_int(-3, 4; random) == -2
+    @test Diff3D.rand_int(-3, 4; random) == 4
+    @test Diff3D.rand_float(2, 5; random) == 3.5
+    @test Diff3D.rand_float_spread(4; random) == 2
+    draws = Iterators.Stateful([0.123456789, 0.987654321, 0.5, 0.25])
+    @test Diff3D.generate_uuid(random=() -> popfirst!(draws)) ==
+          "37dd9a1f-dfe9-46fc-bfff-ff7fffffff3f"
+    @test occursin(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                   Diff3D.generate_uuid())
+    # MathUtils.normalize / denormalize (MathUtils.js:383-470).
+    @test Diff3D.normalize_component(0.5, UInt8) == 128
+    @test Diff3D.normalize_component(-0.25, Int16) == -8192
+    @test Diff3D.normalize_component(0.3, Float32) == 0.3
+    @test Diff3D.denormalize_component(200, UInt8) == 0.78431372549019607
+    @test Diff3D.denormalize_component(-128, Int8) == -1.0
+    @test Diff3D.denormalize_component(1000, UInt16) == 0.015259021896696421
+    @test_throws ArgumentError Diff3D.normalize_component(0.5, Int64)
+    @test_throws ArgumentError Diff3D.denormalize_component(0.5, Float64)
+end
