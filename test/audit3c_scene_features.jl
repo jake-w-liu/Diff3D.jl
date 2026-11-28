@@ -684,6 +684,10 @@ end
     @test light_cache_depth(light) == 0
 end
 
+# Measured through a function: on Julia 1.10 `@allocated` on a loop variable at
+# testset top level counts 144 bytes even for a camera under a Group.
+view_matrix_allocations(camera) = @allocated view_matrix(camera)
+
 @testset "view_matrix of a camera under a light, LOD, sprite or line does not allocate" begin
     for make_parent in (() -> PointLight(), () -> DirectionalLight(), () -> SpotLight(),
                         () -> LOD(), () -> Sprite(SpriteMaterial()),
@@ -697,8 +701,8 @@ end
                             (mat4_translation(-1.0, 0.0, 0.0) * view_matrix(PerspectiveCamera())).e;
                             atol=1e-15))
         if Base.JLOptions().opt_level > 0
-            view_matrix(camera)
-            @test (@allocated view_matrix(camera)) == 0
+            view_matrix_allocations(camera)
+            @test view_matrix_allocations(camera) == 0
         end
     end
 end
