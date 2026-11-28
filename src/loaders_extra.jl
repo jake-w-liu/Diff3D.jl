@@ -4213,7 +4213,9 @@ function _font_line_height(raw::AbstractDict)
 end
 
 """Load a three.js typeface JSON font."""
-load_font(path::String) = _font_data(_json_parse(read(path, String)))
+# A leading UTF-8 byte-order mark is skipped, as the browser decoder three.js
+# reads the file through does; the JSON parser itself stays strict.
+load_font(path::String) = _font_data(_json_parse(_strip_utf8_bom(read(path, String))))
 
 """Alias for [`load_font`](@ref), matching three.js `FontLoader` naming."""
 FontLoader(path::String) = load_font(path)

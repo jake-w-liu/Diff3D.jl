@@ -110,3 +110,24 @@ end
     save_pdf(path, zeros(4, 8, 3))
     @test occursin("/MediaBox [0 0 4.0 2.0]", String(read(path)))
 end
+
+@testset "load_font skips a UTF-8 byte-order mark" begin
+    # three.js FontLoader reads the file through the browser's text decoder,
+    # which drops a leading EF BB BF.
+    json = """{"glyphs":{"A":{"ha":700,"o":"m 0 0 l 600 0 l 300 700 z"}},"resolution":1000,
+               "boundingBox":{"yMin":-200,"yMax":900},"underlineThickness":50,"familyName":"T"}"""
+    plain = tempname() * ".json"
+    marked = tempname() * ".json"
+    write(plain, json)
+    write(marked, vcat(UInt8[0xef, 0xbb, 0xbf], Vector{UInt8}(json)))
+    reference = load_font(plain)
+    font = load_font(marked)
+    @test font.resolution == reference.resolution == 1000
+    @test font.line_height == reference.line_height
+    @test collect(keys(font.glyphs)) == collect(keys(reference.glyphs))
+    @test FontLoader(marked).resolution == 1000
+    # A mark anywhere else is still invalid JSON.
+    inner = tempname() * ".json"
+    write(inner, vcat(Vector{UInt8}("{"), UInt8[0xef, 0xbb, 0xbf], Vector{UInt8}(json[2:end])))
+    @test_throws Exception load_font(inner)
+end

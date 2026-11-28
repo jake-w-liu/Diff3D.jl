@@ -347,4 +347,51 @@ export
     # Loaders
     load_obj_scene, save_gltf
 
+# ========================== Exports added in 2.1 ==========================
+export
+    # Controls and helpers
+    FirstPersonControls, first_person_look_at!, first_person_key_down!,
+    first_person_key_up!, first_person_pointer_down!, first_person_pointer_move!,
+    first_person_pointer_up!, first_person_update!, FlyMoveState, fly_key_down!,
+    fly_key_up!, fly_pointer_down!, fly_pointer_move!, fly_pointer_up!,
+    fly_pointer_cancel!, fly_update!, orbit_polar_angle, orbit_azimuthal_angle,
+    orbit_distance, orbit_pointer_down!, orbit_pointer_move!, orbit_pointer_up!,
+    orbit_wheel!, orbit_key_down!, orbit_key_up!, trackball_pointer_down!,
+    trackball_pointer_move!, trackball_pointer_up!, trackball_pointer_cancel!,
+    trackball_wheel!, trackball_key_down!, trackball_key_up!, trackball_update!,
+    drag_pointer_down!, drag_pointer_move!, drag_pointer_up!, VertexNormalsHelper,
+    VertexTangentsHelper, RectAreaLightHelper,
+
+    # Animation mixing
+    AnimationActionMixer, AnimationAction, clip_make_additive, mixer_clip_action,
+    mixer_existing_action, mixer_stop_all_action!, action_play!, action_stop!,
+    action_reset!, action_is_running, action_is_scheduled, action_start_at!,
+    action_set_loop!, action_set_effective_weight!, action_effective_weight,
+    action_set_effective_time_scale!, action_effective_time_scale,
+    action_set_duration!, action_sync_with!, action_fade_in!, action_fade_out!,
+    action_stop_fading!, action_cross_fade_from!, action_cross_fade_to!,
+    action_warp!, action_stop_warping!, action_halt!,
+
+    # Loaders and exporters
+    save_glb, load_tga, TGALoader, load_pcd, load_dds, DDSLoader,
+
+    # Scene graph, color and math
+    clone, color_from_hex, color_hex, color_hex_string, color_from_hsl, color_hsl,
+    color_offset_hsl, color_lerp, color_lerp_hsl, color_equals, color_from_style,
+    color_from_name, color_style, color_convert_srgb_to_linear,
+    color_convert_linear_to_srgb, euclidean_modulo, deg_to_rad, rad_to_deg,
+    rand_int, rand_float, rand_float_spread, seeded_random, generate_uuid,
+    is_power_of_two, ceil_power_of_two, floor_power_of_two, box3_from_points,
+    box3_from_array, box3_from_buffer_attribute, box3_from_center_and_size,
+    box3_expand_by_vector, box3_expand_by_scalar, box3_translate, box3_equals,
+    box3_contains_box, box3_get_parameter, box3_intersects_triangle,
+    box3_from_object, box3_expand_by_object, triangle_intersects_box,
+    triangle_interpolation, frustum_intersects_object, frustum_intersects_sprite,
+    mat4_rotation_from_euler, mat4_rotation_from_quaternion, mat4_scale,
+    mat4_premultiply, quat_random, quat_from_proper_euler, normalize_component,
+    denormalize_component,
+
+    # Geometry and fonts
+    earcut_triangulate, load_ttf, TTFLoader, compute_morphed_attributes
+
 end # module Diff3D
